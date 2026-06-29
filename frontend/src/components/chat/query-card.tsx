@@ -1,9 +1,7 @@
 import { StyleSheet, View } from 'react-native';
-import { GlassCard } from '@/components/glass-card';
 import { ThemedText } from '@/components/themed-text';
-import { Glass } from '@/constants/theme';
+import { Colors, Glass, Radius } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { useTheme } from '@/hooks/use-theme';
 import type { ContextCard } from '@/types/chat';
 
 function ProgressBar({ ratio, tint }: { ratio: number; tint: string }) {
@@ -23,32 +21,51 @@ export function QueryCard({
   payload: ContextCard;
 }) {
   const scheme = useColorScheme();
-  const theme = useTheme();
-  const tint = Glass[scheme === 'dark' ? 'dark' : 'light'].tint;
+  const isDark = scheme === 'dark';
+  const colors = Colors[isDark ? 'dark' : 'light'];
+  const glass = Glass[isDark ? 'dark' : 'light'];
+  const tint = glass.tint;
   const { today, targets } = payload;
   const ratio = targets.calories > 0 ? today.in / targets.calories : 0;
   const remaining = Math.max(0, today.remaining);
 
   return (
     <View style={styles.wrapper}>
-      <GlassCard style={styles.card}>
-        {content ? (
-          <ThemedText style={styles.answer}>{content}</ThemedText>
-        ) : null}
+      <View style={[
+        styles.card,
+        {
+          backgroundColor: isDark ? 'rgba(44,44,48,0.92)' : '#FFFFFF',
+          borderColor: glass.border,
+          ...glass.shadow,
+        },
+      ]}>
+        {/* Title */}
+        <ThemedText style={[styles.title, { color: colors.textSecondary }]}>今天还可以吃</ThemedText>
+
+        {/* Big remaining number */}
+        <View style={styles.bigRow}>
+          <ThemedText style={[styles.bigNum, { color: tint }]}>{remaining}</ThemedText>
+          <ThemedText style={[styles.bigUnit, { color: tint }]}> kcal</ThemedText>
+        </View>
+
+        {/* Progress bar */}
+        <ProgressBar ratio={ratio} tint={tint} />
+
+        {/* Stats row */}
         <View style={styles.statsRow}>
-          <ThemedText style={[styles.statsLabel, { color: theme.textSecondary }]}>今日摄入</ThemedText>
-          <ThemedText style={styles.statsValue}>
-            {today.in}
-            <ThemedText style={[styles.statsMax, { color: theme.textSecondary }]}>
-              {' '}/ {targets.calories} kcal
-            </ThemedText>
+          <ThemedText style={[styles.statText, { color: colors.textSecondary }]}>
+            已摄入 {today.in.toLocaleString()}
+          </ThemedText>
+          <ThemedText style={[styles.statText, { color: colors.textSecondary }]}>
+            目标 {targets.calories.toLocaleString()} kcal
           </ThemedText>
         </View>
-        <ProgressBar ratio={ratio} tint={tint} />
-        <ThemedText style={[styles.remaining, { color: tint }]}>
-          还可以吃 {remaining} kcal
-        </ThemedText>
-      </GlassCard>
+
+        {/* AI content / advice */}
+        {content ? (
+          <ThemedText style={[styles.advice, { color: colors.textSecondary }]}>{content}</ThemedText>
+        ) : null}
+      </View>
     </View>
   );
 }
@@ -56,36 +73,36 @@ export function QueryCard({
 const styles = StyleSheet.create({
   wrapper: {
     paddingHorizontal: 16,
-    marginVertical: 4,
+    marginVertical: 6,
     alignItems: 'flex-start',
   },
   card: {
-    maxWidth: '90%',
+    borderRadius: Radius.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+    padding: 12,
     gap: 8,
+    width: '90%' as any,
   },
-  answer: {
-    fontSize: 14,
-    lineHeight: 21,
+  title: {
+    fontSize: 13,
+    fontWeight: '500',
   },
-  statsRow: {
+  bigRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'baseline',
   },
-  statsLabel: {
-    fontSize: 13,
-  },
-  statsValue: {
-    fontSize: 16,
+  bigNum: {
+    fontSize: 44,
     fontWeight: '700',
+    lineHeight: 48,
   },
-  statsMax: {
-    fontWeight: '400',
-    fontSize: 13,
+  bigUnit: {
+    fontSize: 18,
+    fontWeight: '600',
   },
   trackOuter: {
     height: 6,
-    backgroundColor: 'rgba(128,128,128,0.2)',
+    backgroundColor: 'rgba(128,128,128,0.18)',
     borderRadius: 3,
     overflow: 'hidden',
   },
@@ -93,8 +110,16 @@ const styles = StyleSheet.create({
     height: '100%',
     borderRadius: 3,
   },
-  remaining: {
+  statsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  statText: {
+    fontSize: 12,
+  },
+  advice: {
     fontSize: 13,
-    fontWeight: '500',
+    lineHeight: 19,
+    marginTop: 2,
   },
 });

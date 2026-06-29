@@ -1,9 +1,7 @@
 import { StyleSheet, TouchableOpacity, View } from 'react-native';
-import { GlassCard } from '@/components/glass-card';
 import { ThemedText } from '@/components/themed-text';
-import { Glass, Radius } from '@/constants/theme';
+import { Colors, Glass, Radius } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { useTheme } from '@/hooks/use-theme';
 import { useChatStore } from '@/stores/chat-store';
 import { useAuthStore } from '@/stores/auth-store';
 import type { CandidateCardPayload } from '@/types/chat';
@@ -16,8 +14,10 @@ export function CandidateCard({
   isResolved: boolean;
 }) {
   const scheme = useColorScheme();
-  const theme = useTheme();
-  const tint = Glass[scheme === 'dark' ? 'dark' : 'light'].tint;
+  const isDark = scheme === 'dark';
+  const colors = Colors[isDark ? 'dark' : 'light'];
+  const glass = Glass[isDark ? 'dark' : 'light'];
+  const tint = glass.tint;
   const { resolve } = useChatStore();
   const { token } = useAuthStore();
 
@@ -28,40 +28,57 @@ export function CandidateCard({
 
   return (
     <View style={styles.wrapper}>
-      <GlassCard style={styles.card}>
-        <ThemedText style={styles.title}>
-          「{payload.query}」是哪个？
+      <View style={[
+        styles.card,
+        {
+          backgroundColor: isDark ? 'rgba(44,44,48,0.92)' : '#FFFFFF',
+          borderColor: glass.border,
+          ...glass.shadow,
+        },
+      ]}>
+        {/* Title */}
+        <ThemedText style={[styles.title, { color: colors.textSecondary }]}>
+          你可能吃的是？
         </ThemedText>
+
         {isResolved ? (
-          <ThemedText style={[styles.resolved, { color: theme.textSecondary }]}>已选择</ThemedText>
+          <ThemedText style={[styles.resolved, { color: colors.textSecondary }]}>已选择</ThemedText>
         ) : (
-          <View style={styles.options}>
-            {payload.foods.slice(0, 5).map(food => (
-              <TouchableOpacity
-                key={food.id}
-                style={[styles.chip, { borderColor: tint + '60' }]}
-                onPress={() => handleChoice(food.id)}
-                activeOpacity={0.7}>
-                <ThemedText style={[styles.chipText, { color: tint }]}>{food.name}</ThemedText>
-                {food.category ? (
-                  <ThemedText style={[styles.chipSub, { color: theme.textSecondary }]}>
-                    {food.category}
+          <View style={styles.chips}>
+            {payload.foods.slice(0, 4).map((food, idx) => {
+              const isFirst = idx === 0;
+              return (
+                <TouchableOpacity
+                  key={food.id}
+                  style={[
+                    styles.chip,
+                    isFirst
+                      ? { backgroundColor: tint }
+                      : { backgroundColor: isDark ? 'rgba(118,118,128,0.24)' : 'rgba(118,118,128,0.12)' },
+                  ]}
+                  onPress={() => handleChoice(food.id)}
+                  activeOpacity={0.75}>
+                  <ThemedText style={[styles.chipText, { color: isFirst ? '#fff' : colors.text }]}>
+                    {food.name}
                   </ThemedText>
-                ) : null}
-              </TouchableOpacity>
-            ))}
+                </TouchableOpacity>
+              );
+            })}
             <TouchableOpacity
-              style={[styles.chip, { borderColor: theme.textSecondary + '40' }]}
+              style={[styles.chip, { backgroundColor: isDark ? 'rgba(118,118,128,0.24)' : 'rgba(118,118,128,0.12)' }]}
               onPress={() => {}}
-              activeOpacity={0.7}>
-              <ThemedText style={[styles.chipText, { color: theme.textSecondary }]}>其他</ThemedText>
-              <ThemedText style={[styles.chipSub, { color: theme.textSecondary }]}>
-                请输入描述
-              </ThemedText>
+              activeOpacity={0.75}>
+              <ThemedText style={[styles.chipText, { color: colors.text }]}>其他</ThemedText>
             </TouchableOpacity>
           </View>
         )}
-      </GlassCard>
+
+        {!isResolved && (
+          <ThemedText style={[styles.hint, { color: colors.textSecondary }]}>
+            选一个，方便我算得更准
+          </ThemedText>
+        )}
+      </View>
     </View>
   );
 }
@@ -69,40 +86,39 @@ export function CandidateCard({
 const styles = StyleSheet.create({
   wrapper: {
     paddingHorizontal: 16,
-    marginVertical: 4,
+    marginVertical: 6,
     alignItems: 'flex-start',
   },
   card: {
-    maxWidth: '90%',
-    gap: 10,
+    borderRadius: Radius.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+    padding: 16,
+    gap: 12,
+    width: '90%' as any,
   },
   title: {
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '500',
-    lineHeight: 20,
   },
   resolved: {
     fontSize: 13,
     fontStyle: 'italic',
   },
-  options: {
+  chips: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
   },
   chip: {
     borderRadius: Radius.pill,
-    borderWidth: 1,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
   },
   chipText: {
     fontSize: 14,
     fontWeight: '500',
   },
-  chipSub: {
-    fontSize: 11,
-    marginTop: 1,
+  hint: {
+    fontSize: 12,
   },
 });

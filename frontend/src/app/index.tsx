@@ -2,11 +2,12 @@ import { useCallback, useEffect, useRef } from 'react';
 import {
   ActivityIndicator,
   FlatList,
-  KeyboardAvoidingView,
-  Platform,
   StyleSheet,
   View,
 } from 'react-native';
+import { BlurView } from 'expo-blur';
+import { LinearGradient } from 'expo-linear-gradient';
+import { SymbolView } from 'expo-symbols';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
@@ -14,7 +15,7 @@ import { ThemedView } from '@/components/themed-view';
 import { ChatInput } from '@/components/chat/chat-input';
 import { DateSelector } from '@/components/chat/date-selector';
 import { MessageItem } from '@/components/chat/message-item';
-import { BottomTabInset, Glass } from '@/constants/theme';
+import { AvatarGradient, BlurIntensity, BottomTabInset, Glass } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useTheme } from '@/hooks/use-theme';
 import { useAuthStore } from '@/stores/auth-store';
@@ -36,6 +37,8 @@ function EmptyState() {
   );
 }
 
+// Header matches ChatMain.dc.html:
+// 38px gradient avatar (accent→purple) + sparkle icon · "AI 记录助手" · subtitle · date pill
 function ChatHeader({
   caloriesIn,
   selectedDate,
@@ -48,27 +51,45 @@ function ChatHeader({
   onSelectDate: (date: string) => void;
 }) {
   const scheme = useColorScheme();
+  const isDark = scheme === 'dark';
   const theme = useTheme();
-  const glass = Glass[scheme === 'dark' ? 'dark' : 'light'];
+  const glass = Glass[isDark ? 'dark' : 'light'];
   const today = new Date().toISOString().slice(0, 10);
   const isToday = selectedDate === today;
 
+  const subtitle = isToday
+    ? caloriesIn > 0 ? `今日已记 ${caloriesIn} kcal · 在线` : '在线'
+    : '查看历史记录';
+
   return (
-    <View style={styles.header}>
-      <View style={styles.headerLeft}>
-        <ThemedText style={styles.headerTitle}>聊天</ThemedText>
-        {isToday && caloriesIn > 0 && (
-          <ThemedText style={[styles.headerSub, { color: theme.textSecondary }]}>
-            今日已记 {caloriesIn} kcal
-          </ThemedText>
-        )}
+    <BlurView
+      intensity={BlurIntensity.header}
+      tint={isDark ? 'systemChromeMaterialDark' : 'systemChromeMaterialLight'}
+      style={[styles.header, { borderBottomColor: theme.hairline }]}>
+      {/* Gradient avatar circle */}
+      <LinearGradient
+        colors={AvatarGradient.colors}
+        start={AvatarGradient.start}
+        end={AvatarGradient.end}
+        style={styles.avatar}>
+        <SymbolView name="sparkles" size={19} tintColor="#fff" />
+      </LinearGradient>
+
+      {/* Title + subtitle */}
+      <View style={styles.headerText}>
+        <ThemedText style={styles.headerTitle}>AI 记录助手</ThemedText>
+        <ThemedText style={[styles.headerSub, { color: theme.textSecondary }]}>
+          {subtitle}
+        </ThemedText>
       </View>
+
+      {/* Date picker pill */}
       <DateSelector
         selectedDate={selectedDate}
         dates={dates}
         onSelect={onSelectDate}
       />
-    </View>
+    </BlurView>
   );
 }
 
@@ -131,52 +152,55 @@ export default function ChatScreen() {
   const caloriesIn = summaryCard?.today.in ?? 0;
 
   const renderItem = useCallback(
-    ({ item }: { item: ChatMessage }) => <MessageItem message={item} />,
-    [],
+    ({ item, index }: { item: ChatMessage; index: number }) => (
+      <MessageItem message={item} isLast={index === messages.length - 1} />
+    ),
+    [messages.length],
   );
 
   const keyExtractor = useCallback((item: ChatMessage) => item.id, []);
 
   return (
     <ThemedView style={styles.root}>
-      <KeyboardAvoidingView
-        style={styles.root}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        keyboardVerticalOffset={0}>
-        {/* Safe area top */}
-        <View style={{ paddingTop: insets.top }} />
+      {/* Safe area top */}
+      <View style={{ paddingTop: insets.top }} />
 
-        <ChatHeader
-          caloriesIn={caloriesIn}
-          selectedDate={selectedDate}
-          dates={chatDates}
-          onSelectDate={handleSelectDate}
+      <ChatHeader
+        caloriesIn={caloriesIn}
+        selectedDate={selectedDate}
+        dates={chatDates}
+        onSelectDate={handleSelectDate}
+      />
+
+      {isLoading && messages.length === 0 ? (
+        <View style={styles.loadingCenter}>
+          <ActivityIndicator />
+        </View>
+      ) : (
+        <FlatList
+          ref={flatListRef}
+          data={messages}
+          renderItem={renderItem}
+          keyExtractor={keyExtractor}
+          style={styles.flatList}
+          contentContainerStyle={[
+            styles.list,
+            messages.length === 0 && styles.listEmpty,
+          ]}
+          ListEmptyComponent={<EmptyState />}
+          showsVerticalScrollIndicator={false}
+          keyboardDismissMode="on-drag"
+          keyboardShouldPersistTaps="handled"
+          automaticallyAdjustKeyboardInsets
+          contentInset={{ bottom: BottomTabInset }}
+          scrollIndicatorInsets={{ bottom: BottomTabInset }}
         />
+      )}
 
-        {isLoading && messages.length === 0 ? (
-          <View style={styles.loadingCenter}>
-            <ActivityIndicator />
-          </View>
-        ) : (
-          <FlatList
-            ref={flatListRef}
-            data={messages}
-            renderItem={renderItem}
-            keyExtractor={keyExtractor}
-            contentContainerStyle={[
-              styles.list,
-              messages.length === 0 && styles.listEmpty,
-            ]}
-            ListEmptyComponent={<EmptyState />}
-            showsVerticalScrollIndicator={false}
-          />
-        )}
+      <ChatInput onSend={handleSend} isSending={isSending} />
 
-        <ChatInput onSend={handleSend} isSending={isSending} />
-
-        {/* Safe area bottom (behind tab bar) */}
-        <View style={{ paddingBottom: BottomTabInset }} />
-      </KeyboardAvoidingView>
+      {/* Spacer so ChatInput sits above the absolute tab bar */}
+      <View style={{ height: BottomTabInset }} />
     </ThemedView>
   );
 }
@@ -188,19 +212,35 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
+    gap: 12,
+    paddingHorizontal: 20,
+    paddingTop: 6,
+    paddingBottom: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
   },
-  headerLeft: {
-    gap: 2,
+  avatar: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  headerText: {
+    flex: 1,
+    minWidth: 0,
+    gap: 1,
   },
   headerTitle: {
-    fontSize: 22,
-    fontWeight: '700',
+    fontSize: 16,
+    fontWeight: '600',
+    lineHeight: 19,
   },
   headerSub: {
     fontSize: 12,
+  },
+  flatList: {
+    flex: 1,
   },
   list: {
     paddingVertical: 8,

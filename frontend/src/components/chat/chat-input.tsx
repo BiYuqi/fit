@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { Platform, StyleSheet, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActionSheetIOS, Alert, Platform, StyleSheet, TextInput, TouchableOpacity, View } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { ThemedText } from '@/components/themed-text';
 import { Glass, Radius } from '@/constants/theme';
@@ -28,9 +28,30 @@ export function ChatInput({ onSend, isSending }: Props) {
 
   const canSend = text.trim().length > 0 && !isSending;
 
+  const handlePlus = () => {
+    const options = ['早餐', '午餐', '晚餐', '加餐', '运动', '取消'];
+    if (Platform.OS === 'ios') {
+      ActionSheetIOS.showActionSheetWithOptions(
+        { options, cancelButtonIndex: 5, title: '快速记录' },
+        idx => {
+          if (idx < 5) {
+            const labels = ['早餐', '午餐', '晚餐', '加餐', '运动'];
+            setText(prev => (prev ? `${prev} ` : '') + labels[idx] + '：');
+            setTimeout(() => inputRef.current?.focus(), 50);
+          }
+        },
+      );
+    } else {
+      Alert.alert('快速记录', '选择类型', options.slice(0, 5).map(label => ({
+        text: label,
+        onPress: () => { setText(prev => (prev ? `${prev} ` : '') + label + '：'); },
+      })));
+    }
+  };
+
   const inputBar = (
     <View style={styles.innerRow}>
-      <TouchableOpacity style={styles.sideBtn} activeOpacity={0.6} onPress={() => {}}>
+      <TouchableOpacity style={styles.sideBtn} activeOpacity={0.6} onPress={handlePlus}>
         <ThemedText style={[styles.sideBtnText, { color: theme.textSecondary }]}>＋</ThemedText>
       </TouchableOpacity>
 

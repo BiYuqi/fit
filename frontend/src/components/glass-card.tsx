@@ -15,22 +15,26 @@ export function GlassCard({
   const scheme = useColorScheme();
   const isDark = scheme === 'dark';
   const glass = Glass[isDark ? 'dark' : 'light'];
+  const shadow = glass.shadow;
 
   if (Platform.OS === 'ios') {
     return (
-      <BlurView
-        intensity={blurIntensity}
-        tint={isDark ? 'systemChromeMaterialDark' : 'systemChromeMaterialLight'}
-        style={[styles.card, { borderColor: glass.border }, style]}
-        {...props}>
-        {children}
-      </BlurView>
+      // Shadow must be on an outer View — BlurView overflow:hidden clips it
+      <View style={[styles.shadowWrap, shadow, style]}>
+        <BlurView
+          intensity={blurIntensity}
+          tint={isDark ? 'systemChromeMaterialDark' : 'systemChromeMaterialLight'}
+          style={[styles.card, { borderColor: glass.border }]}
+          {...props}>
+          {children}
+        </BlurView>
+      </View>
     );
   }
 
   return (
     <View
-      style={[styles.card, { backgroundColor: glass.background, borderColor: glass.border }, style]}
+      style={[styles.card, { backgroundColor: glass.background, borderColor: glass.border }, shadow, style]}
       {...props}>
       {children}
     </View>
@@ -38,6 +42,9 @@ export function GlassCard({
 }
 
 const styles = StyleSheet.create({
+  shadowWrap: {
+    borderRadius: Radius.lg,
+  },
   card: {
     borderRadius: Radius.lg,
     borderWidth: StyleSheet.hairlineWidth,

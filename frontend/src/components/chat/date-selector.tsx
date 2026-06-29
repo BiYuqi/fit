@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { FlatList, Modal, StyleSheet, TouchableOpacity, View } from 'react-native';
 import { BlurView } from 'expo-blur';
+import { SymbolView } from 'expo-symbols';
 import { ThemedText } from '@/components/themed-text';
-import { Glass, Radius, Spacing } from '@/constants/theme';
+import { Colors, Glass, Radius, Spacing } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useTheme } from '@/hooks/use-theme';
 
@@ -28,16 +29,26 @@ export function DateSelector({ selectedDate, dates, onSelect }: Props) {
   const theme = useTheme();
   const glass = Glass[isDark ? 'dark' : 'light'];
 
-  const sorted = [...dates].sort((a, b) => b.localeCompare(a));
+  // Always show last 7 days + any dates with existing messages
+  const last7: string[] = [];
+  for (let i = 0; i < 7; i++) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    last7.push(d.toISOString().slice(0, 10));
+  }
+  const merged = Array.from(new Set([...last7, ...dates]));
+  const sorted = merged.sort((a, b) => b.localeCompare(a));
 
   return (
     <>
+      {/* Date pill: matches design — field bg + calendar icon + text + caret */}
       <TouchableOpacity
-        style={styles.trigger}
+        style={[styles.trigger, { backgroundColor: theme.backgroundElement }]}
         onPress={() => setOpen(true)}
         activeOpacity={0.7}>
+        <SymbolView name="calendar.badge.clock" size={15} tintColor={theme.textSecondary} />
         <ThemedText style={styles.triggerText}>{formatDateLabel(selectedDate)}</ThemedText>
-        <ThemedText style={[styles.arrow, { color: theme.textSecondary }]}>▼</ThemedText>
+        <SymbolView name="chevron.down" size={10} tintColor={theme.textSecondary} />
       </TouchableOpacity>
 
       <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
@@ -90,17 +101,14 @@ const styles = StyleSheet.create({
   trigger: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: Radius.pill,
+    gap: 5,
+    paddingHorizontal: 11,
+    paddingVertical: 6,
+    borderRadius: 15,
   },
   triggerText: {
-    fontSize: 15,
+    fontSize: 13,
     fontWeight: '600',
-  },
-  arrow: {
-    fontSize: 10,
   },
   backdrop: {
     flex: 1,

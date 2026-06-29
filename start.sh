@@ -51,8 +51,10 @@ start_db() {
 }
 
 prepare_backend() {
-  echo "📦 安装后端依赖"; (cd "$BACKEND" && npm install --silent)
-  echo "🗃  数据库迁移";   (cd "$BACKEND" && npx prisma migrate deploy >/dev/null && npx prisma generate >/dev/null)
+  echo "📦 安装后端依赖"
+  (cd "$BACKEND" && npm install --no-audit 2>&1) || { echo "⚠️  后端依赖安装有警告，继续..."; }
+  echo "🗃  数据库迁移"
+  (cd "$BACKEND" && npx prisma migrate deploy && npx prisma generate) || { echo "❌ 数据库迁移失败"; exit 1; }
 }
 
 seed_food() {
@@ -64,15 +66,35 @@ seed_food() {
   (cd "$BACKEND" && DATA_DIR="$DATA_DIR" npx tsx scripts/seed/seed_food_standard.ts)
 }
 
+SEED_FLAG="$ROOT/.data/.seed_done"
+
 seed_if_empty() {
-  local n
-  n="$(cd "$BACKEND" && npx tsx -e "import{PrismaClient}from'@prisma/client';const p=new PrismaClient();p.foodStandard.count().then(c=>{console.log(c);process.exit(0)}).catch(()=>{console.log(0);process.exit(0)})" 2>/dev/null || echo 0)"
-  if [ "${n:-0}" -lt 100 ]; then echo "🍚 食物库为空，开始导入"; seed_food; else echo "🍚 食物库已有 $n 条，跳过导入"; fi
+  if [ -f "$SEED_FLAG" ]; then
+    echo "🍚 食物库已初始化，跳过导入"
+  else
+    echo "🍚 食物库为空，开始导入"
+    seed_food
+    mkdir -p "$ROOT/.data"
+    touch "$SEED_FLAG"
+  fi
 }
 
 prepare_frontend() {
   [ -d "$FRONTEND" ] || { echo "⚠️  frontend/ 不存在（T13 未执行），跳过前端启动。后端将单独运行。"; return 1; }
-  echo "📦 安装前端依赖"; (cd "$FRONTEND" && npm install --silent); return 0
+  echo "📦 安装前端依赖"
+  (cd "$FRONTEND" && npm install --no-audit 2>&1) || { echo "⚠️  前端依赖安装有警告，继续..."; }
+  return 0
+}
+
+kill_port() {
+  local port="$1"
+  local pids
+  pids="$(lsof -ti :"$port" 2>/dev/null || true)"
+  if [ -n "$pids" ]; then
+    echo "🔪 释放端口 $port (pid $pids)"
+    kill -9 $pids 2>/dev/null || true
+    sleep 0.3
+  fi
 }
 
 run_all() {
@@ -80,21 +102,39 @@ run_all() {
   start_db
   prepare_backend
   seed_if_empty
+  kill_port 3000
   echo "🚀 启动后端 (后台)"
   (cd "$BACKEND" && npm run dev) & BACKEND_PID=$!
   sleep 2
   if prepare_frontend; then
+    kill_port 8081
     echo "🚀 启动前端 (前台，Ctrl+C 退出会一并关闭后端)"
-    (cd "$FRONTEND" && npx expo start)
+    (cd "$FRONTEND" && npx expo start --clear)
   else
     echo "🚀 后端运行中 (Ctrl+C 退出)。等 T13 建好 frontend/ 后本脚本会自动一起拉起前端。"
     wait "$BACKEND_PID"
   fi
 }
 
+run_ios() {
+  check_env
+  start_db
+  prepare_backend
+  seed_if_empty
+  kill_port 3000
+  echo "🚀 启动后端 (后台)"
+  (cd "$BACKEND" && npm run dev) & BACKEND_PID=$!
+  sleep 2
+  prepare_frontend
+  kill_port 8081
+  echo "📱 编译并启动 iOS 模拟器 (首次需要几分钟)"
+  (cd "$FRONTEND" && npx expo run:ios)
+}
+
 case "${1:-all}" in
   all)  run_all ;;
+  ios)  run_ios ;;
   seed) check_env; start_db; seed_food ;;
   stop) docker stop fit-pg >/dev/null 2>&1 && echo "已停止 fit-pg" || echo "fit-pg 未运行" ;;
-  *)    echo "用法: ./start.sh [all|seed|stop]"; exit 1 ;;
+  *)    echo "用法: ./start.sh [all|seed|ios|stop]"; exit 1 ;;
 esac

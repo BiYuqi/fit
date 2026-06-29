@@ -1,26 +1,30 @@
-/**
- * Below are the colors that are used in the app. The colors are defined in the light and dark mode.
- * There are many other ways to style your app. For example, [Nativewind](https://www.nativewind.dev/), [Tamagui](https://tamagui.dev/), [unistyles](https://reactnativeunistyles.vercel.app), etc.
- */
-
 import '@/global.css';
 
 import { Platform } from 'react-native';
 
+// Design tokens extracted from PhoneFrame.dc.html / ChatMain.dc.html
 export const Colors = {
   light: {
-    text: '#000000',
-    background: '#ffffff',
-    backgroundElement: '#F0F0F3',
-    backgroundSelected: '#E0E1E6',
-    textSecondary: '#60646C',
+    text: '#1C1C1E',
+    background: '#F6F6FB',
+    backgroundElement: 'rgba(118,118,128,0.12)',  // --field
+    backgroundSelected: 'rgba(118,118,128,0.20)',
+    textSecondary: 'rgba(60,60,67,0.62)',           // --text2
+    textTertiary: 'rgba(60,60,67,0.34)',            // --text3
+    hairline: 'rgba(60,60,67,0.12)',                // --hairline
+    ok: '#30D158',
+    warn: '#FF9F0A',
   },
   dark: {
-    text: '#ffffff',
-    background: '#000000',
-    backgroundElement: '#212225',
-    backgroundSelected: '#2E3135',
-    textSecondary: '#B0B4BA',
+    text: '#FFFFFF',
+    background: '#0C0C11',
+    backgroundElement: 'rgba(118,118,128,0.24)',   // --field dark
+    backgroundSelected: 'rgba(118,118,128,0.36)',
+    textSecondary: 'rgba(235,235,245,0.62)',        // --text2 dark
+    textTertiary: 'rgba(235,235,245,0.34)',         // --text3 dark
+    hairline: 'rgba(255,255,255,0.12)',             // --hairline dark
+    ok: '#30D158',
+    warn: '#FF9F0A',
   },
 } as const;
 
@@ -28,13 +32,9 @@ export type ThemeColor = keyof typeof Colors.light & keyof typeof Colors.dark;
 
 export const Fonts = Platform.select({
   ios: {
-    /** iOS `UIFontDescriptorSystemDesignDefault` */
     sans: 'system-ui',
-    /** iOS `UIFontDescriptorSystemDesignSerif` */
     serif: 'ui-serif',
-    /** iOS `UIFontDescriptorSystemDesignRounded` */
     rounded: 'ui-rounded',
-    /** iOS `UIFontDescriptorSystemDesignMonospaced` */
     mono: 'ui-monospace',
   },
   default: {
@@ -61,24 +61,40 @@ export const Spacing = {
   six: 64,
 } as const;
 
-export const BottomTabInset = Platform.select({ ios: 50, android: 80 }) ?? 0;
+// Design tab bar: 9px paddingTop + 25px icon + 3px gap + 10px label + safe area ≈ 88px
+export const BottomTabInset = Platform.select({ ios: 88, android: 80 }) ?? 0;
 export const MaxContentWidth = 800;
 
-// Liquid Glass design tokens (iOS 26 / Apple Intelligence)
+// Liquid Glass design tokens — matched exactly to PhoneFrame.dc.html
 export const Glass = {
   light: {
-    background: 'rgba(255, 255, 255, 0.72)',
-    border: 'rgba(209, 213, 219, 0.5)',
-    tint: '#007AFF',
-    shadow: 'rgba(0, 0, 0, 0.06)',
+    background: 'rgba(255,255,255,0.60)',       // --card
+    backgroundStrong: 'rgba(255,255,255,0.82)', // --card-strong
+    border: 'rgba(60,60,67,0.12)',              // --hairline (outer borders)
+    cardStroke: 'rgba(255,255,255,0.70)',        // --card-stroke (inner glass borders)
+    tint: '#0A84FF',                            // accent
+    shadow: { shadowColor: '#000', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.10, shadowRadius: 34, elevation: 8 },
+    bubbleAi: 'rgba(255,255,255,0.72)',         // --bubble-ai
+    tabInactive: 'rgba(60,60,67,0.50)',         // --tab-inactive
   },
   dark: {
-    background: 'rgba(28, 28, 32, 0.72)',
-    border: 'rgba(255, 255, 255, 0.10)',
+    background: 'rgba(44,44,48,0.55)',          // --card dark
+    backgroundStrong: 'rgba(60,60,64,0.72)',    // --card-strong dark
+    border: 'rgba(255,255,255,0.12)',            // --hairline dark
+    cardStroke: 'rgba(255,255,255,0.14)',        // --card-stroke dark
     tint: '#0A84FF',
-    shadow: 'rgba(0, 0, 0, 0.25)',
+    shadow: { shadowColor: '#000', shadowOffset: { width: 0, height: 12 }, shadowOpacity: 0.45, shadowRadius: 36, elevation: 12 },
+    bubbleAi: 'rgba(58,58,62,0.62)',            // --bubble-ai dark
+    tabInactive: 'rgba(235,235,245,0.50)',      // --tab-inactive dark
   },
 } as const;
+
+// Avatar gradient stops: linear-gradient(150deg, accent, color-mix(accent 40%, #BF5AF2))
+export const AvatarGradient = {
+  colors: ['#0A84FF', '#6B3FBF'] as const, // accent → blend of accent+purple
+  start: { x: 0, y: 0 },
+  end: { x: 1, y: 1 },
+};
 
 export const Radius = {
   sm: 10,
@@ -89,7 +105,8 @@ export const Radius = {
 } as const;
 
 export const BlurIntensity = {
-  glass: 20,
+  glass: 24,   // bubble AI blur level from design
+  header: 30,  // header bar blur
   overlay: 40,
 } as const;
 

@@ -45,6 +45,14 @@ function toDateOnly(date: string): Date {
   return new Date(date + "T00:00:00.000Z");
 }
 
+function guessMealType(): MealType {
+  const h = new Date().getHours();
+  if (h >= 5 && h < 10) return "breakfast";
+  if (h >= 10 && h < 15) return "lunch";
+  if (h >= 17 && h < 22) return "dinner";
+  return "snack";
+}
+
 async function answerQuery(question: string, card: object): Promise<string> {
   const res = await callDeepSeek(
     [
@@ -105,6 +113,21 @@ export async function chatRoutes(app: FastifyInstance) {
     const dateObj = toDateOnly(today);
     const messages: object[] = [];
 
+    // 拉最近 4 条历史（最多 2 轮）作为上下文喂给 AI，规范 §6
+    const recentRaw = await prisma.chatMessage.findMany({
+      where: { user_id, date: dateObj },
+      orderBy: { created_at: "desc" },
+      take: 4,
+      select: { role: true, content: true, kind: true },
+    });
+    const history = recentRaw
+      .reverse()
+      .map((m) => ({
+        role: m.role as "user" | "assistant",
+        content: m.content ?? (m.kind !== "text" ? `[${m.kind}]` : ""),
+      }))
+      .filter((m) => m.content.length > 0);
+
     // 写用户气泡
     const userMsg = await prisma.chatMessage.create({
       data: { user_id, date: dateObj, role: "user", kind: "text", content: text },
@@ -112,12 +135,12 @@ export async function chatRoutes(app: FastifyInstance) {
     messages.push(userMsg);
 
     // 解析意图（flash → pro 若低置信）
-    let parsed = await parseUserInput(text);
+    let parsed = await parseUserInput(text, history);
     if (parsed.intent === "record") {
       const hasLow = parsed.items.some((i) => i.food_confidence < 0.5);
       if (hasLow) {
         try {
-          parsed = await parseUserInput(text, "deepseek-v4-pro");
+          parsed = await parseUserInput(text, history, "deepseek-v4-pro");
         } catch {
           /* 保留 flash 结果 */
         }
@@ -167,7 +190,7 @@ export async function chatRoutes(app: FastifyInstance) {
     // ── record ─────────────────────────────────
     const user = await prisma.user.findUniqueOrThrow({ where: { id: user_id } });
     const weight_kg = Number(user.weight_kg) || 70;
-    const meal_type = (parsed.meal_type ?? "snack") as MealType;
+    const meal_type = (parsed.meal_type ?? guessMealType()) as MealType;
 
     const records: object[] = [];
     let pending: object | null = null;
@@ -397,7 +420,7 @@ export async function chatRoutes(app: FastifyInstance) {
     const candidates = pr.candidates as any;
     const today = todayStr();
     const dateObj = toDateOnly(today);
-    const meal_type = (candidates.meal_type ?? "snack") as MealType;
+    const meal_type = (candidates.meal_type ?? guessMealType()) as MealType;
     const source: string = candidates.source ?? "text";
 
     let food_id: string;

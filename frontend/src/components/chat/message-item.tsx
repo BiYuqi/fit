@@ -31,7 +31,7 @@ function AiTextBubble({ content }: { content?: string | null }) {
   );
 }
 
-export function MessageItem({ message }: { message: ChatMessage }) {
+export function MessageItem({ message, isLast }: { message: ChatMessage; isLast?: boolean }) {
   const { resolvedPendings } = useChatStore();
 
   if (message.role === 'user') {
@@ -44,21 +44,17 @@ export function MessageItem({ message }: { message: ChatMessage }) {
     case 'record_card':
       return <RecordCard payload={p as RecordCardPayload} />;
 
-    case 'portion_card':
-      return (
-        <PortionCard
-          payload={p as PortionCardPayload}
-          isResolved={!!(p as PortionCardPayload)?.pending_id && resolvedPendings[(p as PortionCardPayload).pending_id]}
-        />
-      );
+    case 'portion_card': {
+      const pid = (p as PortionCardPayload)?.pending_id;
+      const resolved = !isLast || !!(pid && resolvedPendings[pid]);
+      return <PortionCard payload={p as PortionCardPayload} isResolved={resolved} />;
+    }
 
-    case 'candidate_card':
-      return (
-        <CandidateCard
-          payload={p as CandidateCardPayload}
-          isResolved={!!(p as CandidateCardPayload)?.pending_id && resolvedPendings[(p as CandidateCardPayload).pending_id]}
-        />
-      );
+    case 'candidate_card': {
+      const pid = (p as CandidateCardPayload)?.pending_id;
+      const resolved = !isLast || !!(pid && resolvedPendings[pid]);
+      return <CandidateCard payload={p as CandidateCardPayload} isResolved={resolved} />;
+    }
 
     case 'clarify_card':
       return <ClarifyCard payload={p as ClarifyCardPayload} />;

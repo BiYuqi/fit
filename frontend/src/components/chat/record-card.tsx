@@ -1,7 +1,7 @@
 import { StyleSheet, View } from 'react-native';
-import { GlassCard } from '@/components/glass-card';
 import { ThemedText } from '@/components/themed-text';
-import { useTheme } from '@/hooks/use-theme';
+import { useColorScheme } from '@/hooks/use-color-scheme';
+import { Colors, Glass, Radius } from '@/constants/theme';
 import type { RecordCardPayload } from '@/types/chat';
 
 const MEAL_LABEL: Record<string, string> = {
@@ -11,15 +11,11 @@ const MEAL_LABEL: Record<string, string> = {
   snack: '加餐',
 };
 
-function MacroItem({ label, value }: { label: string; value: number }) {
-  const theme = useTheme();
-  return (
-    <View style={styles.macroItem}>
-      <ThemedText style={[styles.macroValue, { color: theme.text }]}>{value}g</ThemedText>
-      <ThemedText style={[styles.macroLabel, { color: theme.textSecondary }]}>{label}</ThemedText>
-    </View>
-  );
-}
+const MACRO_DOTS = {
+  protein: '#30D158',  // green
+  fat: '#FF9F0A',      // orange
+  carbs: '#0A84FF',    // blue
+};
 
 export function RecordCard({
   payload,
@@ -28,33 +24,73 @@ export function RecordCard({
   payload: RecordCardPayload;
   mealType?: string;
 }) {
-  const theme = useTheme();
+  const scheme = useColorScheme();
+  const isDark = scheme === 'dark';
+  const colors = Colors[isDark ? 'dark' : 'light'];
+  const glass = Glass[isDark ? 'dark' : 'light'];
   const meal = MEAL_LABEL[mealType ?? ''] ?? '加餐';
 
   return (
     <View style={styles.wrapper}>
-      <GlassCard style={styles.card}>
-        <View style={styles.header}>
-          <View style={styles.titleRow}>
-            <ThemedText style={styles.foodName}>{payload.food_name}</ThemedText>
-            {payload.is_estimated && (
-              <ThemedText style={[styles.badge, { color: theme.textSecondary }]}>估算</ThemedText>
-            )}
-          </View>
-          <ThemedText style={[styles.calories, { color: theme.text }]}>
-            {payload.calories} kcal
+      <View style={[
+        styles.card,
+        {
+          backgroundColor: isDark ? 'rgba(44,44,48,0.92)' : '#FFFFFF',
+          borderColor: glass.border,
+          ...glass.shadow,
+        },
+      ]}>
+        {/* ● 已记录 badge */}
+        <View style={styles.badgeRow}>
+          <View style={[styles.dot, { backgroundColor: MACRO_DOTS.protein }]} />
+          <ThemedText style={[styles.badgeText, { color: MACRO_DOTS.protein }]}>
+            {payload.is_estimated ? '估算记录' : '已记录'}
           </ThemedText>
         </View>
-        <ThemedText style={[styles.sub, { color: theme.textSecondary }]}>
-          {meal} · {payload.weight_g}g
-        </ThemedText>
-        <View style={[styles.divider, { backgroundColor: theme.textSecondary + '30' }]} />
-        <View style={styles.macros}>
-          <MacroItem label="蛋白" value={payload.protein_g} />
-          <MacroItem label="脂肪" value={payload.fat_g} />
-          <MacroItem label="碳水" value={payload.carbs_g} />
+
+        {/* Food name + calories row */}
+        <View style={styles.mainRow}>
+          <View style={styles.nameBlock}>
+            <ThemedText style={[styles.foodName, { color: colors.text }]} numberOfLines={2}>
+              {payload.food_name}
+            </ThemedText>
+            <ThemedText style={[styles.mealInfo, { color: colors.textSecondary }]}>
+              {meal} · {payload.weight_g}g
+            </ThemedText>
+          </View>
+          <View style={styles.calorieBlock}>
+            <ThemedText style={[styles.calorieNum, { color: colors.text }]}>
+              {payload.calories}
+            </ThemedText>
+            <ThemedText style={[styles.calorieUnit, { color: colors.textSecondary }]}>kcal</ThemedText>
+          </View>
         </View>
-      </GlassCard>
+
+        {/* Divider */}
+        <View style={[styles.divider, { backgroundColor: colors.hairline }]} />
+
+        {/* Macros */}
+        <View style={styles.macros}>
+          <MacroItem label="蛋白" value={payload.protein_g} color={MACRO_DOTS.protein} />
+          <MacroItem label="脂肪" value={payload.fat_g} color={MACRO_DOTS.fat} />
+          <MacroItem label="碳水" value={payload.carbs_g} color={MACRO_DOTS.carbs} />
+        </View>
+      </View>
+    </View>
+  );
+}
+
+function MacroItem({ label, value, color }: { label: string; value: number; color: string }) {
+  const scheme = useColorScheme();
+  const isDark = scheme === 'dark';
+  const colors = Colors[isDark ? 'dark' : 'light'];
+  return (
+    <View style={styles.macroItem}>
+      <View style={styles.macroHeader}>
+        <View style={[styles.macroDot, { backgroundColor: color }]} />
+        <ThemedText style={[styles.macroLabel, { color: colors.textSecondary }]}>{label}</ThemedText>
+      </View>
+      <ThemedText style={[styles.macroValue, { color: colors.text }]}>{value}g</ThemedText>
     </View>
   );
 }
@@ -62,60 +98,88 @@ export function RecordCard({
 const styles = StyleSheet.create({
   wrapper: {
     paddingHorizontal: 16,
-    marginVertical: 4,
+    marginVertical: 6,
     alignItems: 'flex-start',
   },
   card: {
-    maxWidth: '84%',
-    gap: 6,
+    borderRadius: Radius.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+    padding: 12,
+    gap: 8,
+    width: '90%' as any,
   },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-  },
-  titleRow: {
+  badgeRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 5,
+  },
+  dot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+  },
+  badgeText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  mainRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  nameBlock: {
     flex: 1,
+    gap: 3,
   },
   foodName: {
-    fontSize: 16,
-    fontWeight: '600',
-    flexShrink: 1,
-  },
-  badge: {
-    fontSize: 11,
-    borderWidth: 1,
-    borderColor: 'currentColor',
-    borderRadius: 4,
-    paddingHorizontal: 4,
-    paddingVertical: 1,
-  },
-  calories: {
-    fontSize: 16,
+    fontSize: 18,
     fontWeight: '700',
+    lineHeight: 22,
   },
-  sub: {
+  mealInfo: {
     fontSize: 13,
+  },
+  calorieBlock: {
+    flexShrink: 0,
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: 2,
+  },
+  calorieNum: {
+    fontSize: 28,
+    fontWeight: '700',
+    lineHeight: 32,
+  },
+  calorieUnit: {
+    fontSize: 13,
+    fontWeight: '500',
   },
   divider: {
     height: StyleSheet.hairlineWidth,
-    marginVertical: 4,
   },
   macros: {
     flexDirection: 'row',
-    gap: 16,
+    gap: 24,
   },
   macroItem: {
-    alignItems: 'center',
+    gap: 2,
   },
-  macroValue: {
-    fontSize: 14,
-    fontWeight: '600',
+  macroHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  macroDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
   },
   macroLabel: {
     fontSize: 12,
+  },
+  macroValue: {
+    fontSize: 15,
+    fontWeight: '600',
   },
 });
