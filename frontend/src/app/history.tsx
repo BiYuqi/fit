@@ -6,14 +6,14 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { BottomTabInset, Spacing } from '@/constants/theme';
 
-export default function ChatScreen() {
+export default function HistoryScreen() {
   return (
     <ThemedView style={styles.container}>
       <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
-        <ThemedText type="title">聊天</ThemedText>
+        <ThemedText type="title">历史</ThemedText>
         <GlassCard style={styles.card}>
-          <ThemedText type="subtitle">今天吃了什么？</ThemedText>
-          <ThemedText themeColor="textSecondary">在这里记录你的饮食与运动</ThemedText>
+          <ThemedText type="subtitle">趋势</ThemedText>
+          <ThemedText themeColor="textSecondary">日/周/月缺口与营养趋势</ThemedText>
         </GlassCard>
       </SafeAreaView>
     </ThemedView>

@@ -63,3 +63,42 @@ export const Spacing = {
 
 export const BottomTabInset = Platform.select({ ios: 50, android: 80 }) ?? 0;
 export const MaxContentWidth = 800;
+
+// Liquid Glass design tokens (iOS 26 / Apple Intelligence)
+export const Glass = {
+  light: {
+    background: 'rgba(255, 255, 255, 0.72)',
+    border: 'rgba(209, 213, 219, 0.5)',
+    tint: '#007AFF',
+    shadow: 'rgba(0, 0, 0, 0.06)',
+  },
+  dark: {
+    background: 'rgba(28, 28, 32, 0.72)',
+    border: 'rgba(255, 255, 255, 0.10)',
+    tint: '#0A84FF',
+    shadow: 'rgba(0, 0, 0, 0.25)',
+  },
+} as const;
+
+export const Radius = {
+  sm: 10,
+  md: 16,
+  lg: 24,
+  xl: 32,
+  pill: 999,
+} as const;
+
+export const BlurIntensity = {
+  glass: 20,
+  overlay: 40,
+} as const;
+
+export const FontSize = {
+  xs: 11,
+  sm: 13,
+  base: 15,
+  lg: 17,
+  xl: 20,
+  '2xl': 24,
+  '3xl': 28,
+} as const;
