@@ -20,6 +20,14 @@
 ## 1. 视觉基调
 iOS 26 Liquid Glass / Apple Intelligence：毛玻璃卡片、柔和半透明层次、无强对比色、圆角柔和、留白充足。**浅色 + 深色**两套。底部 Tab：Chat / Today / History / Settings，Chat 为默认主页。
 
+### 1.9 登录 / 注册（Onboarding 之前）
+
+首屏未登录时进入。账号 + 密码两字段，登录/注册切换；复用全局 Liquid Glass 主题（毛玻璃卡片、浅深两套）。
+
+注册：account + password，account 重复时报“已被占用”。成功后进入 Onboarding。
+登录：account + password，错误提示凭据有误。成功后：onboarded=false 进 Onboarding，否则进 Chat。
+调 POST /auth/register、POST /auth/login（见 API_SPEC）。
+
 ## 2. Onboarding（首次必经，7 步，带进度）
 性别 → 年龄 → 身高+体重 → 目标体重 → 活动水平(5档，每档一句说明) → 目标节奏/缺口(温和≈-250 / 标准≈-420 / 激进≈-600，可自定义) → 算好结果欢迎页(展示 TDEE / 每日缺口 / 目标摄入 / 三大营养素目标，按钮"开始记录")。完成调 `PUT /user/profile`。
 
