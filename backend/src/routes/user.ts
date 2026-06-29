@@ -1,0 +1,94 @@
+import { FastifyInstance } from "fastify";
+import { z } from "zod";
+import { prisma } from "../lib/prisma";
+import { bmr, tdee, dailyTargets } from "../services/calc";
+import type { UserProfile, Sex, ActivityLevel } from "../services/calc";
+import type { User } from "@prisma/client";
+
+const PutBodySchema = z.object({
+  name: z.string().max(64).optional(),
+  gender: z.enum(["male", "female"]).optional(),
+  age: z.number().int().min(10).max(120).optional(),
+  height_cm: z.number().min(50).max(300).optional(),
+  weight_kg: z.number().min(20).max(500).optional(),
+  target_weight_kg: z.number().min(20).max(500).optional(),
+  activity_level: z.enum(["sedentary", "light", "moderate", "active", "very_active"]).optional(),
+  goal_type: z.enum(["cut", "maintain"]).optional(),
+  daily_deficit: z.number().int().min(300).max(750).optional(),
+});
+
+function computeDerived(user: User) {
+  if (
+    !user.gender || user.age == null ||
+    !user.height_cm || !user.weight_kg || !user.activity_level
+  ) return null;
+
+  const profile: UserProfile = {
+    sex: user.gender as Sex,
+    age: user.age,
+    height_cm: Number(user.height_cm),
+    weight_kg: Number(user.weight_kg),
+    activity_level: user.activity_level as ActivityLevel,
+    daily_deficit: user.daily_deficit,
+  };
+
+  const { target_calories, target_protein_g } = dailyTargets(profile);
+  return {
+    bmr: Math.round(bmr(profile) * 10) / 10,
+    tdee: Math.round(tdee(profile) * 10) / 10,
+    target_calories,
+    target_protein: target_protein_g,
+  };
+}
+
+function formatUser(user: User) {
+  return {
+    id: user.id,
+    account: user.account,
+    name: user.name,
+    gender: user.gender,
+    age: user.age,
+    height_cm: user.height_cm ? Number(user.height_cm) : null,
+    weight_kg: user.weight_kg ? Number(user.weight_kg) : null,
+    target_weight_kg: user.target_weight_kg ? Number(user.target_weight_kg) : null,
+    activity_level: user.activity_level,
+    goal_type: user.goal_type,
+    daily_deficit: user.daily_deficit,
+    onboarded: user.onboarded,
+    created_at: user.created_at,
+    ...computeDerived(user),
+  };
+}
+
+export async function userRoutes(app: FastifyInstance) {
+  const auth = { preHandler: [(req: any, reply: any) => app.authenticate(req, reply)] };
+
+  // GET /api/user/profile
+  app.get("/api/user/profile", auth, async (req) => {
+    const { sub } = req.user as { sub: string };
+    const user = await prisma.user.findUniqueOrThrow({ where: { id: sub } });
+    return formatUser(user);
+  });
+
+  // PUT /api/user/profile
+  app.put("/api/user/profile", auth, async (req, reply) => {
+    const { sub } = req.user as { sub: string };
+
+    const parsed = PutBodySchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: { code: "invalid_input", message: parsed.error.message } });
+    }
+
+    const data = parsed.data;
+    const updated = await prisma.user.update({
+      where: { id: sub },
+      data: {
+        ...data,
+        // 只要本次 PUT 后档案字段齐全就置 onboarded
+        onboarded: true,
+      },
+    });
+
+    return formatUser(updated);
+  });
+}

@@ -2,11 +2,13 @@ import "dotenv/config";
 import Fastify from "fastify";
 import jwtPlugin from "./plugins/jwt";
 import { authRoutes } from "./routes/auth";
+import { userRoutes } from "./routes/user";
 
 const app = Fastify({ logger: true });
 
 app.register(jwtPlugin);
 app.register(authRoutes);
+app.register(userRoutes);
 
 // 公共路由
 app.get("/api/health", async () => ({ ok: true }));
