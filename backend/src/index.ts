@@ -9,7 +9,11 @@ import { dailyRoutes } from "./routes/daily";
 
 const app = Fastify({ logger: true });
 
-app.register(cors, { origin: true, credentials: true });
+app.register(cors, {
+  origin: true,
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+});
 app.register(jwtPlugin);
 app.register(authRoutes);
 app.register(userRoutes);
