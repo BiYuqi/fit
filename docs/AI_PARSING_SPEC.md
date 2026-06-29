@@ -55,7 +55,7 @@ DeepSeek 输出（strict tool schema，zod 同构校验）：
 1. 取 canonical（语义归一已由 DeepSeek 完成）
 2. 精确匹配 food_standard.name
 3. 失败 → 匹配 aliases
-4. 失败 → pg_trgm 模糊匹配（similarity 阈值，默认 0.3，取最高若干）
+4. 失败 → pg_trgm 模糊匹配（similarity 阈值，默认 0.4，取最高若干；0.3 对短中文名太松，3字头两字同则天然得 0.33）
 5. 仍失败 → DeepSeek 估三大营养素 → 落库 is_estimated=true → 用之
 ```
 匹配命中后，后端按 chosen_label 的克数交给计算引擎算账。

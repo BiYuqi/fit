@@ -3,7 +3,7 @@ import { prisma } from "../lib/prisma";
 import { callDeepSeek } from "../ai/client";
 import type { FoodStandard } from "@prisma/client";
 
-const SIMILARITY_THRESHOLD = 0.3;
+const SIMILARITY_THRESHOLD = 0.4;
 const TRGM_LIMIT = 5;
 
 // ---------- AI 估算 schema ----------
