@@ -89,6 +89,13 @@ export async function matchFoodCandidates(canonical: string, limit = 5): Promise
   const byAlias = await prisma.foodStandard.findFirst({ where: { aliases: { has: canonical } } });
   if (byAlias) return [byAlias];
 
+  const prefixResults = await prisma.foodStandard.findMany({
+    where: { name: { startsWith: canonical }, is_estimated: false },
+    orderBy: { name: 'asc' },
+    take: limit,
+  });
+  if (prefixResults.length > 0) return prefixResults;
+
   const results = await prisma.$queryRaw<Array<FoodStandard & { _sim: number }>>`
     SELECT *, similarity(name, ${canonical}) AS _sim
     FROM "FoodStandard"
@@ -116,6 +123,17 @@ export async function matchFood(canonical: string): Promise<FoodStandard> {
     where: { aliases: { has: canonical } },
   });
   if (byAlias) return byAlias;
+
+  // 2.5 前缀匹配："纯牛奶" → "纯牛奶（全脂，伊利牌）"
+  // 优先选"代表值"条目，否则取第一条非估算结果
+  const prefixResults = await prisma.foodStandard.findMany({
+    where: { name: { startsWith: canonical }, is_estimated: false },
+    orderBy: { name: 'asc' },
+    take: 5,
+  });
+  if (prefixResults.length > 0) {
+    return prefixResults.find(r => r.name.includes('代表值')) ?? prefixResults[0];
+  }
 
   // 3. pg_trgm 模糊匹配
   const trgmResults = await prisma.$queryRaw<Array<FoodStandard & { _sim: number }>>`

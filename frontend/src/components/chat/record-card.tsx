@@ -43,17 +43,8 @@ export function RecordCard({
       ]}>
         {/* badge */}
         <View style={styles.badgeRow}>
-          {payload.is_estimated ? (
-            <View style={[styles.dot, { backgroundColor: '#FF9F0A' }]} />
-          ) : (
-            <SymbolView name="checkmark.circle.fill" size={13} tintColor={MACRO_DOTS.protein} />
-          )}
-          <ThemedText style={[
-            styles.badgeText,
-            { color: payload.is_estimated ? '#FF9F0A' : MACRO_DOTS.protein },
-          ]}>
-            {payload.is_estimated ? '估算记录' : '已记录'}
-          </ThemedText>
+          <SymbolView name="checkmark.circle.fill" size={13} tintColor={MACRO_DOTS.protein} />
+          <ThemedText style={[styles.badgeText, { color: MACRO_DOTS.protein }]}>已录入</ThemedText>
         </View>
 
         {/* Food name + calories row */}

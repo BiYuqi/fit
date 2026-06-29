@@ -12,6 +12,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
+import { formatChatTime, CHAT_TIME_GAP_MS } from '@/lib/format';
 import { ChatInput } from '@/components/chat/chat-input';
 import { DateSelector } from '@/components/chat/date-selector';
 import { MessageItem, ThinkingBubble } from '@/components/chat/message-item';
@@ -21,6 +22,17 @@ import { useTheme } from '@/hooks/use-theme';
 import { useAuthStore } from '@/stores/auth-store';
 import { useChatStore } from '@/stores/chat-store';
 import type { ChatMessage } from '@/types/chat';
+
+function TimeLabel({ time }: { time: string }) {
+  const theme = useTheme();
+  return (
+    <View style={styles.timeLabel}>
+      <ThemedText style={[styles.timeLabelText, { color: theme.textSecondary }]}>
+        {formatChatTime(time)}
+      </ThemedText>
+    </View>
+  );
+}
 
 function EmptyState() {
   const theme = useTheme();
@@ -158,10 +170,19 @@ export default function ChatScreen() {
   const caloriesIn = summaryCard?.today.in ?? 0;
 
   const renderItem = useCallback(
-    ({ item, index }: { item: ChatMessage; index: number }) => (
-      <MessageItem message={item} isLast={index === messages.length - 1} />
-    ),
-    [messages.length],
+    ({ item, index }: { item: ChatMessage; index: number }) => {
+      const prev = index > 0 ? messages[index - 1] : null;
+      const showTime =
+        !prev ||
+        new Date(item.created_at).getTime() - new Date(prev.created_at).getTime() > CHAT_TIME_GAP_MS;
+      return (
+        <>
+          {showTime && <TimeLabel time={item.created_at} />}
+          <MessageItem message={item} isLast={index === messages.length - 1} />
+        </>
+      );
+    },
+    [messages],
   );
 
   const keyExtractor = useCallback((item: ChatMessage) => item.id, []);
@@ -260,6 +281,13 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  timeLabel: {
+    alignItems: 'center',
+    paddingVertical: 8,
+  },
+  timeLabelText: {
+    fontSize: 12,
   },
   empty: {
     flex: 1,
