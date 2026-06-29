@@ -1,6 +1,7 @@
 import { StyleSheet, View } from 'react-native';
 import { ThemedText } from '@/components/themed-text';
-import { useTheme } from '@/hooks/use-theme';
+import { useColorScheme } from '@/hooks/use-color-scheme';
+import { Glass, Radius } from '@/constants/theme';
 import { useChatStore } from '@/stores/chat-store';
 import { UserBubble } from './user-bubble';
 import { RecordCard } from './record-card';
@@ -20,11 +21,20 @@ import type {
 } from '@/types/chat';
 
 function AiTextBubble({ content }: { content?: string | null }) {
-  const theme = useTheme();
+  const scheme = useColorScheme();
+  const isDark = scheme === 'dark';
+  const glass = Glass[isDark ? 'dark' : 'light'];
   if (!content) return null;
   return (
     <View style={styles.aiWrapper}>
-      <View style={[styles.aiBubble, { backgroundColor: theme.backgroundElement }]}>
+      <View style={[
+        styles.aiBubble,
+        {
+          backgroundColor: isDark ? 'rgba(44,44,48,0.92)' : '#FFFFFF',
+          borderColor: glass.border,
+          ...glass.shadow,
+        },
+      ]}>
         <ThemedText style={styles.aiText}>{content}</ThemedText>
       </View>
     </View>
@@ -83,8 +93,9 @@ const styles = StyleSheet.create({
   },
   aiBubble: {
     maxWidth: '78%',
-    borderRadius: 20,
+    borderRadius: Radius.lg,
     borderBottomLeftRadius: 6,
+    borderWidth: StyleSheet.hairlineWidth,
     paddingHorizontal: 14,
     paddingVertical: 10,
   },

@@ -127,6 +127,9 @@ run_ios() {
   sleep 2
   prepare_frontend
   kill_port 8081
+  echo "📱 打开 Simulator"
+  open -a Simulator
+  sleep 2
   echo "📱 编译并启动 iOS 模拟器 (首次需要几分钟)"
   (cd "$FRONTEND" && npx expo run:ios)
 }
