@@ -64,7 +64,7 @@
 | 运行时 | Node 20+ / TS | I/O 密集，Node 合适 |
 | 框架 | Fastify | 轻、快、插件全 |
 | DB | PostgreSQL 16 + pg_trgm | 关系型 + 模糊匹配，免向量库 |
-| ORM | Prisma | 类型安全、迁移好 |
+| ORM | Prisma 7 + `@prisma/adapter-pg` | 类型安全、迁移好；v7 driver adapter 模式，连接配置在 `prisma.config.ts`，运行时通过 `src/lib/prisma.ts` 单例访问 |
 | 认证 | 自建 JWT + argon2 | 账号密码极简 |
 | 校验 | zod | 请求 + DeepSeek 返回 |
 | AI | openai SDK 接 DeepSeek V4 | 见 AI_PARSING_SPEC |

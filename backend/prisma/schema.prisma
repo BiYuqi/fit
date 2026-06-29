@@ -2,8 +2,8 @@
 // 与设计文档 V3 第 3 节、以及 seed_food_standard.ts 完全对齐。
 //
 // 用法:
-//   pnpm prisma migrate dev --name init
-//   （food_standard 的 trigram 模糊匹配索引见文件末尾说明，需手动加一条迁移 SQL）
+//   npx prisma migrate dev --name init
+//   连接配置在 prisma.config.ts（Prisma 7+），运行时通过 src/lib/prisma.ts 单例访问
 
 generator client {
   provider        = "prisma-client-js"
@@ -12,8 +12,7 @@ generator client {
 
 datasource db {
   provider   = "postgresql"
-  url        = env("DATABASE_URL")
-  extensions = [pg_trgm] // 启用模糊匹配扩展
+  extensions = [pg_trgm] // 启用模糊匹配扩展；url 在 prisma.config.ts
 }
 
 // ---------- 枚举 ----------
