@@ -28,7 +28,7 @@ export type RecordCardPayload = {
   is_estimated?: boolean;
 };
 
-export type PortionOption = { label: string; grams: number };
+export type PortionOption = { label: string; grams: number; calories?: number };
 
 export type PortionCardPayload = {
   pending_id: string;
