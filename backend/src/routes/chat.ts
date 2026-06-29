@@ -38,7 +38,9 @@ function calcExerciseCalories(type: string, duration_min: number, weight_kg: num
 
 // ---------- 工具函数 ----------
 function todayStr(): string {
-  return new Date().toISOString().slice(0, 10);
+  // UTC+8 (Asia/Shanghai): shift to local midnight
+  const local = new Date(Date.now() + 8 * 3600 * 1000);
+  return local.toISOString().slice(0, 10);
 }
 
 function toDateOnly(date: string): Date {

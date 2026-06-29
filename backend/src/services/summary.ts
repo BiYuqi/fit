@@ -16,7 +16,8 @@ function toDateOnly(date: Date | string): Date {
 }
 
 function todayStr(): string {
-  return new Date().toISOString().slice(0, 10);
+  const local = new Date(Date.now() + 8 * 3600 * 1000);
+  return local.toISOString().slice(0, 10);
 }
 
 // ---------- recompute ----------
