@@ -1,6 +1,6 @@
 # T03 — 食物库导入与清洗
 
-**状态**：⬜ 待办  <!-- ⬜待办 / 🔄进行中 / ✅完成；任务验收通过后改这里 + 同步 docs/TASKS.md -->
+**状态**：✅ 完成  <!-- ⬜待办 / 🔄进行中 / ✅完成；任务验收通过后改这里 + 同步 docs/TASKS.md -->
 
 **目标**：把约 1677 条食物灌进 food_standard，含数据清洗与能量自检。
 **依赖**：T02　**关注文档**：FOOD_DB_SPEC，backend/scripts/seed/seed_food_standard.ts

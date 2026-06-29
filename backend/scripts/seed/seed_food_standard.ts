@@ -17,8 +17,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
-// import { PrismaClient } from "@prisma/client";  // 正式入库时打开
-// const prisma = new PrismaClient();
+import { prisma } from "../../src/lib/prisma";
 
 const DATA_DIR =
   process.env.DATA_DIR ??
@@ -64,15 +63,15 @@ function parseNum(v: string | undefined): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-/** 从文件名提类目: merged-禽肉类及其制品-鸡.json → "禽肉类及其制品" */
+/** 从文件名提类目: merged_禽肉类及其制品-鸡.json → "禽肉类及其制品" */
 function categoryFromFile(file: string): string {
-  const base = file.replace(/^merged-/, "").replace(/\.json$/, "");
+  const base = file.replace(/^merged[_-]/, "").replace(/\.json$/, "");
   return base.split("-")[0] ?? "未分类";
 }
 
-/** 清洗食物名: 去掉 "(代表值)" 等括注尾巴，保留主名 */
+/** 清洗食物名: 只去掉 "(代表值)" 这类纯统计标注，保留品种区分括注 */
 function cleanName(name: string): string {
-  return name.replace(/[（(].*?[)）]\s*$/g, "").trim() || name.trim();
+  return name.replace(/[（(]代表值[)）]\s*$/g, "").trim() || name.trim();
 }
 
 /**
@@ -172,19 +171,18 @@ async function main() {
     return;
   }
 
-  // ===== 正式入库（打开 Prisma 相关注释后启用）=====
-  // let ok = 0;
-  // for (const row of rows) {
-  //   await prisma.foodStandard.upsert({
-  //     where: { name_category: { name: row.name, category: row.category } }, // 需在 schema 建复合唯一键
-  //     update: row,
-  //     create: row,
-  //   });
-  //   ok++;
-  // }
-  // console.log(`入库完成: ${ok} 条`);
-  // await prisma.$disconnect();
-  console.log("（正式入库逻辑已写好但默认注释，接好 Prisma schema 后取消注释即可）");
+  // ===== 正式入库 =====
+  let ok = 0;
+  for (const row of rows) {
+    await prisma.foodStandard.upsert({
+      where: { name_category: { name: row.name, category: row.category } },
+      update: row,
+      create: row,
+    });
+    ok++;
+  }
+  console.log(`入库完成: ${ok} 条`);
+  await prisma.$disconnect();
 }
 
 main().catch((e) => {
