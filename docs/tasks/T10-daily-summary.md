@@ -1,6 +1,6 @@
 # T10 — 每日汇总 + 上下文卡
 
-**状态**：⬜ 待办  <!-- ⬜待办 / 🔄进行中 / ✅完成；任务验收通过后改这里 + 同步 docs/TASKS.md -->
+**状态**：✅ 完成  <!-- ⬜待办 / 🔄进行中 / ✅完成；任务验收通过后改这里 + 同步 docs/TASKS.md -->
 
 **目标**：写记录后重算 daily_summary，并产出查询用上下文卡。
 **依赖**：T06 T09　**关注文档**：DATA_MODEL daily_summary，AI_PARSING_SPEC §6，CALORIE_ENGINE §4
