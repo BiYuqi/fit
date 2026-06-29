@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.env
+
+# seed 临时产物
+china-food-composition-data/
+food_standard.seed.json
+review_flags.csv
