@@ -1,6 +1,6 @@
 # T11 — /chat/message + /pending/resolve + 聊天落库
 
-**状态**：⬜ 待办  <!-- ⬜待办 / 🔄进行中 / ✅完成；任务验收通过后改这里 + 同步 docs/TASKS.md -->
+**状态**：✅ 完成  <!-- ⬜待办 / 🔄进行中 / ✅完成；任务验收通过后改这里 + 同步 docs/TASKS.md -->
 
 **目标**：聊天主入口编排，并把对话写入 chat_message。
 **依赖**：T05 T10　**关注文档**：API_SPEC 聊天，AI_PARSING_SPEC，DATA_MODEL chat_message

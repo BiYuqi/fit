@@ -81,6 +81,28 @@ async function estimateByAI(canonical: string): Promise<FoodStandard> {
   });
 }
 
+// ---------- 候选列表（不做 AI 兜底，供 food_choice pending 展示） ----------
+export async function matchFoodCandidates(canonical: string, limit = 5): Promise<FoodStandard[]> {
+  const exact = await prisma.foodStandard.findFirst({ where: { name: canonical } });
+  if (exact) return [exact];
+
+  const byAlias = await prisma.foodStandard.findFirst({ where: { aliases: { has: canonical } } });
+  if (byAlias) return [byAlias];
+
+  const results = await prisma.$queryRaw<Array<FoodStandard & { _sim: number }>>`
+    SELECT *, similarity(name, ${canonical}) AS _sim
+    FROM "FoodStandard"
+    WHERE similarity(name, ${canonical}) >= ${SIMILARITY_THRESHOLD}
+    ORDER BY _sim DESC
+    LIMIT ${limit}
+  `;
+  return results.map((r) => {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { _sim, ...food } = r as any;
+    return food as FoodStandard;
+  });
+}
+
 // ---------- 主管线 ----------
 export async function matchFood(canonical: string): Promise<FoodStandard> {
   // 1. 精确匹配
