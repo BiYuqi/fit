@@ -1,4 +1,5 @@
 import "dotenv/config";
+import cors from "@fastify/cors";
 import Fastify from "fastify";
 import jwtPlugin from "./plugins/jwt";
 import { authRoutes } from "./routes/auth";
@@ -8,6 +9,7 @@ import { dailyRoutes } from "./routes/daily";
 
 const app = Fastify({ logger: true });
 
+app.register(cors, { origin: true, credentials: true });
 app.register(jwtPlugin);
 app.register(authRoutes);
 app.register(userRoutes);

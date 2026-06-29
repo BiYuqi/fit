@@ -9,6 +9,7 @@
     "test": "node --require tsx/cjs --test src/**/*.test.ts"
   },
   "dependencies": {
+    "@fastify/cors": "^11.2.0",
     "@fastify/jwt": "^10.1.0",
     "@prisma/adapter-pg": "^7.0.0",
     "@prisma/client": "^7.0.0",
