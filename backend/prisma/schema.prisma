@@ -1,0 +1,228 @@
+// Prisma schema — AI 减脂助手
+// 与设计文档 V3 第 3 节、以及 seed_food_standard.ts 完全对齐。
+//
+// 用法:
+//   pnpm prisma migrate dev --name init
+//   （food_standard 的 trigram 模糊匹配索引见文件末尾说明，需手动加一条迁移 SQL）
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [pg_trgm] // 启用模糊匹配扩展
+}
+
+// ---------- 枚举 ----------
+enum Gender {
+  male
+  female
+}
+
+enum ActivityLevel {
+  sedentary
+  light
+  moderate
+  active
+  very_active
+}
+
+enum GoalType {
+  cut
+  maintain
+}
+
+enum MealType {
+  breakfast
+  lunch
+  dinner
+  snack
+}
+
+enum PortionLabel {
+  small
+  medium
+  large
+  custom
+}
+
+// ---------- 用户 ----------
+model User {
+  id               String         @id @default(uuid())
+  account          String         @unique
+  password_hash    String
+  name             String?
+  gender           Gender?
+  age              Int?
+  height_cm        Decimal?
+  weight_kg        Decimal?
+  target_weight_kg Decimal?
+  activity_level   ActivityLevel?
+  goal_type        GoalType       @default(cut)
+  daily_deficit    Int            @default(500)
+  onboarded        Boolean        @default(false)
+  created_at       DateTime       @default(now())
+
+  food_records     FoodRecord[]
+  exercise_records ExerciseRecord[]
+  daily_summaries  DailySummary[]
+  parse_logs       AiParseLog[]
+  pending_records  PendingRecord[]
+  chat_messages    ChatMessage[]
+}
+
+// ---------- 食物标准库（seed 导入的目标表）----------
+model FoodStandard {
+  id            String   @id @default(uuid())
+  name          String
+  aliases       String[] @default([])
+  category      String
+  edible_ratio  Float?   @default(1) // 食部，0~1
+  calories_100g Float?
+  protein_100g  Float?
+  fat_100g      Float?
+  carbs_100g    Float?
+  fiber_100g    Float?
+  is_composite  Boolean  @default(false)
+  is_estimated  Boolean  @default(false)
+  source        String   @default("composition_table") // composition_table | ai | manual
+  created_at    DateTime @default(now())
+
+  food_records FoodRecord[]
+
+  @@unique([name, category], name: "name_category") // seed upsert 用
+  @@index([name]) // 普通索引；trigram GIN 索引见末尾 SQL
+}
+
+// ---------- 饮食记录 ----------
+model FoodRecord {
+  id                 String       @id @default(uuid())
+  user_id            String
+  food_id            String
+  meal_type          MealType
+  portion_label      PortionLabel
+  weight_g           Float
+  calories           Float
+  protein            Float
+  fat                Float
+  carbs              Float
+  food_confidence    Float?
+  portion_confidence Float?
+  source             String       @default("text") // text | voice
+  raw_input          String?
+  parse_log_id       String?
+  date               DateTime     @db.Date
+  created_at         DateTime     @default(now())
+
+  user User         @relation(fields: [user_id], references: [id])
+  food FoodStandard @relation(fields: [food_id], references: [id])
+
+  @@index([user_id, date])
+}
+
+// ---------- 运动记录 ----------
+model ExerciseRecord {
+  id              String   @id @default(uuid())
+  user_id         String
+  type            String
+  duration_min    Int?
+  calories_burned Float
+  source          String   @default("text")
+  raw_input       String?
+  date            DateTime @db.Date
+  created_at      DateTime @default(now())
+
+  user User @relation(fields: [user_id], references: [id])
+
+  @@index([user_id, date])
+}
+
+// ---------- 每日汇总缓存 ----------
+model DailySummary {
+  user_id         String
+  date            DateTime @db.Date
+  calories_in     Float    @default(0)
+  bmr             Float    @default(0)
+  tdee            Float    @default(0)
+  exercise_out    Float    @default(0)
+  total_out       Float    @default(0) // tdee + exercise_out
+  deficit         Float    @default(0) // total_out - calories_in
+  protein         Float    @default(0)
+  fat             Float    @default(0)
+  carbs           Float    @default(0)
+  target_calories Float    @default(0)
+  target_protein  Float    @default(0)
+  updated_at      DateTime @updatedAt
+
+  user User @relation(fields: [user_id], references: [id])
+
+  @@id([user_id, date])
+}
+
+// ---------- AI 解析日志 ----------
+model AiParseLog {
+  id          String   @id @default(uuid())
+  user_id     String
+  input_text  String
+  parsed_json Json?
+  intent      String? // record | query | chat
+  confidence  Float?
+  status      String? // auto | pending | resolved | failed
+  created_at  DateTime @default(now())
+
+  user User @relation(fields: [user_id], references: [id])
+}
+
+// ---------- 待用户确认 ----------
+model PendingRecord {
+  id         String   @id @default(uuid())
+  user_id    String
+  type       String // food_choice | portion_choice | clarify
+  raw_input  String
+  candidates Json
+  status     String   @default("pending") // pending | resolved | discarded
+  created_at DateTime @default(now())
+
+  user User @relation(fields: [user_id], references: [id])
+}
+
+// ============================================================
+// trigram 模糊匹配索引（Prisma schema 不直接支持 gin_trgm_ops，
+// 在 migrate dev 后，手动建一条空迁移并加入以下 SQL，再 migrate）：
+//
+//   CREATE EXTENSION IF NOT EXISTS pg_trgm;
+//   CREATE INDEX food_standard_name_trgm
+//     ON "FoodStandard" USING gin (name gin_trgm_ops);
+//
+// 匹配查询示例（相似度阈值 0.3）：
+//   SELECT *, similarity(name, $1) AS s
+//   FROM "FoodStandard"
+//   WHERE name % $1
+//   ORDER BY s DESC
+//   LIMIT 5;
+// ============================================================
+
+// ---------- 聊天记录（展示层，非事实源；保留约1年）----------
+enum ChatRole {
+  user
+  assistant
+}
+
+model ChatMessage {
+  id         String   @id @default(uuid())
+  user_id    String
+  date       DateTime @db.Date // 线程分组（按天）
+  role       ChatRole
+  kind       String   // text | record_card | portion_card | candidate_card | clarify_card | query_card | exercise_card
+  content    String?
+  payload    Json?
+  record_id  String? // 记录类卡片关联的 food_record，用于实时回填/删除联动
+  created_at DateTime @default(now())
+
+  user User @relation(fields: [user_id], references: [id])
+
+  @@index([user_id, date, created_at])
+}
