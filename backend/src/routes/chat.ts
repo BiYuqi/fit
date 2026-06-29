@@ -165,14 +165,16 @@ export async function chatRoutes(app: FastifyInstance) {
     if (parsed.intent === "query") {
       const card = await buildContextCard(user_id);
       const aiText = await answerQuery(text, card);
+      // 只有明确问今天的问题才展示 query_card 卡片；问历史的用纯文本气泡
+      const isTodayQuery = /今天|今日|现在|还可以|剩余|还剩/.test(text);
       const aiMsg = await prisma.chatMessage.create({
         data: {
           user_id,
           date: dateObj,
           role: "assistant",
-          kind: "query_card",
+          kind: isTodayQuery ? "query_card" : "text",
           content: aiText,
-          payload: card as object,
+          payload: isTodayQuery ? (card as object) : undefined,
         },
       });
       messages.push(aiMsg);

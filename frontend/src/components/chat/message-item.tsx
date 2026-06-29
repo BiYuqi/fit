@@ -1,4 +1,5 @@
-import { StyleSheet, View } from 'react-native';
+import { useRef, useEffect } from 'react';
+import { Animated, StyleSheet, View } from 'react-native';
 import { ThemedText } from '@/components/themed-text';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { Glass, Radius } from '@/constants/theme';
@@ -19,6 +20,45 @@ import type {
   ContextCard,
   ExerciseCardPayload,
 } from '@/types/chat';
+
+export function ThinkingBubble() {
+  const dots = [useRef(new Animated.Value(0.3)).current, useRef(new Animated.Value(0.3)).current, useRef(new Animated.Value(0.3)).current];
+  useEffect(() => {
+    const anims = dots.map((dot, i) =>
+      Animated.loop(
+        Animated.sequence([
+          Animated.delay(i * 180),
+          Animated.timing(dot, { toValue: 1, duration: 280, useNativeDriver: true }),
+          Animated.timing(dot, { toValue: 0.3, duration: 280, useNativeDriver: true }),
+          Animated.delay(540 - i * 180),
+        ])
+      )
+    );
+    anims.forEach(a => a.start());
+    return () => anims.forEach(a => a.stop());
+  }, []);
+
+  const scheme = useColorScheme();
+  const isDark = scheme === 'dark';
+  const glass = Glass[isDark ? 'dark' : 'light'];
+  return (
+    <View style={styles.aiWrapper}>
+      <View style={[
+        styles.aiBubble,
+        styles.thinkingBubble,
+        {
+          backgroundColor: isDark ? 'rgba(44,44,48,0.92)' : '#FFFFFF',
+          borderColor: glass.border,
+          ...glass.shadow,
+        },
+      ]}>
+        {dots.map((opacity, i) => (
+          <Animated.View key={i} style={[styles.thinkingDot, { opacity }]} />
+        ))}
+      </View>
+    </View>
+  );
+}
 
 function AiTextBubble({ content }: { content?: string | null }) {
   const scheme = useColorScheme();
@@ -103,5 +143,18 @@ const styles = StyleSheet.create({
     fontSize: 15,
     lineHeight: 22,
     fontWeight: '400',
+  },
+  thinkingBubble: {
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  thinkingDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: '#8E8E93',
   },
 });

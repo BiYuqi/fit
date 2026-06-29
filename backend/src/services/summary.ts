@@ -4,6 +4,7 @@ import type { UserProfile, Sex, ActivityLevel } from "./calc";
 
 export interface ContextCard {
   today: { in: number; out: number; deficit: number; p: number; f: number; c: number; remaining: number };
+  yesterday: { in: number; deficit: number; p: number; f: number; c: number };
   week: { avg_deficit: number; logged_days: number };
   month: { logged_days: number; avg_in: number };
   targets: { calories: number; protein: number };
@@ -90,8 +91,12 @@ export async function buildContextCard(user_id: string): Promise<ContextCard> {
   const monthAgo = new Date(today);
   monthAgo.setUTCDate(monthAgo.getUTCDate() - 29); // 含今天共30天
 
-  const [todaySummary, weekRows, monthRows] = await Promise.all([
+  const yesterday = new Date(today);
+  yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+
+  const [todaySummary, yesterdaySummary, weekRows, monthRows] = await Promise.all([
     prisma.dailySummary.findUnique({ where: { user_id_date: { user_id, date: today } } }),
+    prisma.dailySummary.findUnique({ where: { user_id_date: { user_id, date: yesterday } } }),
     prisma.dailySummary.findMany({ where: { user_id, date: { gte: weekAgo, lte: today } } }),
     prisma.dailySummary.findMany({ where: { user_id, date: { gte: monthAgo, lte: today } } }),
   ]);
@@ -121,6 +126,13 @@ export async function buildContextCard(user_id: string): Promise<ContextCard> {
       f:         Math.round(todaySummary?.fat ?? 0),
       c:         Math.round(todaySummary?.carbs ?? 0),
       remaining: Math.round(target_cal - cal_in),
+    },
+    yesterday: {
+      in:      Math.round(yesterdaySummary?.calories_in ?? 0),
+      deficit: Math.round(yesterdaySummary?.deficit ?? 0),
+      p:       Math.round(yesterdaySummary?.protein ?? 0),
+      f:       Math.round(yesterdaySummary?.fat ?? 0),
+      c:       Math.round(yesterdaySummary?.carbs ?? 0),
     },
     week:    { avg_deficit, logged_days: weekLogged },
     month:   { logged_days: monthLogged, avg_in },

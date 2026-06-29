@@ -1,4 +1,5 @@
 import { StyleSheet, View } from 'react-native';
+import { SymbolView } from 'expo-symbols';
 import { ThemedText } from '@/components/themed-text';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { Colors, Glass, Radius } from '@/constants/theme';
@@ -40,10 +41,17 @@ export function RecordCard({
           ...glass.shadow,
         },
       ]}>
-        {/* ● 已记录 badge */}
+        {/* badge */}
         <View style={styles.badgeRow}>
-          <View style={[styles.dot, { backgroundColor: MACRO_DOTS.protein }]} />
-          <ThemedText style={[styles.badgeText, { color: MACRO_DOTS.protein }]}>
+          {payload.is_estimated ? (
+            <View style={[styles.dot, { backgroundColor: '#FF9F0A' }]} />
+          ) : (
+            <SymbolView name="checkmark.circle.fill" size={13} tintColor={MACRO_DOTS.protein} />
+          )}
+          <ThemedText style={[
+            styles.badgeText,
+            { color: payload.is_estimated ? '#FF9F0A' : MACRO_DOTS.protein },
+          ]}>
             {payload.is_estimated ? '估算记录' : '已记录'}
           </ThemedText>
         </View>

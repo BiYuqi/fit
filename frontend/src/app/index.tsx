@@ -14,7 +14,7 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { ChatInput } from '@/components/chat/chat-input';
 import { DateSelector } from '@/components/chat/date-selector';
-import { MessageItem } from '@/components/chat/message-item';
+import { MessageItem, ThinkingBubble } from '@/components/chat/message-item';
 import { AvatarGradient, BlurIntensity, BottomTabInset, Glass } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useTheme } from '@/hooks/use-theme';
@@ -120,7 +120,7 @@ export default function ChatScreen() {
     loadDates(token);
   }, [token]);
 
-  // Scroll to bottom when new messages arrive
+  // Scroll to bottom when new messages arrive or thinking bubble appears
   useEffect(() => {
     if (messages.length > prevCountRef.current) {
       setTimeout(() => {
@@ -131,6 +131,12 @@ export default function ChatScreen() {
       prevCountRef.current = messages.length;
     }
   }, [messages.length]);
+
+  useEffect(() => {
+    if (isSending) {
+      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 80);
+    }
+  }, [isSending]);
 
   const handleSend = useCallback(
     (text: string) => {
@@ -188,6 +194,7 @@ export default function ChatScreen() {
             messages.length === 0 && styles.listEmpty,
           ]}
           ListEmptyComponent={<EmptyState />}
+          ListFooterComponent={isSending ? <ThinkingBubble /> : null}
           showsVerticalScrollIndicator={false}
           keyboardDismissMode="on-drag"
           keyboardShouldPersistTaps="handled"
