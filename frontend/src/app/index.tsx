@@ -5,9 +5,6 @@ import {
   StyleSheet,
   View,
 } from 'react-native';
-import { BlurView } from 'expo-blur';
-import { LinearGradient } from 'expo-linear-gradient';
-import { SymbolView } from 'expo-symbols';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
@@ -16,8 +13,6 @@ import { formatChatTime, CHAT_TIME_GAP_MS } from '@/lib/format';
 import { ChatInput } from '@/components/chat/chat-input';
 import { DateSelector } from '@/components/chat/date-selector';
 import { MessageItem, ThinkingBubble } from '@/components/chat/message-item';
-import { AvatarGradient, BlurIntensity, BottomTabInset, Glass } from '@/constants/theme';
-import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useTheme } from '@/hooks/use-theme';
 import { useAuthStore } from '@/stores/auth-store';
 import { useChatStore } from '@/stores/chat-store';
@@ -49,62 +44,6 @@ function EmptyState() {
   );
 }
 
-// Header matches ChatMain.dc.html:
-// 38px gradient avatar (accent→purple) + sparkle icon · "AI 记录助手" · subtitle · date pill
-function ChatHeader({
-  caloriesIn,
-  selectedDate,
-  dates,
-  onSelectDate,
-}: {
-  caloriesIn: number;
-  selectedDate: string;
-  dates: string[];
-  onSelectDate: (date: string) => void;
-}) {
-  const scheme = useColorScheme();
-  const isDark = scheme === 'dark';
-  const theme = useTheme();
-  const glass = Glass[isDark ? 'dark' : 'light'];
-  const today = new Date().toISOString().slice(0, 10);
-  const isToday = selectedDate === today;
-
-  const subtitle = isToday
-    ? caloriesIn > 0 ? `今日已记 ${caloriesIn} kcal · 在线` : '在线'
-    : '查看历史记录';
-
-  return (
-    <BlurView
-      intensity={BlurIntensity.header}
-      tint={isDark ? 'systemChromeMaterialDark' : 'systemChromeMaterialLight'}
-      style={[styles.header, { borderBottomColor: theme.hairline }]}>
-      {/* Gradient avatar circle */}
-      <LinearGradient
-        colors={AvatarGradient.colors}
-        start={AvatarGradient.start}
-        end={AvatarGradient.end}
-        style={styles.avatar}>
-        <SymbolView name="sparkles" size={19} tintColor="#fff" />
-      </LinearGradient>
-
-      {/* Title + subtitle */}
-      <View style={styles.headerText}>
-        <ThemedText style={styles.headerTitle}>AI 记录助手</ThemedText>
-        <ThemedText style={[styles.headerSub, { color: theme.textSecondary }]}>
-          {subtitle}
-        </ThemedText>
-      </View>
-
-      {/* Date picker pill */}
-      <DateSelector
-        selectedDate={selectedDate}
-        dates={dates}
-        onSelect={onSelectDate}
-      />
-    </BlurView>
-  );
-}
-
 export default function ChatScreen() {
   const insets = useSafeAreaInsets();
   const flatListRef = useRef<FlatList<ChatMessage>>(null);
@@ -127,8 +66,6 @@ export default function ChatScreen() {
 
   const PENDING_KINDS = new Set(['portion_card', 'candidate_card', 'clarify_card']);
 
-  // 待确认卡排队：同一条用户消息产生的多张 pending 卡一次只显示第一张未解决的；
-  // 每遇到用户消息就重置阻塞，不同轮次的 pending 互不干扰
   const visibleMessages = useMemo(() => {
     let blocked = false;
     return messages.filter(m => {
@@ -145,7 +82,6 @@ export default function ChatScreen() {
     });
   }, [messages, resolvedPendings]);
 
-  // Initial load
   useEffect(() => {
     if (!token) return;
     const today = new Date().toISOString().slice(0, 10);
@@ -153,7 +89,6 @@ export default function ChatScreen() {
     loadDates(token);
   }, [token]);
 
-  // Scroll to bottom when new messages arrive or thinking bubble appears
   useEffect(() => {
     if (visibleMessages.length > prevCountRef.current) {
       setTimeout(() => {
@@ -188,8 +123,6 @@ export default function ChatScreen() {
     [token, setDate],
   );
 
-  const caloriesIn = summaryCard?.today.in ?? 0;
-
   const renderItem = useCallback(
     ({ item, index }: { item: ChatMessage; index: number }) => {
       const prev = index > 0 ? visibleMessages[index - 1] : null;
@@ -208,20 +141,13 @@ export default function ChatScreen() {
 
   const keyExtractor = useCallback((item: ChatMessage) => item.id, []);
 
+  // Top padding: status bar + date pill height (≈54px from design)
+  const topPad = insets.top + 54;
+
   return (
     <ThemedView style={[styles.root, { backgroundColor: 'transparent' }]}>
-      {/* Safe area top */}
-      <View style={{ paddingTop: insets.top }} />
-
-      <ChatHeader
-        caloriesIn={caloriesIn}
-        selectedDate={selectedDate}
-        dates={chatDates}
-        onSelectDate={handleSelectDate}
-      />
-
       {isLoading && messages.length === 0 ? (
-        <View style={styles.loadingCenter}>
+        <View style={[styles.loadingCenter, { paddingTop: topPad }]}>
           <ActivityIndicator />
         </View>
       ) : (
@@ -233,6 +159,7 @@ export default function ChatScreen() {
           style={styles.flatList}
           contentContainerStyle={[
             styles.list,
+            { paddingTop: topPad },
             visibleMessages.length === 0 && styles.listEmpty,
           ]}
           ListEmptyComponent={<EmptyState />}
@@ -244,8 +171,17 @@ export default function ChatScreen() {
         />
       )}
 
+      {/* Floating date pill — centered at top, absolute over messages */}
+      <View style={[styles.datePillWrapper, { top: insets.top + 10 }]} pointerEvents="box-none">
+        <DateSelector
+          selectedDate={selectedDate}
+          dates={chatDates}
+          onSelect={handleSelectDate}
+        />
+      </View>
+
       <ChatInput onSend={handleSend} isSending={isSending} />
-      <View style={{ height: BottomTabInset }} />
+      <View style={{ height: insets.bottom }} />
     </ThemedView>
   );
 }
@@ -254,41 +190,11 @@ const styles = StyleSheet.create({
   root: {
     flex: 1,
   },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    paddingHorizontal: 20,
-    paddingTop: 6,
-    paddingBottom: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-  },
-  avatar: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexShrink: 0,
-  },
-  headerText: {
-    flex: 1,
-    minWidth: 0,
-    gap: 1,
-  },
-  headerTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    lineHeight: 19,
-  },
-  headerSub: {
-    fontSize: 12,
-  },
   flatList: {
     flex: 1,
   },
   list: {
-    paddingVertical: 8,
+    paddingHorizontal: 16,
     paddingBottom: 16,
   },
   listEmpty: {
@@ -298,6 +204,13 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  datePillWrapper: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    zIndex: 20,
   },
   timeLabel: {
     alignItems: 'center',

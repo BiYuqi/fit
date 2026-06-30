@@ -67,7 +67,7 @@
 | ORM | Prisma 7 + `@prisma/adapter-pg` | 类型安全、迁移好；v7 driver adapter 模式，连接配置在 `prisma.config.ts`，运行时通过 `src/lib/prisma.ts` 单例访问 |
 | 认证 | 自建 JWT + argon2 | 账号密码极简 |
 | 校验 | zod | 请求 + DeepSeek 返回 |
-| AI | openai SDK 接 DeepSeek V4 | 见 AI_PARSING_SPEC |
+| AI | openai SDK 接 DeepSeek V4；统一入口 `ai/ctx.ts`（`callDeepSeekCtx`） | 见 AI_PARSING_SPEC §7 |
 | 日志 | pino | Fastify 内置 |
 
 ## 5. 本地缓存与同步

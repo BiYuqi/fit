@@ -4,9 +4,10 @@ import { parseUserInput } from "../services/parser";
 import { matchFood, matchFoodCandidates } from "../services/matcher";
 import { itemNutrition } from "../services/calc";
 import { recompute, buildContextCard } from "../services/summary";
-import { buildMemoryPack, renderMemoryBlock } from "../services/memory";
+import { buildMemoryPack } from "../services/memory";
+import type { MemoryPack } from "../services/memory";
 import type { FoodItem } from "../ai/schema";
-import { callDeepSeek } from "../ai/client";
+import { callDeepSeekCtx } from "../ai/ctx";
 import { prisma } from "../lib/prisma";
 import type { MealType, PortionLabel } from "@prisma/client";
 
@@ -67,33 +68,65 @@ function extractMealTypeFromText(text: string): MealType | null {
   return null;
 }
 
-async function answerQuery(question: string, card: object): Promise<string> {
-  const res = await callDeepSeek(
+async function answerQuery(question: string, pack: MemoryPack): Promise<string> {
+  const res = await callDeepSeekCtx(
+    pack,
     [
       {
         role: "system",
-        content: `你是减脂助手，根据用户今日数据回答问题，数字来自以下上下文卡（单位 kcal/g），回答简洁中文：\n${JSON.stringify(card)}`,
+        content: "你是减脂助手，根据用户今日数据回答问题，数字来自上下文，回答简洁中文。",
       },
       { role: "user", content: question },
     ],
-    { model: "deepseek-v4-flash" }
+    { model: "deepseek-v4-flash" },
   );
   return res.choices[0]?.message?.content ?? "暂时无法回答";
 }
 
-async function answerChat(text: string): Promise<string> {
-  const res = await callDeepSeek(
+async function answerChat(text: string, pack: MemoryPack): Promise<string> {
+  const res = await callDeepSeekCtx(
+    pack,
     [
       {
         role: "system",
-        content: `你是一个减脂健康助手，只回答与饮食、营养、运动、减脂、体重管理相关的问题，回答简洁，使用中文。
-如果用户的问题与以上主题无关（如聊天、情感、时事、编程、娱乐等），请礼貌拒绝，回复：「这个问题超出我的服务范围啦～我只能帮你解答饮食、营养和运动相关的问题，有减脂方面的疑问随时告诉我 💪」`,
+        content: `你是一个减脂健康助手，根据上下文（用户档案/今日记录/对话历史）回答问题，回答简洁，使用中文。
+只回答与饮食、营养、运动、减脂、体重管理相关的问题。
+如果用户的问题与以上主题完全无关（如编程、娱乐、时事等），请礼貌拒绝，回复：「这个问题超出我的服务范围啦～我只能帮你解答饮食、营养和运动相关的问题，有减脂方面的疑问随时告诉我 💪」`,
       },
       { role: "user", content: text },
     ],
-    { model: "deepseek-v4-flash" }
+    { model: "deepseek-v4-flash" },
   );
   return res.choices[0]?.message?.content ?? "好的";
+}
+
+async function answerDiscuss(
+  question: string,
+  target: import("../services/memory").RecordRef,
+  fullRecord: { portion_label: string; food_confidence: number; portion_confidence: number; raw_input: string | null; food: { name: string; calories_100g: unknown } | null } | null,
+  pack: MemoryPack,
+): Promise<string> {
+  const PORTION_ZH: Record<string, string> = { small: "小份", medium: "中份", large: "大份", custom: "自定" };
+  let detail = `【被询问的记录】\n- 食物：${target.name}\n- 克数：${target.weight_g}g（${PORTION_ZH[target.portion ?? ""] ?? target.portion ?? "?"}份）\n- 热量：${target.calories}kcal`;
+  if (fullRecord) {
+    if (fullRecord.raw_input) detail += `\n- 用户原话："${fullRecord.raw_input}"`;
+    detail += `\n- AI置信度：食物 ${fullRecord.food_confidence?.toFixed(2)}，份量 ${fullRecord.portion_confidence?.toFixed(2)}`;
+    if (fullRecord.food) {
+      detail += `\n- 食物库：${fullRecord.food.name} 每100g ${Math.round(Number(fullRecord.food.calories_100g))}kcal`;
+    }
+  }
+  const res = await callDeepSeekCtx(
+    pack,
+    [
+      {
+        role: "system",
+        content: `你是减脂助手。用户对某条饮食记录提出了疑问，请结合以下记录详情，简洁中文解释这条记录是如何产生的（份量估算依据、克数来源、热量算法）。若用户觉得克数不准，告知可以说"改成X克"来调整。\n\n${detail}`,
+      },
+      { role: "user", content: question },
+    ],
+    { model: "deepseek-v4-flash" },
+  );
+  return res.choices[0]?.message?.content ?? "我来解释一下这条记录的来由…";
 }
 
 // ---------- 单条食物处理（record 与 modify.append 共用） ----------
@@ -260,15 +293,14 @@ export async function chatRoutes(app: FastifyInstance) {
     // 组装对话记忆包（L0 ai_parse_log / L1 今日记录 / L2 画像+卡），注入 prompt 消解指代
     // 此刻本条消息尚未写 ai_parse_log / food_record，记忆包反映的是「本条之前」状态，正合语义
     const pack = await buildMemoryPack(user_id);
-    const memoryBlock = renderMemoryBlock(pack);
 
     // 解析意图（flash → pro 若低置信）
-    let parsed = await parseUserInput(text, memoryBlock);
+    let parsed = await parseUserInput(text, pack);
     if (parsed.intent === "record") {
       const hasLow = parsed.items.some((i) => i.food_confidence < 0.5);
       if (hasLow) {
         try {
-          parsed = await parseUserInput(text, memoryBlock, "deepseek-v4-pro");
+          parsed = await parseUserInput(text, pack, "deepseek-v4-pro");
         } catch {
           /* 保留 flash 结果 */
         }
@@ -288,8 +320,7 @@ export async function chatRoutes(app: FastifyInstance) {
 
     // ── query ──────────────────────────────────
     if (parsed.intent === "query") {
-      const card = await buildContextCard(user_id);
-      const aiText = await answerQuery(text, card);
+      const aiText = await answerQuery(text, pack);
       // 只有明确问今天的问题才展示 query_card 卡片；问历史的用纯文本气泡
       const isTodayQuery = /今天|今日|现在|还可以|剩余|还剩/.test(text);
       const aiMsg = await prisma.chatMessage.create({
@@ -299,22 +330,45 @@ export async function chatRoutes(app: FastifyInstance) {
           role: "assistant",
           kind: isTodayQuery ? "query_card" : "text",
           content: aiText,
-          payload: isTodayQuery ? (card as object) : undefined,
+          payload: isTodayQuery ? (pack.card as object) : undefined,
         },
       });
       messages.push(aiMsg);
-      return { intent: "query", reply: aiText, summary_card: card, messages };
+      return { intent: "query", reply: aiText, summary_card: pack.card, messages };
     }
 
     // ── chat ───────────────────────────────────
     if (parsed.intent === "chat") {
-      const aiText = await answerChat(text);
+      const aiText = await answerChat(text, pack);
       const aiMsg = await prisma.chatMessage.create({
         data: { user_id, date: dateObj, role: "assistant", kind: "text", content: aiText },
       });
       messages.push(aiMsg);
-      const card = await buildContextCard(user_id);
-      return { intent: "chat", reply: aiText, summary_card: card, messages };
+      return { intent: "chat", reply: aiText, summary_card: pack.card, messages };
+    }
+
+    // ── discuss（针对某条记录提问/质疑，不动数据）─────
+    if (parsed.intent === "discuss") {
+      const discParsed = parsed as { intent: "discuss"; target: string };
+      const target = pack.recent_records.find((r) => r.ref === discParsed.target);
+      let aiText: string;
+      if (!target) {
+        // 找不到目标记录，退化为 chat
+        aiText = await answerChat(text, pack);
+      } else {
+        const fullRecord = target.kind === "food"
+          ? await prisma.foodRecord.findFirst({
+              where: { id: target.record_id, user_id },
+              include: { food: true },
+            })
+          : null;
+        aiText = await answerDiscuss(text, target, fullRecord as any, pack);
+      }
+      const aiMsg = await prisma.chatMessage.create({
+        data: { user_id, date: dateObj, role: "assistant", kind: "text", content: aiText },
+      });
+      messages.push(aiMsg);
+      return { intent: "discuss", reply: aiText, summary_card: pack.card, messages };
     }
 
     // ── modify（改 / 删 / 追加，AI_PARSING_SPEC §8）──

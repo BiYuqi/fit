@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 // ---------- 枚举 ----------
-export const IntentSchema = z.enum(["record", "query", "chat", "modify"]);
+export const IntentSchema = z.enum(["record", "query", "chat", "modify", "discuss"]);
 export type Intent = z.infer<typeof IntentSchema>;
 
 export const ModifyActionSchema = z.enum(["update", "delete", "append"]);
@@ -71,6 +71,10 @@ export const ParseResultSchema = z.discriminatedUnion("intent", [
     items: z.array(FoodItemSchema).optional(),   // action=append 时
     modify_confidence: z.number().min(0).max(1).optional(),
   }),
+  z.object({
+    intent: z.literal("discuss"),
+    target: z.string(),                          // 引用记忆包 recent_records.ref（如 r1/e1）
+  }),
 ]);
 export type ParseResult = z.infer<typeof ParseResultSchema>;
 
@@ -91,8 +95,8 @@ export const parseToolSchema = {
       properties: {
         intent: {
           type: "string",
-          enum: ["record", "query", "chat", "modify"],
-          description: "record=记录饮食/运动; query=查询数据; chat=闲聊/营养咨询; modify=改/删/追加已记录的食物",
+          enum: ["record", "query", "chat", "modify", "discuss"],
+          description: "record=记录饮食/运动; query=查询今日汇总数据; modify=改/删/追加已记录的食物; discuss=针对某条已有记录提问/质疑(不动数据); chat=其他闲聊/营养咨询",
         },
         action: {
           type: "string",
@@ -101,7 +105,7 @@ export const parseToolSchema = {
         },
         target: {
           type: "string",
-          description: "仅 intent=modify 必填。引用【今日已记录】里的 ref（如 r1、e1），指明改/删/追加关联的是哪条记录",
+          description: "intent=modify 或 discuss 时必填。引用【今日已记录】里的 ref（如 r1、e1），指明操作/讨论的是哪条记录",
         },
         change: {
           type: "object",

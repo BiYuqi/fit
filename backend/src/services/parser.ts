@@ -1,4 +1,5 @@
-import { callDeepSeek } from "../ai/client";
+import { callDeepSeekCtx } from "../ai/ctx";
+import type { MemoryPack } from "./memory";
 import {
   ParseResult,
   ParseResultSchema,
@@ -10,23 +11,34 @@ const SYSTEM_PROMPT = `你是一个减脂 App 的饮食助手，帮助用户记�
 
 请判断用户意图并输出结构化数据：
 - record：用户在描述自己吃了什么或做了什么运动
-- query：用户在询问自己今日/本周的热量、缺口、进度等数据
-- chat：其他聊天，包括营养咨询、闲聊等
+- query：用户在询问今日/本周汇总数据（如总热量、还能吃多少、蛋白缺口等）
+- modify：改/删/追加【今日已记录】里的某条记录
+- discuss：针对某条已有记录提问/质疑（不动数据，只解释）
+- chat：其他营养咨询、闲聊
 
 关键判断规则：
-- 若当前消息是对上一条的补充说明、修正描述或追问（如"我没放糖"、"说不上很甜"、"大概一小碗"），识别为 chat，不要重复创建新记录。
-- 只有用户明确表示要记录新的食物/运动时才用 record。
 - 已附【用户档案】【今日已记录】【最近对话】上下文，请结合理解，尤其用于消解指代。
-- 指代消解：当用户用指代而不点名具体食物时（"再来一碗"、"又吃了一个"、"还是那个"、"刚才那个再来份"），从上下文（最近对话 / 今日已记录）找出所指食物，按 record 输出，canonical 取上下文里的标准食物名。这是**再次食用**，应记录新条目（不是补充说明）。
+- 若当前消息是对上一条的补充说明或修正描述（如"我没放糖"、"说不上很甜"），识别为 chat，不要重复创建新记录。
+- 只有用户明确表示要记录新的食物/运动时才用 record。
+- 指代消解：当用户用指代而不点名具体食物（"再来一碗"、"又吃了一个"、"还是那个"），从上下文找出所指食物，按 record 输出，canonical 取上下文里的标准食物名。这是**再次食用**，应记录新条目。
 - 区分：纯描述补充/修正（"我没放糖"）→ chat；再次食用某食物（"再来一碗"）→ record。
 
+discuss 意图（针对某条已有记录提问/质疑，不动数据）：
+- 用户对【今日已记录】里某条具体记录提问或质疑时用 discuss。
+  例："为什么记成60克"、"这个热量对吗"、"这条数字是怎么来的"、"这个份量怎么算的"。
+- target 填【今日已记录】里对应的 ref（如 r1）。从上下文推断：最近对话中刚刚记录的那条、或用户用"这个/那个/刚才那个"指代的那条。
+- 若实在推断不出指向哪条记录，走 chat。
+- 与 query 的区别：discuss 针对某条具体记录，query 是查今日总汇总数据。
+
 modify 意图（改 / 删 / 追加已记录的食物）：
-- 当用户要**修改/删除/追加**【今日已记录】里某条记录时用 modify。target 必须填【今日已记录】里的 ref（如 r1、e1）；找不到明确 target 就别用 modify。
+- 当用户要**修改/删除/追加**【今日已记录】里某条记录时用 modify。
+- target 填【今日已记录】里的 ref（如 r1、e1）。
 - action=update：改份量或改食物。
-  - 改份量（"牛肉面换大份"、"那个面少一点"）→ change.portion_label + change.grams（估算该食物该档的净重克数）。
+  - 改份量（"换成50克"、"那个面少一点"）→ change.portion_label + change.grams（估算该档净重克数）。
   - 改食物（"不对，是牛肉拉面"）→ change.food 填新标准名（同份量沿用旧的，不填 grams）。
-- action=delete：删一条（"早餐那个蛋删了"、"把牛肉面删掉"）→ 只填 target。
-- action=append：在 target 所属那一餐里追加一个**新**食物（"早餐再加个蛋"）→ items 填新食物（结构同 record 的 items），meal_type 继承 target 所在餐次。
+- action=delete：删一条（"把那个蛋删了"）→ 只填 target。
+- action=append：在 target 所属那一餐里追加新食物（"早餐再加个蛋"）→ items 填新食物，meal_type 继承 target 所在餐次。
+- **纯确认词处理**：若当前消息是极简确认（"好"、"改吧"、"修改吧"、"行"、"ok"、"是"、"确认"），且【最近对话】最后几轮的用户消息涉及对某条记录份量的讨论（如"不是50克吗"、"应该是50g"），则推断 target（从【今日已记录】ref 找最近被讨论的那条）和 change.grams（从讨论中提取数字），输出 intent=modify, action=update。若推断不出具体 target 或克数，走 chat。
 - 区分 append 与 record：点名某餐追加新食物（"早餐再加个蛋"）→ modify.append；无明确餐次的再次食用（"再来一碗"）→ record。
 - modify_confidence 给「改哪条+怎么改」的整体把握度。
 
@@ -78,24 +90,22 @@ portion_confidence 判断依据：
 
 export async function parseUserInput(
   text: string,
-  memoryBlock = "",
+  pack: MemoryPack,
   model = "deepseek-v4-flash"
 ): Promise<ParseResult> {
   const messages: Array<{ role: "system" | "user"; content: string }> = [
     { role: "system", content: SYSTEM_PROMPT },
+    { role: "user", content: text },
   ];
-  if (memoryBlock) {
-    messages.push({ role: "system", content: `以下是当前对话上下文：\n${memoryBlock}` });
-  }
-  messages.push({ role: "user", content: text });
 
-  const res = await callDeepSeek(
+  const res = await callDeepSeekCtx(
+    pack,
     messages,
     {
       model,
       tools: [parseToolSchema],
       tool_choice: { type: "function", function: { name: PARSE_TOOL_NAME } },
-    }
+    },
   );
 
   const toolCall = res.choices[0]?.message?.tool_calls?.[0];

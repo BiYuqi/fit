@@ -11,7 +11,7 @@
 - **模型升级策略（在 T05+T06 完成后实现）**：flash 默认；若任一 item `food_confidence < 0.5` 或 zod 校验失败，自动用 pro 重试一次，不再降级。前端永不指定模型。
 
 ## 2. 意图路由
-每条消息先判：`record`（记录饮食/运动）/ `query`（查数据）/ `chat`（闲聊/营养问题）/ `modify`（改/删/追加已有记录，见 §8）。可与解析在同一次调用完成。
+每条消息先判：`record`（记录饮食/运动）/ `query`（查今日汇总数据）/ `modify`（改/删/追加已有记录，见 §8）/ `discuss`（针对某条已有记录提问/质疑，不动数据，见 §9）/ `chat`（其余闲聊/营养问题）。可与解析在同一次调用完成。
 
 ## 3. record 解析协议
 DeepSeek 输出（strict tool schema，zod 同构校验）：
@@ -111,27 +111,37 @@ matchFood（单一最佳匹配）—— 字面只召回，AI 裁决（防"蛋白
 | 层 | 内容 | 解决 | 来源 | 取多少 |
 |---|---|---|---|---|
 | **L2 画像·永久** | `user_profile` + 上下文卡（§6） | 「懂我」：体重/目标/缺口/剩余额度 | `users` + `daily_summary` | 固定，永久在场 |
-| **L1 工作记忆·今天** | `recent_records`：今天每条记录的**当前值快照** + `ref` | 「A 是哪一行、现在多少克/卡」 | `food_record` / `exercise_record`（今天） | 今天全部（通常 <15 条） |
-| **L0 对话窗口·最近** | `recent_turns`：最近几轮「用户说了啥 + AI 做了啥动作」的结构化摘要 | 指代与时序：「那个」「再加」「不对我说中份」 | `ai_parse_log`(+join `food_record`) | 最近 6~8 轮，**滑动窗口** |
+| **L1 工作记忆·今天** | `recent_records`：今天每条记录的**当前值快照** + `ref` + `record_id` | 「A 是哪一行、现在多少克/卡」；`record_id` 供 §9 discuss 定位记录详情 | `food_record` / `exercise_record`（今天） | 今天全部，超 20 条折叠更早的 |
+| **L0 对话窗口·最近** | `recent_turns`：最近几轮「用户说了啥 + AI 做了啥动作」的结构化摘要 | 指代与时序：「那个」「再加」「不对我说中份」 | `ai_parse_log`(+join `food_record`) | 最近 **5 轮**，**滑动窗口** |
 
-L1 句柄（`ref` 供 L0 与 §8 modify 的 `target` 引用）：
-```json
-"recent_records":[
-  {"ref":"r1","record_id":"uuid-a","name":"牛肉面","meal_type":"lunch","portion":"medium","weight_g":450,"calories":600},
-  {"ref":"r2","record_id":"uuid-b","name":"鸡蛋","meal_type":"breakfast","weight_g":50,"calories":72}
-]
+L1 句柄（`ref` 供 L0 与 §8 modify 的 `target` 引用；`record_id` 是数据库主键，供 §9 discuss 查完整记录）：
+```
+【今日已记录】(共2条)
+  r1 午餐·牛肉面 中份 450g 600kcal [id=uuid-a]
+  r2 早餐·鸡蛋 中份 50g 72kcal [id=uuid-b]
 ```
 
 L0 摘要（**去卡片 payload、去闲聊长文本**，只留意图 + 动作锚点，否则上下文变吵）：
-```json
-"recent_turns":[
-  {"said":"早餐吃了牛肉面","act":"record","ref":"r1","food":"牛肉面","portion":"medium"},
-  {"said":"那个改成小份","act":"modify.update","ref":"r1","to":{"portion":"small"}},
-  {"said":"蛋白质够吗?","act":"query"}
-]
+```
+【最近对话】(旧→新)
+  用户:"早餐吃了牛肉面" → 记录(牛肉面/medium)
+  用户:"那个改成小份" → 修改记录
+  用户:"蛋白质够吗?" → 查询
 ```
 
-> **滑动窗口**：L0 只取最近 6~8 轮，更老丢弃——「记得几段、再远就忘」。L1 是事实快照不是对话，今天全留。
+> **滑动窗口**：L0 只取最近 **5 轮**，更老丢弃——「记得几段、再远就忘」。L1 是事实快照不是对话，今天全留（超 20 条折叠旧的）。
+
+### 统一 AI 调用入口（`ai/ctx.ts`）
+
+所有需要用户上下文的 AI 调用（`parseUserInput`、`answerChat`、`answerQuery`、`answerDiscuss` 等）统一走 `callDeepSeekCtx(pack, messages, opts)`。该函数内部调用 `compressContext(pack)` 压缩三层上下文，作为 system message 在第一条 user message 之前强制注入。
+
+```
+callDeepSeekCtx(pack, messages, opts)
+  └─ compressContext(pack) → 压缩文本（L2画像 + L1记录[max20] + L0对话[max5轮]）
+  └─ 插入 system message → callDeepSeek(fullMessages, opts)
+```
+
+**规则**：纯食物知识类调用（`estimateByAI`、`adjudicateByAI`）不涉及用户状态，继续直接用 `callDeepSeek`，不走此入口。
 
 ## 8. modify 意图：指代修改（改 / 删 / 追加）
 
@@ -161,3 +171,20 @@ L0 摘要（**去卡片 payload、去闲聊长文本**，只留意图 + 动作�
 
 > 撤销不进 pending 流程：update 撤销 = 还原 `prev_state`，append 撤销 = 删新记录；给短时间窗即可。
 > **只有 delete 需确认**；update/append 复用「自动入库 + 卡片」老路，避免打扰过头。
+
+### 纯确认词处理
+用户发极简确认词（「好」「改吧」「修改吧」「行」「ok」「确认」），若 L0 最近几轮的用户消息涉及对某条记录份量的讨论（如「不是50克吗」「应该是50g」），parser 推断 `target`（从 L1 找最近被讨论的 ref）和 `change.grams`（从讨论中提取数字），输出 `intent=modify, action=update`。推断不出具体 target 或克数则走 chat。
+
+## 9. discuss 意图（质疑/追问已有记录，不动数据）
+
+承接 §2。用户对 L1 里某条具体记录提问或质疑时用 `discuss`：
+- 例：「为什么记成60克」「这个热量对吗」「这个份量怎么估的」
+- parser 输出：`{"intent":"discuss","target":"r1"}`，`target` 引用 L1 `ref`
+- 与 `query` 的区别：discuss 针对**某条具体记录**，query 是查今日**汇总数据**
+- 与 `chat` 的区别：discuss 明确指向某条已有记录（从上下文推断）；推断不出则走 chat
+
+后端处理：
+1. 从 L1 `recent_records` 按 `target` 找到 `record_id`
+2. 查 `food_record`（含 `raw_input`、`food_confidence`、`portion_confidence`）和关联 `food_standard`（含每100g营养）
+3. 把记录详情注入 system message，调 `answerDiscuss` 解释来龙去脉（份量估算依据、克数来源、热量算法）
+4. 不写 `food_record`，只回复文本气泡；回复中告知用户可说「改成X克」来调整

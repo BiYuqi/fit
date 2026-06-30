@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { FlatList, Modal, StyleSheet, TouchableOpacity, View } from 'react-native';
 import { BlurView } from 'expo-blur';
+import { LinearGradient } from 'expo-linear-gradient';
 import { SymbolView } from 'expo-symbols';
 import { ThemedText } from '@/components/themed-text';
 import { Colors, Glass, Radius, Spacing } from '@/constants/theme';
@@ -39,17 +40,39 @@ export function DateSelector({ selectedDate, dates, onSelect }: Props) {
   const merged = Array.from(new Set([...last7, ...dates]));
   const sorted = merged.sort((a, b) => b.localeCompare(a));
 
+  const blurTint = isDark ? 'systemChromeMaterialDark' : 'systemChromeMaterialLight';
+  const glassStroke = isDark ? 'rgba(255,255,255,0.22)' : 'rgba(255,255,255,0.80)';
+
   return (
     <>
-      {/* Date pill: matches design — field bg + calendar icon + text + caret */}
-      <TouchableOpacity
-        style={[styles.trigger, { backgroundColor: theme.backgroundElement }]}
-        onPress={() => setOpen(true)}
-        activeOpacity={0.7}>
-        <SymbolView name="calendar.badge.clock" size={15} tintColor={theme.textSecondary} />
-        <ThemedText style={styles.triggerText}>{formatDateLabel(selectedDate)}</ThemedText>
-        <SymbolView name="chevron.down" size={10} tintColor={theme.textSecondary} />
-      </TouchableOpacity>
+      {/* Date pill — glass layers matching PhoneFrame glassGrad + glassInset */}
+      <View style={[styles.triggerShadow, glass.shadow]}>
+        <TouchableOpacity style={styles.triggerClip} onPress={() => setOpen(true)} activeOpacity={0.8}>
+          {/* Blur base */}
+          <BlurView intensity={40} tint={blurTint} style={StyleSheet.absoluteFill} />
+          {/* Glass gradient tint */}
+          <LinearGradient
+            colors={isDark
+              ? ['rgba(94,94,102,0.42)', 'rgba(38,38,44,0.22)', 'rgba(58,58,66,0.34)']
+              : ['rgba(255,255,255,0.58)', 'rgba(255,255,255,0.26)', 'rgba(255,255,255,0.40)']}
+            locations={[0, 0.55, 1]}
+            start={{ x: 0.85, y: 0 }}
+            end={{ x: 0.15, y: 1 }}
+            style={StyleSheet.absoluteFill}
+            pointerEvents="none"
+          />
+          {/* Top inner highlight */}
+          <View style={[styles.triggerTopHL, {
+            backgroundColor: isDark ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.95)',
+          }]} pointerEvents="none" />
+          {/* Border */}
+          <View style={[StyleSheet.absoluteFill, styles.triggerBorder, { borderColor: glassStroke }]} pointerEvents="none" />
+          {/* Content */}
+          <SymbolView name="calendar" size={14} tintColor={theme.textSecondary} />
+          <ThemedText style={styles.triggerText}>{formatDateLabel(selectedDate)}</ThemedText>
+          <SymbolView name="chevron.down" size={10} tintColor={theme.textSecondary} />
+        </TouchableOpacity>
+      </View>
 
       <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
         <TouchableOpacity style={styles.backdrop} activeOpacity={1} onPress={() => setOpen(false)}>
@@ -98,13 +121,28 @@ export function DateSelector({ selectedDate, dates, onSelect }: Props) {
 }
 
 const styles = StyleSheet.create({
-  trigger: {
+  triggerShadow: {
+    borderRadius: 17,
+  },
+  triggerClip: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 5,
-    paddingHorizontal: 11,
-    paddingVertical: 6,
-    borderRadius: 15,
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 17,
+    overflow: 'hidden',
+  },
+  triggerTopHL: {
+    position: 'absolute',
+    top: 0, left: 0, right: 0,
+    height: 1.2,
+    borderTopLeftRadius: 17,
+    borderTopRightRadius: 17,
+  },
+  triggerBorder: {
+    borderRadius: 17,
+    borderWidth: 0.5,
   },
   triggerText: {
     fontSize: 13,
