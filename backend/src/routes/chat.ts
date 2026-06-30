@@ -162,7 +162,7 @@ async function processFoodItem(item: FoodItem, ctx: ItemCtx): Promise<ItemResult
     };
   }
 
-  const food = await matchFood(query);
+  const food = await matchFood(query, raw);
 
   if (food_confidence >= 0.8 && portion_confidence >= 0.8) {
     const chosenPortion = portions.find((p) => p.label === chosen_label) ?? portions[0];
