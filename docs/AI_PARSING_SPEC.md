@@ -11,7 +11,7 @@
 - **模型升级策略（在 T05+T06 完成后实现）**：flash 默认；若任一 item `food_confidence < 0.5` 或 zod 校验失败，自动用 pro 重试一次，不再降级。前端永不指定模型。
 
 ## 2. 意图路由
-每条消息先判：`record`（记录饮食/运动）/ `query`（查数据）/ `chat`（闲聊/营养问题）。可与解析在同一次调用完成。
+每条消息先判：`record`（记录饮食/运动）/ `query`（查数据）/ `chat`（闲聊/营养问题）/ `modify`（改/删/追加已有记录，见 §8）。可与解析在同一次调用完成。
 
 ## 3. record 解析协议
 DeepSeek 输出（strict tool schema，zod 同构校验）：
@@ -58,6 +58,8 @@ DeepSeek 输出（strict tool schema，zod 同构校验）：
 每张食物最多问一次（食物歧义优先于份量歧义），resolve 后不再追问份量。
 中/低置信生成 `pending_record`，前端出对应卡片，用户选择后走 `/pending/:id/resolve`。
 
+> 以上为 `record` 路由。`modify`（改/删/追加）的路由与确认策略单独见 §8。
+
 ## 5. 食物匹配管线（无 embedding）
 ```
 matchFoodCandidates（歧义检测）：
@@ -85,4 +87,63 @@ matchFood（单一最佳匹配，含兜底）：
 ```
 `query` 意图直接用此卡回答，**不必每轮查库**。
 
-> 区分：**显示用全量聊天记录（chat_message），喂 AI 只用压缩上下文卡 + 最近一两轮**（处理"再加点"这类指代）。两者不同，别混。
+> 区分：**显示用全量聊天记录（chat_message），喂 AI 用「对话记忆包」（§7）**。两者不同，别混。上下文卡是记忆包里的 L2 聚合层。
+
+## 7. 对话记忆包（无状态 API 的上下文拼装）
+
+> DeepSeek 无状态（§1）：每轮把下面**三层一起拼进请求**，让 AI「不丢上下文、不显得愚蠢」。三层分工不可混。
+> **铁律 3 延伸**：`chat_message` 是展示层，**绝不喂 AI**。对话记忆从 `ai_parse_log`(+join `food_record`) 抽，不从 `chat_message` 取。
+
+| 层 | 内容 | 解决 | 来源 | 取多少 |
+|---|---|---|---|---|
+| **L2 画像·永久** | `user_profile` + 上下文卡（§6） | 「懂我」：体重/目标/缺口/剩余额度 | `users` + `daily_summary` | 固定，永久在场 |
+| **L1 工作记忆·今天** | `recent_records`：今天每条记录的**当前值快照** + `ref` | 「A 是哪一行、现在多少克/卡」 | `food_record` / `exercise_record`（今天） | 今天全部（通常 <15 条） |
+| **L0 对话窗口·最近** | `recent_turns`：最近几轮「用户说了啥 + AI 做了啥动作」的结构化摘要 | 指代与时序：「那个」「再加」「不对我说中份」 | `ai_parse_log`(+join `food_record`) | 最近 6~8 轮，**滑动窗口** |
+
+L1 句柄（`ref` 供 L0 与 §8 modify 的 `target` 引用）：
+```json
+"recent_records":[
+  {"ref":"r1","record_id":"uuid-a","name":"牛肉面","meal_type":"lunch","portion":"medium","weight_g":450,"calories":600},
+  {"ref":"r2","record_id":"uuid-b","name":"鸡蛋","meal_type":"breakfast","weight_g":50,"calories":72}
+]
+```
+
+L0 摘要（**去卡片 payload、去闲聊长文本**，只留意图 + 动作锚点，否则上下文变吵）：
+```json
+"recent_turns":[
+  {"said":"早餐吃了牛肉面","act":"record","ref":"r1","food":"牛肉面","portion":"medium"},
+  {"said":"那个改成小份","act":"modify.update","ref":"r1","to":{"portion":"small"}},
+  {"said":"蛋白质够吗?","act":"query"}
+]
+```
+
+> **滑动窗口**：L0 只取最近 6~8 轮，更老丢弃——「记得几段、再远就忘」。L1 是事实快照不是对话，今天全留。
+
+## 8. modify 意图：指代修改（改 / 删 / 追加）
+
+承接 §2。`modify` **不由 AI 算账**——AI 只产出「改哪条 + 怎么改」，`target` 引用 §7 `recent_records.ref`；后端重新匹配 + 重算（calc）。
+
+`action` 三选一：
+- **update**：改已有记录的份量/食物。如「牛肉面换大份」「不对，是牛肉拉面」
+- **delete**：删一条。如「早餐那个蛋删了」
+- **append**：在 `target` 所属**那一餐里新增**记录（继承 `meal_type`/时段），新项走正常匹配 + 份量流程。如「早餐再加个蛋」
+
+> `append` 与 `update` 的界：「牛肉面再加点」=同食物加量(update)；「早餐再加个蛋」=新项(append)。由 `action` 区分。
+
+协议（strict tool schema + zod 同构）：
+```json
+{"intent":"modify","action":"update","target":"r1","change":{"portion_label":"large"}}
+{"intent":"modify","action":"append","target":"r1","items":[ /* 蛋,结构同 §3 items */ ]}
+{"intent":"modify","action":"delete","target":"r1"}
+```
+
+### 路由与确认（按破坏性分级，不一律弹卡）
+| action | 置信 | 行为 |
+|---|---|---|
+| **delete** | 任意 | 建 `pending_record(type=delete_confirm)` → 确认卡（kind=`delete_confirm_card`）→ `/pending/:id/resolve` 后删 → 刷新 summary |
+| **update** | 高 (>0.8) | **直接改 + 重算**，记录卡 payload 带 `undo{record_id, prev_state}` |
+| **append** | 高 | **直接入库新记录** + 重算，卡带 `undo{record_id}` |
+| update / append | 低 or 歧义 | 走现成 `portion_card` / `candidate_card`（§4），不新增卡 |
+
+> 撤销不进 pending 流程：update 撤销 = 还原 `prev_state`，append 撤销 = 删新记录；给短时间窗即可。
+> **只有 delete 需确认**；update/append 复用「自动入库 + 卡片」老路，避免打扰过头。

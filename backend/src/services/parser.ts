@@ -16,7 +16,19 @@ const SYSTEM_PROMPT = `你是一个减脂 App 的饮食助手，帮助用户记�
 关键判断规则：
 - 若当前消息是对上一条的补充说明、修正描述或追问（如"我没放糖"、"说不上很甜"、"大概一小碗"），识别为 chat，不要重复创建新记录。
 - 只有用户明确表示要记录新的食物/运动时才用 record。
-- 上下文历史已附在消息前，请结合理解。
+- 已附【用户档案】【今日已记录】【最近对话】上下文，请结合理解，尤其用于消解指代。
+- 指代消解：当用户用指代而不点名具体食物时（"再来一碗"、"又吃了一个"、"还是那个"、"刚才那个再来份"），从上下文（最近对话 / 今日已记录）找出所指食物，按 record 输出，canonical 取上下文里的标准食物名。这是**再次食用**，应记录新条目（不是补充说明）。
+- 区分：纯描述补充/修正（"我没放糖"）→ chat；再次食用某食物（"再来一碗"）→ record。
+
+modify 意图（改 / 删 / 追加已记录的食物）：
+- 当用户要**修改/删除/追加**【今日已记录】里某条记录时用 modify。target 必须填【今日已记录】里的 ref（如 r1、e1）；找不到明确 target 就别用 modify。
+- action=update：改份量或改食物。
+  - 改份量（"牛肉面换大份"、"那个面少一点"）→ change.portion_label + change.grams（估算该食物该档的净重克数）。
+  - 改食物（"不对，是牛肉拉面"）→ change.food 填新标准名（同份量沿用旧的，不填 grams）。
+- action=delete：删一条（"早餐那个蛋删了"、"把牛肉面删掉"）→ 只填 target。
+- action=append：在 target 所属那一餐里追加一个**新**食物（"早餐再加个蛋"）→ items 填新食物（结构同 record 的 items），meal_type 继承 target 所在餐次。
+- 区分 append 与 record：点名某餐追加新食物（"早餐再加个蛋"）→ modify.append；无明确餐次的再次食用（"再来一碗"）→ record。
+- modify_confidence 给「改哪条+怎么改」的整体把握度。
 
 intent=record 时必须填写 items（食物）或 exercise（运动），可同时有。
 canonical 用中文标准食物名（如"米饭"、"鸡胸肉"），便于数据库模糊匹配。
@@ -53,19 +65,21 @@ portion_confidence 判断依据：
   类似食物：鸡腿去骨、虾去壳、橙子去皮等，均按净食用重估算。
 - 若用户描述"大个/比较大"→选 large 档；"小/迷你"→small；无特别说明→medium。`;
 
-type HistoryMsg = { role: "user" | "assistant"; content: string };
-
 export async function parseUserInput(
   text: string,
-  history: HistoryMsg[] = [],
+  memoryBlock = "",
   model = "deepseek-v4-flash"
 ): Promise<ParseResult> {
+  const messages: Array<{ role: "system" | "user"; content: string }> = [
+    { role: "system", content: SYSTEM_PROMPT },
+  ];
+  if (memoryBlock) {
+    messages.push({ role: "system", content: `以下是当前对话上下文：\n${memoryBlock}` });
+  }
+  messages.push({ role: "user", content: text });
+
   const res = await callDeepSeek(
-    [
-      { role: "system", content: SYSTEM_PROMPT },
-      ...history,
-      { role: "user", content: text },
-    ],
+    messages,
     {
       model,
       tools: [parseToolSchema],

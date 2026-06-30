@@ -28,24 +28,34 @@ resp: 同 GET。
 ## 聊天主入口
 ### POST /api/chat/message
 req: `{ text, source: "text"|"voice" }`
-后端：判意图 → record（自动入库或生成 pending）/ query（用上下文卡回答）/ chat。
+后端：判意图 → record（自动入库或生成 pending）/ query（用上下文卡回答）/ chat / modify（改/删/追加已记录，见 AI_PARSING_SPEC §8）。
+> 每轮注入「对话记忆包」(L0/L1/L2，见 AI_PARSING_SPEC §7) 消解指代，记忆只取 ai_parse_log/事实表，不读 chat_message。
 resp:
 ```json
 {
-  "intent": "record|query|chat",
+  "intent": "record|query|chat|modify",
   "reply": "已记录 牛肉面+鸡蛋，约 620 kcal",
-  "record": { /* food_record，若高置信自动入库 */ },
-  "pending": { "id": "...", "type": "portion_choice|food_choice|clarify", "candidates": [ ... ] },
+  "record": { /* food_record，若高置信自动入库；modify.update 返回更新后的记录 */ },
+  "pending": { "id": "...", "type": "portion_choice|food_choice|clarify|delete_confirm", "candidates": [ ... ] },
   "summary_card": { /* 见 AI_PARSING_SPEC 上下文卡结构 */ },
   "messages": [ /* 本轮新增的 chat_message（用户气泡 + AI 卡片），供前端直接渲染并入本地缓存 */ ]
 }
 ```
 `record` 与 `pending` 互斥；query/chat 时二者均无。
+modify 行为（AI_PARSING_SPEC §8）：
+- `delete` → 返回 `pending(type=delete_confirm)` + `delete_confirm_card`，**需用户确认**后才删（走 resolve）。
+- `update` → 直接改 food_record + 重算，返回 `record_card`，其 `payload.undo = { record_id, prev_state }`。
+- `append` → 在 target 所属餐新增记录 + 重算，`record_card` 的 `payload.undo = { record_id }`（高置信）；低置信走 portion/candidate 卡。
 
 ### POST /api/pending/:id/resolve
-req: `{ choice }`（选中的候选标识，或自定义克数 `{ grams }`）
-行为：据选择建 food_record、刷新 daily_summary、补写对应 chat_message。
-resp: `{ record, summary_card, messages }`。
+req: `{ choice }`（选中的候选标识，或自定义克数 `{ grams }`；`delete_confirm` 传 `{ choice: "confirm" }`）
+行为：据选择建 food_record / 删记录（delete_confirm）、刷新 daily_summary、补写对应 chat_message。
+resp: `{ record?, summary_card, messages }`。
+
+### POST /api/records/:id/undo
+撤销 modify 的 update/append（见 AI_PARSING_SPEC §8），由 `record_card.payload.undo` 驱动。
+req: `{ prev_state? }`——带 `prev_state{food_id,portion_label,weight_g}` → 还原（update 撤销）；不带 → 删该记录（append 撤销）。
+行为：还原/删记录后重算 daily_summary。resp: `{ ok, summary_card }`。
 
 ## 数据查询（读事实层）
 ### GET /api/daily/today

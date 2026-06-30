@@ -4,6 +4,8 @@ import { parseUserInput } from "../services/parser";
 import { matchFood, matchFoodCandidates } from "../services/matcher";
 import { itemNutrition } from "../services/calc";
 import { recompute, buildContextCard } from "../services/summary";
+import { buildMemoryPack, renderMemoryBlock } from "../services/memory";
+import type { FoodItem } from "../ai/schema";
 import { callDeepSeek } from "../ai/client";
 import { prisma } from "../lib/prisma";
 import type { MealType, PortionLabel } from "@prisma/client";
@@ -94,6 +96,129 @@ async function answerChat(text: string): Promise<string> {
   return res.choices[0]?.message?.content ?? "好的";
 }
 
+// ---------- 单条食物处理（record 与 modify.append 共用） ----------
+// 歧义判定双信号：AI is_ambiguous OR DB calorie_spread > 100 kcal/100g
+const FOOD_AMBIGUITY_SPREAD = 100; // kcal/100g 离散度阈值
+
+interface ItemCtx {
+  user_id: string;
+  meal_type: MealType;
+  source: string;
+  dateObj: Date;
+  withUndo: boolean; // append 时记录卡带 undo
+}
+
+interface ItemResult {
+  record?: any;
+  replyPart?: string;
+  needsRecompute: boolean;
+  pending?: any;
+  confirmedFn?: () => Promise<any>;
+  pendingFn?: () => Promise<any>;
+}
+
+async function processFoodItem(item: FoodItem, ctx: ItemCtx): Promise<ItemResult> {
+  const { user_id, meal_type, source, dateObj, withUndo } = ctx;
+  const { canonical, chosen_label, portions, food_confidence, portion_confidence, raw, is_ambiguous, ai_candidates } = item;
+  const query = canonical || raw;
+
+  const { foods: dbCandidates, calorie_spread } = await matchFoodCandidates(query);
+
+  const isAmbiguous =
+    is_ambiguous ||
+    (food_confidence < 0.85 && dbCandidates.length >= 2 && calorie_spread > FOOD_AMBIGUITY_SPREAD);
+
+  if (isAmbiguous) {
+    const mediumGrams = (portions.find((p) => p.label === "medium") ?? portions[0])?.grams ?? 150;
+    const dbNames = new Set(dbCandidates.map((f) => f.name));
+    const aiNames: string[] = (ai_candidates ?? []).filter((n) => !dbNames.has(n));
+    const allNames = [...dbCandidates.map((f) => f.name), ...aiNames].slice(0, 3);
+    const foodsPayload = allNames.map((name) => {
+      const dbEntry = dbCandidates.find((f) => f.name === name);
+      return {
+        name,
+        calorie_hint: dbEntry ? Math.round(Number(dbEntry.calories_100g) * mediumGrams / 100) : undefined,
+      };
+    });
+
+    const pr = await prisma.pendingRecord.create({
+      data: {
+        user_id,
+        type: "food_choice",
+        raw_input: raw,
+        candidates: { query, meal_type, source, portions, chosen_label } as object,
+      },
+    });
+
+    return {
+      needsRecompute: false,
+      pending: pr,
+      pendingFn: () => prisma.chatMessage.create({
+        data: {
+          user_id, date: dateObj, role: "assistant", kind: "candidate_card",
+          payload: { pending_id: pr.id, query, foods: foodsPayload } as object,
+        },
+      }),
+    };
+  }
+
+  const food = await matchFood(query);
+
+  if (food_confidence >= 0.8 && portion_confidence >= 0.8) {
+    const chosenPortion = portions.find((p) => p.label === chosen_label) ?? portions[0];
+    const weight_g = chosenPortion.grams;
+    const nutrition = itemNutrition(food, weight_g);
+
+    const record = await prisma.foodRecord.create({
+      data: {
+        user_id, food_id: food.id, meal_type, portion_label: chosen_label as PortionLabel,
+        weight_g, calories: nutrition.calories, protein: nutrition.protein_g,
+        fat: nutrition.fat_g, carbs: nutrition.carbs_g,
+        food_confidence, portion_confidence, source, raw_input: raw, date: dateObj,
+      },
+    });
+
+    const payload: any = {
+      food_name: food.name, weight_g, calories: Math.round(nutrition.calories),
+      protein_g: Math.round(nutrition.protein_g), fat_g: Math.round(nutrition.fat_g),
+      carbs_g: Math.round(nutrition.carbs_g), is_estimated: food.is_estimated,
+    };
+    if (withUndo) payload.undo = { record_id: record.id }; // append 撤销=删新记录
+
+    return {
+      record,
+      replyPart: `${food.name} ${weight_g}g（约 ${Math.round(nutrition.calories)} kcal）`,
+      needsRecompute: true,
+      confirmedFn: () => prisma.chatMessage.create({
+        data: { user_id, date: dateObj, role: "assistant", kind: "record_card", payload, record_id: record.id as string },
+      }),
+    };
+  }
+
+  // 食物唯一但份量不明 → 询问份量
+  const portionsWithCal = portions.map((p) => ({
+    ...p,
+    calories: p.grams > 0 ? Math.round(Number(food.calories_100g) * p.grams / 100) : undefined,
+  }));
+  const pr = await prisma.pendingRecord.create({
+    data: {
+      user_id, type: "portion_choice", raw_input: raw,
+      candidates: { food_id: food.id, food_name: food.name, meal_type, source, portions } as object,
+    },
+  });
+
+  return {
+    needsRecompute: false,
+    pending: pr,
+    pendingFn: () => prisma.chatMessage.create({
+      data: {
+        user_id, date: dateObj, role: "assistant", kind: "portion_card",
+        payload: { pending_id: pr.id, food_name: food.name, portions: portionsWithCal } as object,
+      },
+    }),
+  };
+}
+
 // ---------- 请求 schema ----------
 const MessageBodySchema = z.object({
   text: z.string().min(1).max(2000),
@@ -132,13 +257,18 @@ export async function chatRoutes(app: FastifyInstance) {
     });
     messages.push(userMsg);
 
-    // 解析意图（flash → pro 若低置信）；不携带历史，每条消息独立解析避免 AI 误判为补充
-    let parsed = await parseUserInput(text);
+    // 组装对话记忆包（L0 ai_parse_log / L1 今日记录 / L2 画像+卡），注入 prompt 消解指代
+    // 此刻本条消息尚未写 ai_parse_log / food_record，记忆包反映的是「本条之前」状态，正合语义
+    const pack = await buildMemoryPack(user_id);
+    const memoryBlock = renderMemoryBlock(pack);
+
+    // 解析意图（flash → pro 若低置信）
+    let parsed = await parseUserInput(text, memoryBlock);
     if (parsed.intent === "record") {
       const hasLow = parsed.items.some((i) => i.food_confidence < 0.5);
       if (hasLow) {
         try {
-          parsed = await parseUserInput(text, [], "deepseek-v4-pro");
+          parsed = await parseUserInput(text, memoryBlock, "deepseek-v4-pro");
         } catch {
           /* 保留 flash 结果 */
         }
@@ -187,6 +317,129 @@ export async function chatRoutes(app: FastifyInstance) {
       return { intent: "chat", reply: aiText, summary_card: card, messages };
     }
 
+    // ── modify（改 / 删 / 追加，AI_PARSING_SPEC §8）──
+    if (parsed.intent === "modify") {
+      const target = pack.recent_records.find((r) => r.ref === parsed.target);
+      if (!target) {
+        const aiMsg = await prisma.chatMessage.create({
+          data: { user_id, date: dateObj, role: "assistant", kind: "text", content: "没找到要修改的那条记录，可以说得具体一点吗？" },
+        });
+        messages.push(aiMsg);
+        const card = await buildContextCard(user_id);
+        return { intent: "modify", reply: aiMsg.content, summary_card: card, messages };
+      }
+
+      // delete → 确认卡（破坏性，需确认）
+      if (parsed.action === "delete") {
+        const pr = await prisma.pendingRecord.create({
+          data: {
+            user_id, type: "delete_confirm", raw_input: text,
+            candidates: { record_id: target.record_id, kind: target.kind, name: target.name } as object,
+          },
+        });
+        const aiMsg = await prisma.chatMessage.create({
+          data: {
+            user_id, date: dateObj, role: "assistant", kind: "delete_confirm_card",
+            payload: { pending_id: pr.id, record_id: target.record_id, name: target.name, meal_type: target.meal_type, calories: target.calories } as object,
+          },
+        });
+        messages.push(aiMsg);
+        const card = await buildContextCard(user_id);
+        return { intent: "modify", reply: `确认删除「${target.name}」吗？`, pending: pr, summary_card: card, messages };
+      }
+
+      // append → 在 target 所属餐追加新食物（继承 meal_type），高置信直入库 + 撤销
+      if (parsed.action === "append") {
+        const meal_type = (target.meal_type ?? guessMealType()) as MealType;
+        const records: object[] = [];
+        const replyParts: string[] = [];
+        let pending: object | null = null;
+        let needsRecompute = false;
+        const confirmedCreateFns: Array<() => Promise<any>> = [];
+        const pendingCreateFns: Array<() => Promise<any>> = [];
+
+        for (const item of (parsed.items ?? [])) {
+          const r = await processFoodItem(item, { user_id, meal_type, source, dateObj, withUndo: true });
+          if (r.record) records.push(r.record);
+          if (r.replyPart) replyParts.push(r.replyPart);
+          if (r.needsRecompute) needsRecompute = true;
+          if (r.pending && !pending) pending = r.pending;
+          if (r.confirmedFn) confirmedCreateFns.push(r.confirmedFn);
+          if (r.pendingFn) pendingCreateFns.push(r.pendingFn);
+        }
+        for (const fn of [...confirmedCreateFns, ...pendingCreateFns]) messages.push(await fn());
+        if (needsRecompute) await recompute(user_id, today);
+        const card = await buildContextCard(user_id);
+        const reply = records.length > 0
+          ? `已追加：${replyParts.join("，")}。`
+          : pending ? "请帮我确认追加内容。" : "好的。";
+        return { intent: "modify", reply, records: records.length ? records : undefined, pending: pending ?? undefined, summary_card: card, messages };
+      }
+
+      // update → 改份量 / 改食物，高置信直改 + 重算 + 撤销
+      if (target.kind !== "food") {
+        const aiMsg = await prisma.chatMessage.create({
+          data: { user_id, date: dateObj, role: "assistant", kind: "text", content: "目前只支持修改饮食记录哦。" },
+        });
+        messages.push(aiMsg);
+        const card = await buildContextCard(user_id);
+        return { intent: "modify", reply: aiMsg.content, summary_card: card, messages };
+      }
+      const rec = await prisma.foodRecord.findFirst({ where: { id: target.record_id, user_id } });
+      if (!rec) {
+        const aiMsg = await prisma.chatMessage.create({
+          data: { user_id, date: dateObj, role: "assistant", kind: "text", content: "这条记录好像已经不在了。" },
+        });
+        messages.push(aiMsg);
+        const card = await buildContextCard(user_id);
+        return { intent: "modify", reply: aiMsg.content, summary_card: card, messages };
+      }
+
+      const prev_state = { food_id: rec.food_id, portion_label: rec.portion_label, weight_g: rec.weight_g };
+      const change = parsed.change ?? {};
+      let food = await prisma.foodStandard.findUniqueOrThrow({ where: { id: rec.food_id } });
+      let weight_g = rec.weight_g;
+      let portion_label = rec.portion_label as PortionLabel;
+
+      if (change.food) {
+        food = await matchFood(change.food);   // 改食物：份量沿用旧的
+      }
+      if (change.portion_label) {
+        portion_label = change.portion_label as PortionLabel;
+        if (change.grams) weight_g = change.grams;
+      } else if (change.grams) {
+        weight_g = change.grams;
+        portion_label = "custom";
+      }
+
+      const nutrition = itemNutrition(food, weight_g);
+      const updated = await prisma.foodRecord.update({
+        where: { id: rec.id },
+        data: {
+          food_id: food.id, portion_label, weight_g,
+          calories: nutrition.calories, protein: nutrition.protein_g,
+          fat: nutrition.fat_g, carbs: nutrition.carbs_g,
+        },
+      });
+      await recompute(user_id, today);
+      const card = await buildContextCard(user_id);
+      const content = `已更新：${food.name} ${Math.round(weight_g)}g（约 ${Math.round(nutrition.calories)} kcal）`;
+      const aiMsg = await prisma.chatMessage.create({
+        data: {
+          user_id, date: dateObj, role: "assistant", kind: "record_card", content,
+          payload: {
+            food_name: food.name, weight_g: Math.round(weight_g), calories: Math.round(nutrition.calories),
+            protein_g: Math.round(nutrition.protein_g), fat_g: Math.round(nutrition.fat_g),
+            carbs_g: Math.round(nutrition.carbs_g), is_estimated: food.is_estimated,
+            undo: { record_id: updated.id, prev_state }, // 撤销=还原 prev_state
+          } as object,
+          record_id: updated.id as string,
+        },
+      });
+      messages.push(aiMsg);
+      return { intent: "modify", reply: content, record: updated, summary_card: card, messages };
+    }
+
     // ── record ─────────────────────────────────
     const user = await prisma.user.findUniqueOrThrow({ where: { id: user_id } });
     const weight_kg = Number(user.weight_kg) || 70;
@@ -202,152 +455,15 @@ export async function chatRoutes(app: FastifyInstance) {
     const confirmedCreateFns: Array<() => Promise<any>> = [];
     const pendingCreateFns: Array<() => Promise<any>> = [];
 
-    // 处理食物条目
-    // 歧义判定双信号：AI is_ambiguous OR DB calorie_spread > 100 kcal/100g
-    // 任一为真 → CandidateCard（选种类）→ resolve 后生成 PortionCard（两步走）
-    // 两者均假 → matchFood 最佳单一匹配 → 视 portion_confidence 自动录或 PortionCard
-    const FOOD_AMBIGUITY_SPREAD = 100; // kcal/100g 离散度阈值
-
+    // 处理食物条目（逐条走共用 helper：歧义→候选卡 / 份量不明→份量卡 / 高置信→自动入库）
     for (const item of parsed.items) {
-      const { canonical, chosen_label, portions, food_confidence, portion_confidence, raw, is_ambiguous, ai_candidates } = item;
-      const query = canonical || raw;
-
-      const { foods: dbCandidates, calorie_spread } = await matchFoodCandidates(query);
-
-      // DB 离散度仅在 AI 自身对食物不确定时作为补充信号（高置信时信任 AI 判断）
-      const isAmbiguous = is_ambiguous ||
-        (food_confidence < 0.85 && dbCandidates.length >= 2 && calorie_spread > FOOD_AMBIGUITY_SPREAD);
-
-      if (isAmbiguous) {
-        // 歧义 → 合并 DB 候选 + AI 建议候选，带热量提示，两步走
-        const mediumGrams = (portions.find((p) => p.label === "medium") ?? portions[0])?.grams ?? 150;
-
-        // 以 DB 候选为主，补充 AI 候选名（去重）
-        const dbNames = new Set(dbCandidates.map((f) => f.name));
-        const aiNames: string[] = (ai_candidates ?? []).filter((n) => !dbNames.has(n));
-        const allNames = [...dbCandidates.map((f) => f.name), ...aiNames].slice(0, 3);
-
-        // 构建带热量提示的候选列表（DB 有记录则能算，AI 补充的暂不算）
-        const foodsPayload = allNames.map((name) => {
-          const dbEntry = dbCandidates.find((f) => f.name === name);
-          return {
-            name,
-            calorie_hint: dbEntry
-              ? Math.round(Number(dbEntry.calories_100g) * mediumGrams / 100)
-              : undefined,
-          };
-        });
-
-        const pr = await prisma.pendingRecord.create({
-          data: {
-            user_id,
-            type: "food_choice",
-            raw_input: raw,
-            candidates: {
-              query,
-              meal_type,
-              source,
-              portions,   // 保留原始份量估算，resolve 时用所选食物重算热量
-              chosen_label,
-            } as object,
-          },
-        });
-        if (!pending) pending = pr;
-
-        pendingCreateFns.push(() => prisma.chatMessage.create({
-          data: {
-            user_id,
-            date: dateObj,
-            role: "assistant" as const,
-            kind: "candidate_card",
-            payload: { pending_id: pr.id, query, foods: foodsPayload } as object,
-          },
-        }));
-
-      } else {
-        // 食物明确（或无候选走 AI 估算）→ matchFood 取最佳单一匹配（含 AI 估算兜底）
-        const food = await matchFood(query);
-
-        if (food_confidence >= 0.8 && portion_confidence >= 0.8) {
-          // 高置信 → 自动入库
-          const chosenPortion = portions.find((p) => p.label === chosen_label) ?? portions[0];
-          const weight_g = chosenPortion.grams;
-          const nutrition = itemNutrition(food, weight_g);
-
-          const record = await prisma.foodRecord.create({
-            data: {
-              user_id,
-              food_id: food.id,
-              meal_type,
-              portion_label: chosen_label as PortionLabel,
-              weight_g,
-              calories: nutrition.calories,
-              protein: nutrition.protein_g,
-              fat: nutrition.fat_g,
-              carbs: nutrition.carbs_g,
-              food_confidence,
-              portion_confidence,
-              source,
-              raw_input: raw,
-              date: dateObj,
-            },
-          });
-          needsRecompute = true;
-          records.push(record);
-          replyParts.push(`${food.name} ${weight_g}g（约 ${Math.round(nutrition.calories)} kcal）`);
-
-          confirmedCreateFns.push(() => prisma.chatMessage.create({
-            data: {
-              user_id,
-              date: dateObj,
-              role: "assistant" as const,
-              kind: "record_card",
-              payload: {
-                food_name: food.name,
-                weight_g,
-                calories: Math.round(nutrition.calories),
-                protein_g: Math.round(nutrition.protein_g),
-                fat_g: Math.round(nutrition.fat_g),
-                carbs_g: Math.round(nutrition.carbs_g),
-                is_estimated: food.is_estimated,
-              } as object,
-              record_id: record.id as string,
-            },
-          }));
-
-        } else {
-          // 食物唯一但份量不明（或食物置信度低）→ 询问份量
-          const portionsWithCal = portions.map((p) => ({
-            ...p,
-            calories: p.grams > 0 ? Math.round(Number(food.calories_100g) * p.grams / 100) : undefined,
-          }));
-          const pr = await prisma.pendingRecord.create({
-            data: {
-              user_id,
-              type: "portion_choice",
-              raw_input: raw,
-              candidates: {
-                food_id: food.id,
-                food_name: food.name,
-                meal_type,
-                source,
-                portions,
-              } as object,
-            },
-          });
-          if (!pending) pending = pr;
-
-          pendingCreateFns.push(() => prisma.chatMessage.create({
-            data: {
-              user_id,
-              date: dateObj,
-              role: "assistant" as const,
-              kind: "portion_card",
-              payload: { pending_id: pr.id, food_name: food.name, portions: portionsWithCal } as object,
-            },
-          }));
-        }
-      }
+      const r = await processFoodItem(item, { user_id, meal_type, source, dateObj, withUndo: false });
+      if (r.record) records.push(r.record);
+      if (r.replyPart) replyParts.push(r.replyPart);
+      if (r.needsRecompute) needsRecompute = true;
+      if (r.pending && !pending) pending = r.pending;
+      if (r.confirmedFn) confirmedCreateFns.push(r.confirmedFn);
+      if (r.pendingFn) pendingCreateFns.push(r.pendingFn);
     }
 
     // 处理运动条目（运动视为已确认）
@@ -435,6 +551,22 @@ export async function chatRoutes(app: FastifyInstance) {
     const dateObj = toDateOnly(today);
     const meal_type = (candidates.meal_type ?? guessMealType()) as MealType;
     const source: string = candidates.source ?? "text";
+
+    // delete_confirm：用户点了确认 → 删记录（AI_PARSING_SPEC §8）
+    if (pr.type === "delete_confirm") {
+      if (candidates.kind === "exercise") {
+        await prisma.exerciseRecord.deleteMany({ where: { id: candidates.record_id, user_id } });
+      } else {
+        await prisma.foodRecord.deleteMany({ where: { id: candidates.record_id, user_id } });
+      }
+      await prisma.pendingRecord.update({ where: { id }, data: { status: "resolved" } });
+      await recompute(user_id, today);
+      const summary_card = await buildContextCard(user_id);
+      const aiMsg = await prisma.chatMessage.create({
+        data: { user_id, date: dateObj, role: "assistant", kind: "text", content: `已删除：${candidates.name}` },
+      });
+      return { summary_card, messages: [aiMsg] };
+    }
 
     let food_id: string;
     let weight_g: number;
@@ -552,6 +684,57 @@ export async function chatRoutes(app: FastifyInstance) {
   });
 
   // ─────────────────────────────────────────────
+  // POST /api/records/:id/undo  —— 撤销 modify 的 update/append（AI_PARSING_SPEC §8）
+  // 带 prev_state → 还原（update 撤销）；不带 → 删记录（append 撤销）
+  // ─────────────────────────────────────────────
+  const UndoBodySchema = z.object({
+    prev_state: z.object({
+      food_id: z.string(),
+      portion_label: z.enum(["small", "medium", "large", "custom"]),
+      weight_g: z.number().positive(),
+    }).optional(),
+  });
+
+  app.post("/api/records/:id/undo", { preHandler: [auth] }, async (req, reply) => {
+    const { sub: user_id } = req.user as { sub: string };
+    const { id } = req.params as { id: string };
+    const bodyParsed = UndoBodySchema.safeParse(req.body ?? {});
+    if (!bodyParsed.success) {
+      return reply.status(400).send({ error: { code: "invalid_input", message: bodyParsed.error.message } });
+    }
+
+    const rec = await prisma.foodRecord.findFirst({ where: { id, user_id } });
+    if (!rec) {
+      return reply.status(404).send({ error: { code: "not_found", message: "Record not found" } });
+    }
+    const recDate = rec.date.toISOString().slice(0, 10);
+
+    const prev = bodyParsed.data.prev_state;
+    if (prev) {
+      // update 撤销 → 还原食物/份量/克数并重算
+      const food = await prisma.foodStandard.findUnique({ where: { id: prev.food_id } });
+      if (!food) {
+        return reply.status(400).send({ error: { code: "invalid_food", message: "Previous food not found" } });
+      }
+      const nutrition = itemNutrition(food, prev.weight_g);
+      await prisma.foodRecord.update({
+        where: { id },
+        data: {
+          food_id: prev.food_id, portion_label: prev.portion_label as PortionLabel, weight_g: prev.weight_g,
+          calories: nutrition.calories, protein: nutrition.protein_g, fat: nutrition.fat_g, carbs: nutrition.carbs_g,
+        },
+      });
+    } else {
+      // append 撤销 → 删新记录
+      await prisma.foodRecord.delete({ where: { id } });
+    }
+
+    await recompute(user_id, recDate);
+    const summary_card = await buildContextCard(user_id);
+    return { ok: true, summary_card };
+  });
+
+  // ─────────────────────────────────────────────
   // GET /api/chat/messages?date=YYYY-MM-DD
   // ─────────────────────────────────────────────
   const DateQuerySchema = z.object({
@@ -573,7 +756,7 @@ export async function chatRoutes(app: FastifyInstance) {
 
     // 收集所有 pending_id，查哪些已 resolved，前端据此渲染卡片状态
     const pendingIds = messages
-      .filter((m) => ["portion_card", "candidate_card", "clarify_card"].includes(m.kind))
+      .filter((m) => ["portion_card", "candidate_card", "clarify_card", "delete_confirm_card"].includes(m.kind))
       .map((m) => (m.payload as any)?.pending_id as string | undefined)
       .filter(Boolean) as string[];
 

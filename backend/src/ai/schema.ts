@@ -1,8 +1,11 @@
 import { z } from "zod";
 
 // ---------- 枚举 ----------
-export const IntentSchema = z.enum(["record", "query", "chat"]);
+export const IntentSchema = z.enum(["record", "query", "chat", "modify"]);
 export type Intent = z.infer<typeof IntentSchema>;
+
+export const ModifyActionSchema = z.enum(["update", "delete", "append"]);
+export type ModifyAction = z.infer<typeof ModifyActionSchema>;
 
 export const MealTypeSchema = z.enum(["breakfast", "lunch", "dinner", "snack"]);
 export type MealType = z.infer<typeof MealTypeSchema>;
@@ -38,6 +41,14 @@ export const ExerciseItemSchema = z.object({
 });
 export type ExerciseItem = z.infer<typeof ExerciseItemSchema>;
 
+// ---------- 修改变更（modify.update 用） ----------
+export const ModifyChangeSchema = z.object({
+  portion_label: PortionLabelSchema.optional(),
+  grams: z.number().positive().optional(), // 改份量时 AI 估算的新克数
+  food: z.string().optional(),             // 改食物时的新标准名
+});
+export type ModifyChange = z.infer<typeof ModifyChangeSchema>;
+
 // ---------- 完整解析结果 ----------
 export const ParseResultSchema = z.discriminatedUnion("intent", [
   z.object({
@@ -51,6 +62,14 @@ export const ParseResultSchema = z.discriminatedUnion("intent", [
   }),
   z.object({
     intent: z.literal("chat"),
+  }),
+  z.object({
+    intent: z.literal("modify"),
+    action: ModifyActionSchema,
+    target: z.string(),                          // 引用记忆包 recent_records.ref（如 r1/e1）
+    change: ModifyChangeSchema.optional(),       // action=update 时
+    items: z.array(FoodItemSchema).optional(),   // action=append 时
+    modify_confidence: z.number().min(0).max(1).optional(),
   }),
 ]);
 export type ParseResult = z.infer<typeof ParseResultSchema>;
@@ -72,8 +91,31 @@ export const parseToolSchema = {
       properties: {
         intent: {
           type: "string",
-          enum: ["record", "query", "chat"],
-          description: "record=记录饮食/运动; query=查询数据; chat=闲聊/营养咨询",
+          enum: ["record", "query", "chat", "modify"],
+          description: "record=记录饮食/运动; query=查询数据; chat=闲聊/营养咨询; modify=改/删/追加已记录的食物",
+        },
+        action: {
+          type: "string",
+          enum: ["update", "delete", "append"],
+          description: "仅 intent=modify 必填。update=改份量/改食物; delete=删一条; append=在某餐追加新食物",
+        },
+        target: {
+          type: "string",
+          description: "仅 intent=modify 必填。引用【今日已记录】里的 ref（如 r1、e1），指明改/删/追加关联的是哪条记录",
+        },
+        change: {
+          type: "object",
+          additionalProperties: false,
+          description: "仅 action=update 填。改份量填 portion_label+grams（grams 为该食物该档的估算净重）；改食物填 food（新标准名）",
+          properties: {
+            portion_label: { type: "string", enum: ["small", "medium", "large", "custom"] },
+            grams: { type: "number" },
+            food: { type: "string" },
+          },
+        },
+        modify_confidence: {
+          type: "number",
+          description: "仅 intent=modify 填。对「改哪条+怎么改」整体把握度 0~1",
         },
         meal_type: {
           type: "string",
