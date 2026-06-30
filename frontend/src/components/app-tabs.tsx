@@ -9,7 +9,8 @@ import TodayScreen from '@/app/today';
 import HistoryScreen from '@/app/history';
 import SettingsScreen from '@/app/settings';
 
-import { Colors, Glass } from '@/constants/theme';
+import { Glass } from '@/constants/theme';
+import { GradientBackground } from '@/components/gradient-background';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 
 type TabName = 'chat' | 'today' | 'history' | 'settings';
@@ -54,13 +55,12 @@ export default function AppTabs() {
   const scheme = useColorScheme() ?? 'light';
   const isDark = scheme === 'dark';
   const glass = Glass[isDark ? 'dark' : 'light'];
-  const colors = Colors[isDark ? 'dark' : 'light'];
   const insets = useSafeAreaInsets();
 
   const Screen = SCREENS[active];
 
   return (
-    <View style={[styles.root, { backgroundColor: colors.background }]}>
+    <GradientBackground style={styles.root}>
       <Screen />
 
       {/* Bottom tab bar — PhoneFrame.dc.html: h=88px, pt=9px, items center/gap:3 */}
@@ -88,7 +88,7 @@ export default function AppTabs() {
           );
         })}
       </BlurView>
-    </View>
+    </GradientBackground>
   );
 }
 

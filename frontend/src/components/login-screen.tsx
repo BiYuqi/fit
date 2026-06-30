@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { GradientBackground } from '@/components/gradient-background';
 import { ThemedView } from '@/components/themed-view';
 import { Colors, FontSize, Glass, Radius, Spacing } from '@/constants/theme';
 import { useAuthStore } from '@/stores/auth-store';
@@ -60,7 +61,7 @@ export function LoginScreen() {
   };
 
   return (
-    <ThemedView style={styles.container}>
+    <GradientBackground style={styles.container}>
       {/* Decorative accent glow */}
       <View
         style={[styles.glowBlob, { backgroundColor: glass.tint }]}
@@ -245,12 +246,12 @@ export function LoginScreen() {
           </ScrollView>
         </KeyboardAvoidingView>
       </SafeAreaView>
-    </ThemedView>
+    </GradientBackground>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, overflow: 'hidden' },
+  container: { flex: 1, overflow: 'hidden', backgroundColor: 'transparent' },
   safe: { flex: 1 },
   kav: { flex: 1 },
   scroll: {

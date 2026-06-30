@@ -209,7 +209,7 @@ export default function ChatScreen() {
   const keyExtractor = useCallback((item: ChatMessage) => item.id, []);
 
   return (
-    <ThemedView style={styles.root}>
+    <ThemedView style={[styles.root, { backgroundColor: 'transparent' }]}>
       {/* Safe area top */}
       <View style={{ paddingTop: insets.top }} />
 
@@ -247,8 +247,6 @@ export default function ChatScreen() {
       )}
 
       <ChatInput onSend={handleSend} isSending={isSending} />
-
-      {/* Spacer so ChatInput sits above the absolute tab bar */}
       <View style={{ height: BottomTabInset }} />
     </ThemedView>
   );

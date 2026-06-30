@@ -15,6 +15,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { GradientBackground } from '@/components/gradient-background';
 import { ThemedView } from '@/components/themed-view';
 import { Colors, FontSize, Glass, Radius, Spacing } from '@/constants/theme';
 import { apiFetch } from '@/lib/api';
@@ -206,7 +207,7 @@ export function OnboardingScreen({ onComplete }: Props) {
   }
 
   return (
-    <ThemedView style={ss.container}>
+    <GradientBackground style={ss.container}>
       <SafeAreaView style={ss.safe}>
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={ss.kav}>
           <ScrollView
@@ -619,14 +620,14 @@ export function OnboardingScreen({ onComplete }: Props) {
           </ScrollView>
         </KeyboardAvoidingView>
       </SafeAreaView>
-    </ThemedView>
+    </GradientBackground>
   );
 }
 
 // ─── Styles ──────────────────────────────────────────────────────────────────
 
 const ss = StyleSheet.create({
-  container: { flex: 1 },
+  container: { flex: 1, backgroundColor: 'transparent' },
   safe: { flex: 1 },
   kav: { flex: 1 },
   scroll: { flexGrow: 1, paddingHorizontal: 24, paddingBottom: 40 },

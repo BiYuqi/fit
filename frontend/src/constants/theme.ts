@@ -62,7 +62,7 @@ export const Spacing = {
 } as const;
 
 // Design tab bar: 9px paddingTop + 25px icon + 3px gap + 10px label + safe area ≈ 88px
-export const BottomTabInset = Platform.select({ ios: 88, android: 80 }) ?? 0;
+export const BottomTabInset = Platform.select({ ios: 82, android: 80 }) ?? 0;
 export const MaxContentWidth = 800;
 
 // Liquid Glass design tokens — matched exactly to PhoneFrame.dc.html
