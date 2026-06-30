@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { apiFetch } from '@/lib/api';
 import { getCachedMessages, upsertMessages } from '@/lib/db';
-import type { ChatMessage, ContextCard, SendMessageResponse, ResolveResponse } from '@/types/chat';
+import type { ChatMessage, ContextCard, SendMessageResponse, ResolveResponse, UndoPrevState } from '@/types/chat';
 
 function todayStr() {
   return new Date().toISOString().slice(0, 10);
@@ -15,11 +15,13 @@ type ChatStore = {
   chatDates: string[];
   summaryCard: ContextCard | null;
   resolvedPendings: Record<string, true>;
+  undoneCards: Record<string, true>; // 按"卡片(消息 id)"标记已撤销，非 record_id（同一记录可有多张卡）
 
   loadForDate: (date: string, token: string) => Promise<void>;
   loadDates: (token: string) => Promise<void>;
   send: (text: string, token: string) => Promise<void>;
   resolve: (pendingId: string, choice: string | { grams: number }, token: string) => Promise<void>;
+  undo: (messageId: string, recordId: string, prevState: UndoPrevState | undefined, token: string) => Promise<void>;
   setDate: (date: string, token: string) => void;
 };
 
@@ -31,6 +33,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   chatDates: [],
   summaryCard: null,
   resolvedPendings: {},
+  undoneCards: {},
 
   loadDates: async (token: string) => {
     try {
@@ -152,6 +155,29 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       set(s => ({
         resolvedPendings: { ...s.resolvedPendings, [pendingId]: true },
       }));
+    }
+  },
+
+  undo: async (messageId: string, recordId: string, prevState: UndoPrevState | undefined, token: string) => {
+    // 乐观置灰这张卡（按消息 id，不影响同一记录的其它卡），避免重复点击
+    set(s => ({ undoneCards: { ...s.undoneCards, [messageId]: true } }));
+    try {
+      const res = await apiFetch<{ ok: boolean; summary_card: ContextCard }>(
+        `/api/records/${recordId}/undo`,
+        {
+          method: 'POST',
+          body: JSON.stringify(prevState ? { prev_state: prevState } : {}),
+          token,
+        },
+      );
+      set(s => ({ summaryCard: res.summary_card ?? s.summaryCard }));
+    } catch {
+      // 撤销失败 → 回滚置灰，让用户可重试
+      set(s => {
+        const next = { ...s.undoneCards };
+        delete next[messageId];
+        return { undoneCards: next };
+      });
     }
   },
 

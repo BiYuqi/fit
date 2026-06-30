@@ -42,12 +42,16 @@ iOS 26 Liquid Glass / Apple Intelligence：毛玻璃卡片、柔和半透明层�
 - 追问卡 clarify_card：`是不是：[火锅] [外卖混合] [其他描述]`
 - 查询回答卡 query_card：如"今天还可以吃 720 kcal" + 剩余额度进度条 + 一句建议
 - 运动卡 exercise_card：如"已记录跑步 5km，消耗约 320 kcal"
+- 删除确认卡 delete_confirm_card：如"确认删除「牛肉面」？约 600 kcal" + `[取消] [确认删除]`（破坏性，红色确认）。确认→`/pending/:id/resolve {choice:"confirm"}` 删除并出"已删除"；取消→消卡。
 - 语音录制态：波形 + 时长 + `[取消] [完成并发送]`
 - 加号附件菜单：相机 / 照片 / 文件（v1 可仅占位）
 
 **关键交互态**：
 - 高置信 → 直接出 record_card。
 - 中/低置信 → 出 portion/candidate/clarify 卡；用户点选后该卡**替换为确认后的 record_card**。
+- modify 修改（见 AI_PARSING_SPEC §8）：
+  - 删除 → delete_confirm_card，**必须确认**后才删（破坏性）。
+  - 改份量/改食物（update）、追加（append）→ 直接出 record_card，卡上带「撤销」轻按钮（payload.undo 存在时）；点撤销→`/records/:id/undo`（带 prev_state 还原 / 不带删除），卡片转「已撤销」灰态。撤销非破坏性、不弹确认。
 - 空状态（当天还没记）→ 友好引导（如"早上好，今天吃了什么？"），不是全白。
 
 **聊天持久化显示行为**：

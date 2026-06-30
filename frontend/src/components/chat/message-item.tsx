@@ -11,6 +11,7 @@ import { CandidateCard } from './candidate-card';
 import { ClarifyCard } from './clarify-card';
 import { QueryCard } from './query-card';
 import { ExerciseCard } from './exercise-card';
+import { DeleteConfirmCard } from './delete-confirm-card';
 import type {
   ChatMessage,
   RecordCardPayload,
@@ -19,6 +20,7 @@ import type {
   ClarifyCardPayload,
   ContextCard,
   ExerciseCardPayload,
+  DeleteConfirmCardPayload,
 } from '@/types/chat';
 
 export function ThinkingBubble() {
@@ -92,7 +94,7 @@ export function MessageItem({ message, isLast }: { message: ChatMessage; isLast?
 
   switch (message.kind) {
     case 'record_card':
-      return <RecordCard payload={p as RecordCardPayload} />;
+      return <RecordCard payload={p as RecordCardPayload} messageId={message.id} />;
 
     case 'portion_card': {
       const pid = (p as PortionCardPayload)?.pending_id;
@@ -118,6 +120,12 @@ export function MessageItem({ message, isLast }: { message: ChatMessage; isLast?
 
     case 'exercise_card':
       return p ? <ExerciseCard payload={p as unknown as ExerciseCardPayload} /> : null;
+
+    case 'delete_confirm_card': {
+      const pid = (p as DeleteConfirmCardPayload)?.pending_id;
+      const resolved = !!(pid && resolvedPendings[pid]);
+      return <DeleteConfirmCard payload={p as DeleteConfirmCardPayload} isResolved={resolved} />;
+    }
 
     case 'text':
     default:

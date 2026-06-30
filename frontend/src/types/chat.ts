@@ -5,7 +5,8 @@ export type MessageKind =
   | 'candidate_card'
   | 'clarify_card'
   | 'query_card'
-  | 'exercise_card';
+  | 'exercise_card'
+  | 'delete_confirm_card';
 
 export type ChatMessage = {
   id: string;
@@ -18,6 +19,17 @@ export type ChatMessage = {
   created_at: string;
 };
 
+export type UndoPrevState = {
+  food_id: string;
+  portion_label: string;
+  weight_g: number;
+};
+
+export type RecordUndo = {
+  record_id: string;
+  prev_state?: UndoPrevState; // 有=update 撤销(还原)，无=append 撤销(删除)
+};
+
 export type RecordCardPayload = {
   food_name: string;
   weight_g: number;
@@ -26,6 +38,15 @@ export type RecordCardPayload = {
   fat_g: number;
   carbs_g: number;
   is_estimated?: boolean;
+  undo?: RecordUndo; // modify 的 update/append 直执行时带，支持撤销
+};
+
+export type DeleteConfirmCardPayload = {
+  pending_id: string;
+  record_id: string;
+  name: string;
+  meal_type?: string;
+  calories?: number;
 };
 
 export type PortionOption = { label: string; grams: number; calories?: number };
@@ -76,7 +97,7 @@ export type ExerciseCardPayload = {
 };
 
 export type SendMessageResponse = {
-  intent: 'record' | 'query' | 'chat';
+  intent: 'record' | 'query' | 'chat' | 'modify';
   reply: string;
   record?: unknown;
   pending?: unknown;

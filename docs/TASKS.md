@@ -62,7 +62,7 @@ T01 → T02 → T03 → T04 → T05 → T06 → T07(✅M1)
 | ✅ | T13 | tasks/T13-expo-scaffold.md | Expo 骨架 + 导航 + Liquid Glass 主题 |
 | ✅ | T14 | tasks/T14-client-auth.md | API 客户端 + 认证态 + 登录页 + 本地缓存 |
 | ✅ | T15 | tasks/T15-onboarding-ui.md | Onboarding 七步 UI |
-| ✅ | T16 | tasks/T16-chat-ui.md | Chat 页（核心，各类卡片+持久化） |
+| ✅ | T16 | tasks/T16-chat-ui.md | Chat 页（核心，各类卡片+持久化，含 modify 卡片/撤销） |
 | ⬜ | T17 | tasks/T17-today-ui.md | Today 页 |
 | ⬜ | T18 | tasks/T18-history-ui.md | History 页 |
 | ⬜ | T19 | tasks/T19-settings-ui.md | Settings 页（含清除缓存） |

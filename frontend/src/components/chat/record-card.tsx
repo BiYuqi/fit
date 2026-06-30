@@ -1,8 +1,10 @@
-import { StyleSheet, View } from 'react-native';
+import { StyleSheet, TouchableOpacity, View } from 'react-native';
 import { SymbolView } from 'expo-symbols';
 import { ThemedText } from '@/components/themed-text';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { Colors, Glass, Radius } from '@/constants/theme';
+import { useChatStore } from '@/stores/chat-store';
+import { useAuthStore } from '@/stores/auth-store';
 import type { RecordCardPayload } from '@/types/chat';
 
 const MEAL_LABEL: Record<string, string> = {
@@ -21,9 +23,11 @@ const MACRO_DOTS = {
 export function RecordCard({
   payload,
   mealType,
+  messageId,
 }: {
   payload: RecordCardPayload;
   mealType?: string;
+  messageId: string;
 }) {
   const scheme = useColorScheme();
   const isDark = scheme === 'dark';
@@ -31,10 +35,21 @@ export function RecordCard({
   const glass = Glass[isDark ? 'dark' : 'light'];
   const meal = MEAL_LABEL[mealType ?? ''] ?? '加餐';
 
+  const { undo, undoneCards } = useChatStore();
+  const { token } = useAuthStore();
+  const undoInfo = payload.undo;
+  const isUndone = !!(undoInfo && undoneCards[messageId]);
+
+  const handleUndo = () => {
+    if (!undoInfo || isUndone || !token) return;
+    undo(messageId, undoInfo.record_id, undoInfo.prev_state, token);
+  };
+
   return (
     <View style={styles.wrapper}>
       <View style={[
         styles.card,
+        isUndone && styles.cardUndone,
         {
           backgroundColor: isDark ? 'rgba(44,44,48,0.92)' : '#FFFFFF',
           borderColor: glass.border,
@@ -74,6 +89,21 @@ export function RecordCard({
           <MacroItem label="脂肪" value={payload.fat_g} color={MACRO_DOTS.fat} />
           <MacroItem label="碳水" value={payload.carbs_g} color={MACRO_DOTS.carbs} />
         </View>
+
+        {/* 撤销（modify 的 update/append 直执行时） */}
+        {undoInfo && (
+          <>
+            <View style={[styles.divider, { backgroundColor: colors.hairline }]} />
+            {isUndone ? (
+              <ThemedText style={[styles.undoneText, { color: colors.textSecondary }]}>已撤销</ThemedText>
+            ) : (
+              <TouchableOpacity style={styles.undoRow} onPress={handleUndo} activeOpacity={0.6}>
+                <SymbolView name="arrow.uturn.backward" size={12} tintColor={colors.textSecondary} />
+                <ThemedText style={[styles.undoText, { color: colors.textSecondary }]}>撤销</ThemedText>
+              </TouchableOpacity>
+            )}
+          </>
+        )}
       </View>
     </View>
   );
@@ -106,6 +136,24 @@ const styles = StyleSheet.create({
     padding: 12,
     gap: 8,
     width: '90%' as any,
+  },
+  cardUndone: {
+    opacity: 0.55,
+  },
+  undoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    alignSelf: 'flex-start',
+    paddingVertical: 2,
+  },
+  undoText: {
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  undoneText: {
+    fontSize: 12,
+    fontStyle: 'italic',
   },
   badgeRow: {
     flexDirection: 'row',
