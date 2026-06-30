@@ -241,8 +241,6 @@ export default function ChatScreen() {
           keyboardDismissMode="on-drag"
           keyboardShouldPersistTaps="handled"
           automaticallyAdjustKeyboardInsets
-          contentInset={{ bottom: BottomTabInset }}
-          scrollIndicatorInsets={{ bottom: BottomTabInset }}
         />
       )}
 
