@@ -117,7 +117,7 @@ export const parseToolSchema = {
               is_ambiguous: { type: "boolean", description: "食物名称是否有歧义（如'煎饼'可指煎饼果子/鸡蛋煎饼等多种，'粥'可指多种粥），true时需用户澄清" },
               ai_candidates: {
                 type: "array",
-                description: "is_ambiguous=true时，列出该泛称最可能指的具体食物名（标准中文名，最多4个），供用户选择。例如'煎饼'→['煎饼果子','鸡蛋煎饼','酱香饼','薄脆煎饼']",
+                description: "is_ambiguous=true时，列出该泛称最可能指的具体食物名（标准中文名，最多3个，按可能性降序），供用户选择。例如'煎饼'→['煎饼果子','鸡蛋煎饼','酱香饼']",
                 items: { type: "string" },
               },
             },

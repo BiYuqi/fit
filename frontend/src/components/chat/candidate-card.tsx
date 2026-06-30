@@ -52,7 +52,7 @@ export function CandidateCard({
         ) : (
           <>
             <View style={styles.chips}>
-              {payload.foods.slice(0, 4).map((food) => {
+              {payload.foods.slice(0, 3).map((food) => {
                 const isSelected = selected === food.name;
                 return (
                   <TouchableOpacity
@@ -104,6 +104,8 @@ const styles = StyleSheet.create({
     marginVertical: 6,
   },
   card: {
+    alignSelf: 'flex-start',
+    maxWidth: '100%',
     borderRadius: Radius.lg,
     borderWidth: StyleSheet.hairlineWidth,
     padding: 16,

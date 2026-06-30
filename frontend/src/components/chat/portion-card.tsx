@@ -147,6 +147,8 @@ const styles = StyleSheet.create({
     marginVertical: 6,
   },
   card: {
+    alignSelf: 'flex-start',
+    maxWidth: '100%',
     borderRadius: Radius.lg,
     borderWidth: StyleSheet.hairlineWidth,
     padding: 16,
@@ -166,7 +168,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   option: {
-    width: '47%',
+    width: 130,
     borderRadius: Radius.md,
     padding: 12,
     gap: 4,

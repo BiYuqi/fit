@@ -214,7 +214,7 @@ export async function chatRoutes(app: FastifyInstance) {
         // 以 DB 候选为主，补充 AI 候选名（去重）
         const dbNames = new Set(dbCandidates.map((f) => f.name));
         const aiNames: string[] = (ai_candidates ?? []).filter((n) => !dbNames.has(n));
-        const allNames = [...dbCandidates.map((f) => f.name), ...aiNames].slice(0, 4);
+        const allNames = [...dbCandidates.map((f) => f.name), ...aiNames].slice(0, 3);
 
         // 构建带热量提示的候选列表（DB 有记录则能算，AI 补充的暂不算）
         const foodsPayload = allNames.map((name) => {
