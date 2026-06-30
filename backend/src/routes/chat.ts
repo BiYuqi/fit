@@ -205,7 +205,9 @@ export async function chatRoutes(app: FastifyInstance) {
 
       const { foods: dbCandidates, calorie_spread } = await matchFoodCandidates(query);
 
-      const isAmbiguous = is_ambiguous || (dbCandidates.length >= 2 && calorie_spread > FOOD_AMBIGUITY_SPREAD);
+      // DB 离散度仅在 AI 自身对食物不确定时作为补充信号（高置信时信任 AI 判断）
+      const isAmbiguous = is_ambiguous ||
+        (food_confidence < 0.85 && dbCandidates.length >= 2 && calorie_spread > FOOD_AMBIGUITY_SPREAD);
 
       if (isAmbiguous) {
         // 歧义 → 合并 DB 候选 + AI 建议候选，带热量提示，两步走

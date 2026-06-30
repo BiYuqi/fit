@@ -34,6 +34,7 @@ export function CandidateCard({
     <View style={styles.wrapper}>
       <View style={[
         styles.card,
+        isResolved && styles.cardResolved,
         {
           backgroundColor: isDark ? 'rgba(44,44,48,0.92)' : '#FFFFFF',
           borderColor: glass.border,
@@ -110,6 +111,10 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     padding: 16,
     gap: 12,
+  },
+  cardResolved: {
+    padding: 10,
+    gap: 5,
   },
   titleRow: {
     flexDirection: 'row',
