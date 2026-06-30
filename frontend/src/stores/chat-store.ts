@@ -61,12 +61,16 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }
     // 2. Sync from server
     try {
-      const data = await apiFetch<{ date: string; messages: ChatMessage[] }>(
+      const data = await apiFetch<{ date: string; messages: ChatMessage[]; resolved_pending_ids?: string[] }>(
         `/api/chat/messages?date=${date}`,
         { token },
       );
       await upsertMessages(date, data.messages);
-      set({ messages: data.messages });
+      const resolvedFromServer: Record<string, true> = {};
+      for (const id of data.resolved_pending_ids ?? []) {
+        resolvedFromServer[id] = true;
+      }
+      set(s => ({ messages: data.messages, resolvedPendings: { ...s.resolvedPendings, ...resolvedFromServer } }));
     } catch {
       // keep cache on error
     }
@@ -126,8 +130,19 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       set(s => {
         const existingIds = new Set(s.messages.map(m => m.id));
         const toAdd = newMsgs.filter(m => !existingIds.has(m.id));
+        // 将 record_card 插到被解决的 pending 卡正后方，而不是追加到末尾
+        const resolvedIdx = s.messages.findIndex(
+          m => (m.payload as any)?.pending_id === pendingId,
+        );
+        let nextMessages: ChatMessage[];
+        if (resolvedIdx >= 0 && toAdd.length > 0) {
+          nextMessages = [...s.messages];
+          nextMessages.splice(resolvedIdx + 1, 0, ...toAdd);
+        } else {
+          nextMessages = [...s.messages, ...toAdd];
+        }
         return {
-          messages: [...s.messages, ...toAdd],
+          messages: nextMessages,
           summaryCard: res.summary_card ?? s.summaryCard,
           resolvedPendings: { ...s.resolvedPendings, [pendingId]: true },
         };

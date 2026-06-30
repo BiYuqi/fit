@@ -25,6 +25,8 @@ export const FoodItemSchema = z.object({
   chosen_label: PortionLabelSchema,
   food_confidence: z.number().min(0).max(1),
   portion_confidence: z.number().min(0).max(1),
+  is_ambiguous: z.boolean(),
+  ai_candidates: z.array(z.string()).optional(),
 });
 export type FoodItem = z.infer<typeof FoodItemSchema>;
 
@@ -85,7 +87,7 @@ export const parseToolSchema = {
             type: "object",
             required: [
               "raw", "canonical", "quantity_expr", "portions",
-              "chosen_label", "food_confidence", "portion_confidence",
+              "chosen_label", "food_confidence", "portion_confidence", "is_ambiguous",
             ],
             additionalProperties: false,
             properties: {
@@ -112,6 +114,12 @@ export const parseToolSchema = {
               },
               food_confidence: { type: "number", description: "食物识别置信度 0~1" },
               portion_confidence: { type: "number", description: "份量估算置信度 0~1" },
+              is_ambiguous: { type: "boolean", description: "食物名称是否有歧义（如'煎饼'可指煎饼果子/鸡蛋煎饼等多种，'粥'可指多种粥），true时需用户澄清" },
+              ai_candidates: {
+                type: "array",
+                description: "is_ambiguous=true时，列出该泛称最可能指的具体食物名（标准中文名，最多4个），供用户选择。例如'煎饼'→['煎饼果子','鸡蛋煎饼','酱香饼','薄脆煎饼']",
+                items: { type: "string" },
+              },
             },
           },
         },

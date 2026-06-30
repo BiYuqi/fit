@@ -36,7 +36,10 @@ export type PortionCardPayload = {
   portions: PortionOption[];
 };
 
-export type CandidateFood = { id: string; name: string; category?: string };
+export type CandidateFood = {
+  name: string;
+  calorie_hint?: number; // 默认中份热量提示，DB 有记录时才有
+};
 
 export type CandidateCardPayload = {
   pending_id: string;
@@ -82,7 +85,7 @@ export type SendMessageResponse = {
 };
 
 export type ResolveResponse = {
-  record: unknown;
+  record?: unknown;
   summary_card: ContextCard;
   messages: ChatMessage[];
 };

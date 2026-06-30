@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -118,11 +118,32 @@ export default function ChatScreen() {
     isLoading,
     chatDates,
     summaryCard,
+    resolvedPendings,
     loadForDate,
     loadDates,
     send,
     setDate,
   } = useChatStore();
+
+  const PENDING_KINDS = new Set(['portion_card', 'candidate_card', 'clarify_card']);
+
+  // 待确认卡排队：同一条用户消息产生的多张 pending 卡一次只显示第一张未解决的；
+  // 每遇到用户消息就重置阻塞，不同轮次的 pending 互不干扰
+  const visibleMessages = useMemo(() => {
+    let blocked = false;
+    return messages.filter(m => {
+      if (m.role === 'user') {
+        blocked = false;
+        return true;
+      }
+      if (blocked && PENDING_KINDS.has(m.kind)) return false;
+      if (PENDING_KINDS.has(m.kind)) {
+        const pid = (m.payload as any)?.pending_id as string | undefined;
+        if (!pid || !resolvedPendings[pid]) blocked = true;
+      }
+      return true;
+    });
+  }, [messages, resolvedPendings]);
 
   // Initial load
   useEffect(() => {
@@ -134,15 +155,15 @@ export default function ChatScreen() {
 
   // Scroll to bottom when new messages arrive or thinking bubble appears
   useEffect(() => {
-    if (messages.length > prevCountRef.current) {
+    if (visibleMessages.length > prevCountRef.current) {
       setTimeout(() => {
         flatListRef.current?.scrollToEnd({
           animated: prevCountRef.current > 0,
         });
       }, 80);
-      prevCountRef.current = messages.length;
+      prevCountRef.current = visibleMessages.length;
     }
-  }, [messages.length]);
+  }, [visibleMessages.length]);
 
   useEffect(() => {
     if (isSending) {
@@ -171,18 +192,18 @@ export default function ChatScreen() {
 
   const renderItem = useCallback(
     ({ item, index }: { item: ChatMessage; index: number }) => {
-      const prev = index > 0 ? messages[index - 1] : null;
+      const prev = index > 0 ? visibleMessages[index - 1] : null;
       const showTime =
         !prev ||
         new Date(item.created_at).getTime() - new Date(prev.created_at).getTime() > CHAT_TIME_GAP_MS;
       return (
         <>
           {showTime && <TimeLabel time={item.created_at} />}
-          <MessageItem message={item} isLast={index === messages.length - 1} />
+          <MessageItem message={item} isLast={index === visibleMessages.length - 1} />
         </>
       );
     },
-    [messages],
+    [visibleMessages],
   );
 
   const keyExtractor = useCallback((item: ChatMessage) => item.id, []);
@@ -206,13 +227,13 @@ export default function ChatScreen() {
       ) : (
         <FlatList
           ref={flatListRef}
-          data={messages}
+          data={visibleMessages}
           renderItem={renderItem}
           keyExtractor={keyExtractor}
           style={styles.flatList}
           contentContainerStyle={[
             styles.list,
-            messages.length === 0 && styles.listEmpty,
+            visibleMessages.length === 0 && styles.listEmpty,
           ]}
           ListEmptyComponent={<EmptyState />}
           ListFooterComponent={isSending ? <ThinkingBubble /> : null}

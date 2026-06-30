@@ -48,7 +48,8 @@ function toDateOnly(date: string): Date {
 }
 
 function guessMealType(): MealType {
-  const h = new Date().getHours();
+  // Use UTC+8 (Asia/Shanghai) local hour to avoid server UTC offset
+  const h = new Date(Date.now() + 8 * 3600 * 1000).getUTCHours();
   if (h >= 5 && h < 10) return "breakfast";
   if (h >= 10 && h < 15) return "lunch";
   if (h >= 17 && h < 22) return "dinner";
@@ -92,8 +93,8 @@ const MessageBodySchema = z.object({
 
 const ResolveBodySchema = z.object({
   choice: z.union([
-    z.string().min(1),
-    z.object({ grams: z.number().positive() }),
+    z.string().min(1),                        // portion label ("small"/"medium"/"large") 或食物名
+    z.object({ grams: z.number().positive() }), // 自定义克数（portion_card）
   ]),
 });
 
@@ -116,34 +117,19 @@ export async function chatRoutes(app: FastifyInstance) {
     const dateObj = toDateOnly(today);
     const messages: object[] = [];
 
-    // 拉最近 4 条历史（最多 2 轮）作为上下文喂给 AI，规范 §6
-    const recentRaw = await prisma.chatMessage.findMany({
-      where: { user_id, date: dateObj },
-      orderBy: { created_at: "desc" },
-      take: 4,
-      select: { role: true, content: true, kind: true },
-    });
-    const history = recentRaw
-      .reverse()
-      .map((m) => ({
-        role: m.role as "user" | "assistant",
-        content: m.content ?? (m.kind !== "text" ? `[${m.kind}]` : ""),
-      }))
-      .filter((m) => m.content.length > 0);
-
     // 写用户气泡
     const userMsg = await prisma.chatMessage.create({
       data: { user_id, date: dateObj, role: "user", kind: "text", content: text },
     });
     messages.push(userMsg);
 
-    // 解析意图（flash → pro 若低置信）
-    let parsed = await parseUserInput(text, history);
+    // 解析意图（flash → pro 若低置信）；不携带历史，每条消息独立解析避免 AI 误判为补充
+    let parsed = await parseUserInput(text);
     if (parsed.intent === "record") {
       const hasLow = parsed.items.some((i) => i.food_confidence < 0.5);
       if (hasLow) {
         try {
-          parsed = await parseUserInput(text, history, "deepseek-v4-pro");
+          parsed = await parseUserInput(text, [], "deepseek-v4-pro");
         } catch {
           /* 保留 flash 结果 */
         }
@@ -208,95 +194,118 @@ export async function chatRoutes(app: FastifyInstance) {
     const pendingCreateFns: Array<() => Promise<any>> = [];
 
     // 处理食物条目
+    // 歧义判定双信号：AI is_ambiguous OR DB calorie_spread > 100 kcal/100g
+    // 任一为真 → CandidateCard（选种类）→ resolve 后生成 PortionCard（两步走）
+    // 两者均假 → matchFood 最佳单一匹配 → 视 portion_confidence 自动录或 PortionCard
+    const FOOD_AMBIGUITY_SPREAD = 100; // kcal/100g 离散度阈值
+
     for (const item of parsed.items) {
-      const { canonical, chosen_label, portions, food_confidence, portion_confidence, raw } = item;
+      const { canonical, chosen_label, portions, food_confidence, portion_confidence, raw, is_ambiguous, ai_candidates } = item;
+      const query = canonical || raw;
 
-      if (food_confidence >= 0.8 && portion_confidence >= 0.8) {
-        // 高置信 → 自动入库
-        const food = await matchFood(canonical);
-        const chosenPortion = portions.find((p) => p.label === chosen_label) ?? portions[0];
-        const weight_g = chosenPortion.grams;
-        const nutrition = itemNutrition(food, weight_g);
+      const { foods: dbCandidates, calorie_spread } = await matchFoodCandidates(query);
 
-        const record = await prisma.foodRecord.create({
-          data: {
-            user_id,
-            food_id: food.id,
-            meal_type,
-            portion_label: chosen_label as PortionLabel,
-            weight_g,
-            calories: nutrition.calories,
-            protein: nutrition.protein_g,
-            fat: nutrition.fat_g,
-            carbs: nutrition.carbs_g,
-            food_confidence,
-            portion_confidence,
-            source,
-            raw_input: raw,
-            date: dateObj,
-          },
+      const isAmbiguous = is_ambiguous || (dbCandidates.length >= 2 && calorie_spread > FOOD_AMBIGUITY_SPREAD);
+
+      if (isAmbiguous) {
+        // 歧义 → 合并 DB 候选 + AI 建议候选，带热量提示，两步走
+        const mediumGrams = (portions.find((p) => p.label === "medium") ?? portions[0])?.grams ?? 150;
+
+        // 以 DB 候选为主，补充 AI 候选名（去重）
+        const dbNames = new Set(dbCandidates.map((f) => f.name));
+        const aiNames: string[] = (ai_candidates ?? []).filter((n) => !dbNames.has(n));
+        const allNames = [...dbCandidates.map((f) => f.name), ...aiNames].slice(0, 4);
+
+        // 构建带热量提示的候选列表（DB 有记录则能算，AI 补充的暂不算）
+        const foodsPayload = allNames.map((name) => {
+          const dbEntry = dbCandidates.find((f) => f.name === name);
+          return {
+            name,
+            calorie_hint: dbEntry
+              ? Math.round(Number(dbEntry.calories_100g) * mediumGrams / 100)
+              : undefined,
+          };
         });
-        needsRecompute = true;
-        records.push(record);
-        replyParts.push(`${food.name} ${weight_g}g（约 ${Math.round(nutrition.calories)} kcal）`);
 
-        const recordData = {
-          user_id,
-          date: dateObj,
-          role: "assistant" as const,
-          kind: "record_card",
-          payload: {
-            food_name: food.name,
-            weight_g,
-            calories: Math.round(nutrition.calories),
-            protein_g: Math.round(nutrition.protein_g),
-            fat_g: Math.round(nutrition.fat_g),
-            carbs_g: Math.round(nutrition.carbs_g),
-            is_estimated: food.is_estimated,
-          } as object,
-          record_id: record.id as string,
-        };
-        confirmedCreateFns.push(() => prisma.chatMessage.create({ data: recordData }));
-
-      } else if (food_confidence >= 0.8 && portion_confidence < 0.8) {
-        // 食物确定，份量模糊 → 份量选择
-        const food = await matchFood(canonical);
-        const portionsWithCal = portions.map((p) => ({
-          ...p,
-          calories: p.grams > 0 ? Math.round(Number(food.calories_100g) * p.grams / 100) : undefined,
-        }));
         const pr = await prisma.pendingRecord.create({
           data: {
             user_id,
-            type: "portion_choice",
+            type: "food_choice",
             raw_input: raw,
             candidates: {
-              food_id: food.id,
-              food_name: food.name,
+              query,
               meal_type,
               source,
-              portions,
+              portions,   // 保留原始份量估算，resolve 时用所选食物重算热量
+              chosen_label,
             } as object,
           },
         });
         if (!pending) pending = pr;
 
-        const portionData = {
-          user_id,
-          date: dateObj,
-          role: "assistant" as const,
-          kind: "portion_card",
-          payload: { pending_id: pr.id, food_name: food.name, portions: portionsWithCal } as object,
-        };
-        pendingCreateFns.push(() => prisma.chatMessage.create({ data: portionData }));
+        pendingCreateFns.push(() => prisma.chatMessage.create({
+          data: {
+            user_id,
+            date: dateObj,
+            role: "assistant" as const,
+            kind: "candidate_card",
+            payload: { pending_id: pr.id, query, foods: foodsPayload } as object,
+          },
+        }));
 
-      } else if (food_confidence >= 0.5) {
-        // 食物模糊 → 先查候选；无候选时用 AI 估算并降级为份量卡
-        const candidates = await matchFoodCandidates(canonical);
+      } else {
+        // 食物明确（或无候选走 AI 估算）→ matchFood 取最佳单一匹配（含 AI 估算兜底）
+        const food = await matchFood(query);
 
-        if (candidates.length === 0) {
-          // 数据库无匹配，AI 估算兜底，询问份量
-          const food = await matchFood(canonical);
+        if (food_confidence >= 0.8 && portion_confidence >= 0.8) {
+          // 高置信 → 自动入库
+          const chosenPortion = portions.find((p) => p.label === chosen_label) ?? portions[0];
+          const weight_g = chosenPortion.grams;
+          const nutrition = itemNutrition(food, weight_g);
+
+          const record = await prisma.foodRecord.create({
+            data: {
+              user_id,
+              food_id: food.id,
+              meal_type,
+              portion_label: chosen_label as PortionLabel,
+              weight_g,
+              calories: nutrition.calories,
+              protein: nutrition.protein_g,
+              fat: nutrition.fat_g,
+              carbs: nutrition.carbs_g,
+              food_confidence,
+              portion_confidence,
+              source,
+              raw_input: raw,
+              date: dateObj,
+            },
+          });
+          needsRecompute = true;
+          records.push(record);
+          replyParts.push(`${food.name} ${weight_g}g（约 ${Math.round(nutrition.calories)} kcal）`);
+
+          confirmedCreateFns.push(() => prisma.chatMessage.create({
+            data: {
+              user_id,
+              date: dateObj,
+              role: "assistant" as const,
+              kind: "record_card",
+              payload: {
+                food_name: food.name,
+                weight_g,
+                calories: Math.round(nutrition.calories),
+                protein_g: Math.round(nutrition.protein_g),
+                fat_g: Math.round(nutrition.fat_g),
+                carbs_g: Math.round(nutrition.carbs_g),
+                is_estimated: food.is_estimated,
+              } as object,
+              record_id: record.id as string,
+            },
+          }));
+
+        } else {
+          // 食物唯一但份量不明（或食物置信度低）→ 询问份量
           const portionsWithCal = portions.map((p) => ({
             ...p,
             calories: p.grams > 0 ? Math.round(Number(food.calories_100g) * p.grams / 100) : undefined,
@@ -317,66 +326,16 @@ export async function chatRoutes(app: FastifyInstance) {
           });
           if (!pending) pending = pr;
 
-          const portionData = {
-            user_id,
-            date: dateObj,
-            role: "assistant" as const,
-            kind: "portion_card",
-            payload: { pending_id: pr.id, food_name: food.name, portions: portionsWithCal } as object,
-          };
-          pendingCreateFns.push(() => prisma.chatMessage.create({ data: portionData }));
-        } else {
-          const pr = await prisma.pendingRecord.create({
+          pendingCreateFns.push(() => prisma.chatMessage.create({
             data: {
               user_id,
-              type: "food_choice",
-              raw_input: raw,
-              candidates: {
-                query: canonical,
-                meal_type,
-                source,
-                portions,
-                chosen_label,
-                foods: candidates.map((f) => ({ id: f.id, name: f.name, category: f.category })),
-              } as object,
+              date: dateObj,
+              role: "assistant" as const,
+              kind: "portion_card",
+              payload: { pending_id: pr.id, food_name: food.name, portions: portionsWithCal } as object,
             },
-          });
-          if (!pending) pending = pr;
-
-          const candidateData = {
-            user_id,
-            date: dateObj,
-            role: "assistant" as const,
-            kind: "candidate_card",
-            payload: {
-              pending_id: pr.id,
-              query: canonical,
-              foods: candidates.map((f) => ({ id: f.id, name: f.name, category: f.category })),
-            } as object,
-          };
-          pendingCreateFns.push(() => prisma.chatMessage.create({ data: candidateData }));
+          }));
         }
-
-      } else {
-        // 食物不明 → 追问
-        const pr = await prisma.pendingRecord.create({
-          data: {
-            user_id,
-            type: "clarify",
-            raw_input: raw,
-            candidates: { query: raw, meal_type, source, portions, chosen_label } as object,
-          },
-        });
-        if (!pending) pending = pr;
-
-        const clarifyData = {
-          user_id,
-          date: dateObj,
-          role: "assistant" as const,
-          kind: "clarify_card",
-          payload: { pending_id: pr.id, query: raw, portions } as object,
-        };
-        pendingCreateFns.push(() => prisma.chatMessage.create({ data: clarifyData }));
       }
     }
 
@@ -483,24 +442,50 @@ export async function chatRoutes(app: FastifyInstance) {
         portion_label = (chosen?.label ?? "medium") as PortionLabel;
       }
     } else {
-      // food_choice or clarify：choice 是 food_id（string）或自定义克数
-      if (typeof choice === "object" && "grams" in choice) {
-        // 自定义克数 + 第一个候选食物
-        const foods: Array<{ id: string }> = candidates.foods ?? [];
-        if (!foods.length) {
-          return reply.status(400).send({ error: { code: "no_candidates", message: "No candidate foods available" } });
-        }
-        food_id = foods[0].id;
-        weight_g = choice.grams;
-        portion_label = "custom";
-      } else {
-        food_id = choice as string;
-        const portions: Array<{ label: string; grams: number }> = candidates.portions ?? [];
-        const chosen_label: string = candidates.chosen_label ?? "medium";
-        const chosen = portions.find((p) => p.label === chosen_label) ?? portions.find((p) => p.label === "medium") ?? portions[0];
-        weight_g = chosen?.grams ?? 150;
-        portion_label = (chosen?.label ?? "medium") as PortionLabel;
-      }
+      // food_choice：choice 是食物名（string），用 matchFood 查找/估算
+      // 不直接落库，而是生成 portion_choice pending → 返回 PortionCard（两步走）
+      const foodName = choice as string;
+      const food = await matchFood(foodName);
+
+      const portionsList: Array<{ label: string; grams: number }> = candidates.portions ?? [];
+      const portionsWithCal = portionsList.map((p) => ({
+        ...p,
+        calories: p.grams > 0 ? Math.round(Number(food.calories_100g) * p.grams / 100) : undefined,
+      }));
+
+      const newPr = await prisma.pendingRecord.create({
+        data: {
+          user_id,
+          type: "portion_choice",
+          raw_input: pr.raw_input,
+          candidates: {
+            food_id: food.id,
+            food_name: food.name,
+            meal_type,
+            source,
+            portions: portionsWithCal,
+          } as object,
+        },
+      });
+
+      await prisma.pendingRecord.update({ where: { id }, data: { status: "resolved" } });
+
+      const portionCardMsg = await prisma.chatMessage.create({
+        data: {
+          user_id,
+          date: dateObj,
+          role: "assistant",
+          kind: "portion_card",
+          payload: {
+            pending_id: newPr.id,
+            food_name: food.name,
+            portions: portionsWithCal,
+          } as object,
+        },
+      });
+
+      const summary_card = await buildContextCard(user_id);
+      return { summary_card, messages: [portionCardMsg] };
     }
 
     const food = await prisma.foodStandard.findUnique({ where: { id: food_id } });
@@ -575,7 +560,22 @@ export async function chatRoutes(app: FastifyInstance) {
       orderBy: { created_at: "asc" },
     });
 
-    return { date, messages };
+    // 收集所有 pending_id，查哪些已 resolved，前端据此渲染卡片状态
+    const pendingIds = messages
+      .filter((m) => ["portion_card", "candidate_card", "clarify_card"].includes(m.kind))
+      .map((m) => (m.payload as any)?.pending_id as string | undefined)
+      .filter(Boolean) as string[];
+
+    let resolved_pending_ids: string[] = [];
+    if (pendingIds.length > 0) {
+      const resolved = await prisma.pendingRecord.findMany({
+        where: { id: { in: pendingIds }, status: "resolved" },
+        select: { id: true },
+      });
+      resolved_pending_ids = resolved.map((r) => r.id);
+    }
+
+    return { date, messages, resolved_pending_ids };
   });
 
   // ─────────────────────────────────────────────

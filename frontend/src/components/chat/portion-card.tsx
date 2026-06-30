@@ -83,6 +83,7 @@ export function PortionCard({
                     key={p.label}
                     style={[
                       styles.option,
+                      isCustom && styles.optionCustom,
                       {
                         borderColor: isSelected ? tint : 'rgba(60,60,67,0.08)',
                         borderWidth: isSelected ? 1.5 : StyleSheet.hairlineWidth,
@@ -144,14 +145,12 @@ const styles = StyleSheet.create({
   wrapper: {
     paddingHorizontal: 16,
     marginVertical: 6,
-    alignItems: 'flex-start',
   },
   card: {
     borderRadius: Radius.lg,
     borderWidth: StyleSheet.hairlineWidth,
     padding: 16,
     gap: 12,
-    width: '90%' as any,
   },
   title: {
     fontSize: 13,
@@ -172,6 +171,11 @@ const styles = StyleSheet.create({
     padding: 12,
     gap: 4,
   },
+  optionCustom: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    minHeight: 62,
+  },
   optionLabelRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -186,8 +190,8 @@ const styles = StyleSheet.create({
     flexShrink: 0,
   },
   optionDetail: {
-    fontSize: 12,
-    lineHeight: 16,
+    fontSize: 11,
+    lineHeight: 15,
   },
   customRow: {
     flexDirection: 'row',

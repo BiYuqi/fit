@@ -31,32 +31,45 @@ DeepSeek 输出（strict tool schema，zod 同构校验）：
       ],
       "chosen_label": "medium",
       "food_confidence": 0.86,
-      "portion_confidence": 0.55
+      "portion_confidence": 0.55,
+      "is_ambiguous": false
     }
   ]
 }
 ```
 - `canonical`：归一后的标准食物名，供匹配。
 - `portions`：每份量的克数估算（数据库不存克数，全由此估）。
+- `is_ambiguous`：AI 语义判断食物名是否有歧义（如"煎饼"可指多种，"粥"可指多种）。
 - 运动则输出 `{type, duration_min, intensity?}`，热量后端按 MET 估或简表。
 
-## 4. 置信度规则（食物 / 份量分开判）
-| 场景 | 行为 |
-|---|---|
-| 食物高 + 份量高 (>0.8) | 自动入库，直接反馈 |
-| 食物高 + 份量中 | 自动记食物，份量给 小/中/大(带克数) 让用户点 |
-| 食物中 (0.5–0.8) | 给候选食物选择（candidate_card） |
-| 食物低 (<0.5) | 追问 + 几个猜测 + "其他描述"（clarify_card） |
+## 4. 歧义判定与路由规则
 
+歧义判定采用**双信号 OR**，任一为真即走 CandidateCard：
+- `is_ambiguous = true`（AI 语义判断）
+- DB 候选热量离散度 `calorie_spread > 100 kcal/100g`（matchFoodCandidates 返回）
+
+| 判定结果 | 行为 |
+|---|---|
+| 歧义（双信号任一为真） | CandidateCard：列出候选食物，每项显示默认中份热量，点击直接录入食物+份量，再点展开小/中/大换份量 |
+| 不歧义 + 食物高 + 份量高 (>0.8) | 自动入库，直接反馈 record_card |
+| 不歧义 + 份量不确定 | PortionCard：份量给 小/中/大（含热量）让用户选 |
+| 食物低置信 (<0.5) | clarify_card（极少见，是解析失败兜底） |
+
+每张食物最多问一次（食物歧义优先于份量歧义），resolve 后不再追问份量。
 中/低置信生成 `pending_record`，前端出对应卡片，用户选择后走 `/pending/:id/resolve`。
 
 ## 5. 食物匹配管线（无 embedding）
 ```
-1. 取 canonical（语义归一已由 DeepSeek 完成）
-2. 精确匹配 food_standard.name
-3. 失败 → 匹配 aliases
-4. 失败 → pg_trgm 模糊匹配（similarity 阈值，默认 0.4，取最高若干；0.3 对短中文名太松，3字头两字同则天然得 0.33）
-5. 仍失败 → DeepSeek 估三大营养素 → 落库 is_estimated=true → 用之
+matchFoodCandidates（歧义检测）：
+  1. 精确匹配 food_standard.name
+  2. alias 匹配
+  3. 前缀匹配 name LIKE 'query%'（捕获泛称→具体变体，如"煎饼"→煎饼果子）
+  4. pg_trgm 模糊匹配（similarity ≥ 0.4）
+  5. 四路结果去重合并，返回候选列表 + calorie_spread（所有候选热量极差）
+
+matchFood（单一最佳匹配，含兜底）：
+  1-4. 同上，取最高相似度
+  5. 仍失败 → DeepSeek 估三大营养素 → 落库 is_estimated=true → 用之
 ```
 匹配命中后，后端按 chosen_label 的克数交给计算引擎算账。
 

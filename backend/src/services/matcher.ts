@@ -82,32 +82,58 @@ async function estimateByAI(canonical: string): Promise<FoodStandard> {
 }
 
 // ---------- 候选列表（不做 AI 兜底，供 food_choice pending 展示） ----------
-export async function matchFoodCandidates(canonical: string, limit = 5): Promise<FoodStandard[]> {
+// 不做 early-return：精确匹配到也继续查前缀/trgm，汇总后去重，
+// 让调用方根据 calorie_spread 决定是否歧义。
+export async function matchFoodCandidates(
+  canonical: string,
+  limit = 5,
+): Promise<{ foods: FoodStandard[]; calorie_spread: number }> {
+  const collected: FoodStandard[] = [];
+  const seen = new Set<string>();
+
+  const add = (f: FoodStandard) => {
+    if (!seen.has(f.id)) { seen.add(f.id); collected.push(f); }
+  };
+
+  // 1. 精确匹配
   const exact = await prisma.foodStandard.findFirst({ where: { name: canonical } });
-  if (exact) return [exact];
+  if (exact) add(exact);
 
+  // 2. alias 匹配
   const byAlias = await prisma.foodStandard.findFirst({ where: { aliases: { has: canonical } } });
-  if (byAlias) return [byAlias];
+  if (byAlias) add(byAlias);
 
+  // 3. 前缀匹配（"煎饼" → 煎饼果子 / 鸡蛋煎饼 …）
   const prefixResults = await prisma.foodStandard.findMany({
     where: { name: { startsWith: canonical }, is_estimated: false },
     orderBy: { name: 'asc' },
     take: limit,
   });
-  if (prefixResults.length > 0) return prefixResults;
+  prefixResults.forEach(add);
 
-  const results = await prisma.$queryRaw<Array<FoodStandard & { _sim: number }>>`
+  // 4. pg_trgm 模糊匹配（补漏别名拼写变体）
+  const trgmResults = await prisma.$queryRaw<Array<FoodStandard & { _sim: number }>>`
     SELECT *, similarity(name, ${canonical}) AS _sim
     FROM "FoodStandard"
     WHERE similarity(name, ${canonical}) >= ${SIMILARITY_THRESHOLD}
+      AND is_estimated = false
     ORDER BY _sim DESC
     LIMIT ${limit}
   `;
-  return results.map((r) => {
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  trgmResults.forEach((r) => {
     const { _sim, ...food } = r as any;
-    return food as FoodStandard;
+    add(food as FoodStandard);
   });
+
+  const foods = collected.slice(0, limit);
+
+  // 计算热量离散度（每100g）
+  const cals = foods.map((f) => Number(f.calories_100g)).filter((c) => c > 0);
+  const calorie_spread = cals.length >= 2
+    ? Math.max(...cals) - Math.min(...cals)
+    : 0;
+
+  return { foods, calorie_spread };
 }
 
 // ---------- 主管线 ----------
