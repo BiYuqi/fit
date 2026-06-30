@@ -126,6 +126,7 @@ async function adjudicateByAI(
 `你是食物匹配裁判。用户用自己的话描述了一种食物，下面是数据库按"字面相似度"召回的候选——可能有字面像、实际不是同一种东西的（例如"蛋白"指鸡蛋的蛋清，却召回了"蛋白粉"补剂）。判断哪个候选才是用户真正所指。
 规则：
 - 类目/常识不符的不要选（如蛋清属蛋类，蛋白粉属补剂/乳类，二者热量差好几倍，不可互替）。类目信息供你参考。
+- **生/熟不符不要选**：候选是生食材/干货/生重条目（名称含"生""干""挂面"，或本就是未烹饪的干货如"糙米""大米""黄豆"），而用户描述的是吃的熟食/成品（如"糙米饭""一碗面""米饭"）→ 二者热量差 2~3 倍，**判不相符，选 none**（系统会按熟食估算）。除非用户明说"生的/干的"。
 - 不确定，或候选里没有真正对应的 → **必须选 none**。选 none 完全正当，系统会改用营养估算；不要硬从候选里挑一个凑数。`,
       },
       {
@@ -232,8 +233,15 @@ export async function matchFood(canonical: string, raw: string = canonical): Pro
     orderBy: { name: 'asc' },
     take: 5,
   });
-  const isTrueSpec = (name: string) =>
-    name === canonical || /^[（(\s、，,]/.test(name.slice(canonical.length));
+  // 真 specialization：分隔符限定符；但限定符含"生/干"等生重标记的不算（如 面条（生，代表值）），
+  // 降为可疑候选交裁决——没人记生食，除非用户明说。
+  const RAW_MARKER = /生|干切|切面|挂面|（干|\(干/;
+  const isTrueSpec = (name: string) => {
+    if (name === canonical) return true;
+    const qualifier = name.slice(canonical.length);
+    if (!/^[（(\s、，,]/.test(qualifier)) return false;
+    return !RAW_MARKER.test(qualifier);
+  };
   const trueSpecs = prefixResults.filter((r) => isTrueSpec(r.name));
   if (trueSpecs.length > 0) {
     return trueSpecs.find((r) => r.name.includes('代表值')) ?? trueSpecs[0];
