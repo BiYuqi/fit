@@ -56,6 +56,15 @@ function guessMealType(): MealType {
   return "snack";
 }
 
+// 从原始文本中提取餐次，优先级高于 AI 结果和时间推断
+function extractMealTypeFromText(text: string): MealType | null {
+  if (/早上|早晨|早饭|早餐|上午/.test(text)) return "breakfast";
+  if (/中午|午饭|午餐|中饭/.test(text)) return "lunch";
+  if (/晚上|晚饭|晚餐|傍晚/.test(text)) return "dinner";
+  if (/下午茶|下午|加餐|零食/.test(text)) return "snack";
+  return null;
+}
+
 async function answerQuery(question: string, card: object): Promise<string> {
   const res = await callDeepSeek(
     [
@@ -181,7 +190,7 @@ export async function chatRoutes(app: FastifyInstance) {
     // ── record ─────────────────────────────────
     const user = await prisma.user.findUniqueOrThrow({ where: { id: user_id } });
     const weight_kg = Number(user.weight_kg) || 70;
-    const meal_type = (parsed.meal_type ?? guessMealType()) as MealType;
+    const meal_type = (extractMealTypeFromText(text) ?? parsed.meal_type ?? guessMealType()) as MealType;
 
     const records: object[] = [];
     let pending: object | null = null;
