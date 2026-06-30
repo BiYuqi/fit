@@ -1,3 +1,8 @@
+// Local timezone date string — avoids toISOString() UTC offset bug (e.g. CST midnight → still yesterday in UTC)
+export function localDateStr(d: Date = new Date()): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 // WeChat-style chat timestamp
 export function formatChatTime(isoStr: string): string {
   const date = new Date(isoStr);

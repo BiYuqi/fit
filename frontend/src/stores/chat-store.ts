@@ -1,10 +1,11 @@
 import { create } from 'zustand';
 import { apiFetch } from '@/lib/api';
 import { getCachedMessages, upsertMessages } from '@/lib/db';
+import { localDateStr } from '@/lib/format';
 import type { ChatMessage, ContextCard, SendMessageResponse, ResolveResponse, UndoPrevState } from '@/types/chat';
 
 function todayStr() {
-  return new Date().toISOString().slice(0, 10);
+  return localDateStr();
 }
 
 type ChatStore = {
@@ -40,7 +41,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       const to = todayStr();
       const from = new Date();
       from.setDate(from.getDate() - 89);
-      const fromStr = from.toISOString().slice(0, 10);
+      const fromStr = localDateStr(from);
       const data = await apiFetch<{ dates: string[] }>(
         `/api/chat/dates?from=${fromStr}&to=${to}`,
         { token },

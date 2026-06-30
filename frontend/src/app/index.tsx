@@ -9,7 +9,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { formatChatTime, CHAT_TIME_GAP_MS } from '@/lib/format';
+import { formatChatTime, localDateStr, CHAT_TIME_GAP_MS } from '@/lib/format';
 import { ChatInput } from '@/components/chat/chat-input';
 import { DateSelector } from '@/components/chat/date-selector';
 import { MessageItem, ThinkingBubble } from '@/components/chat/message-item';
@@ -47,7 +47,7 @@ function EmptyState() {
 export default function ChatScreen() {
   const insets = useSafeAreaInsets();
   const flatListRef = useRef<FlatList<ChatMessage>>(null);
-  const prevCountRef = useRef(0);
+  const scrolledRef = useRef(false);
 
   const { token } = useAuthStore();
   const {
@@ -84,27 +84,10 @@ export default function ChatScreen() {
 
   useEffect(() => {
     if (!token) return;
-    const today = new Date().toISOString().slice(0, 10);
-    loadForDate(today, token);
+    loadForDate(localDateStr(), token);
     loadDates(token);
   }, [token]);
 
-  useEffect(() => {
-    if (visibleMessages.length > prevCountRef.current) {
-      setTimeout(() => {
-        flatListRef.current?.scrollToEnd({
-          animated: prevCountRef.current > 0,
-        });
-      }, 80);
-      prevCountRef.current = visibleMessages.length;
-    }
-  }, [visibleMessages.length]);
-
-  useEffect(() => {
-    if (isSending) {
-      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 80);
-    }
-  }, [isSending]);
 
   const handleSend = useCallback(
     (text: string) => {
@@ -117,7 +100,7 @@ export default function ChatScreen() {
   const handleSelectDate = useCallback(
     (date: string) => {
       if (!token) return;
-      prevCountRef.current = 0;
+      scrolledRef.current = false;
       setDate(date, token);
     },
     [token, setDate],
@@ -164,6 +147,13 @@ export default function ChatScreen() {
           ]}
           ListEmptyComponent={<EmptyState />}
           ListFooterComponent={isSending ? <ThinkingBubble /> : null}
+          onContentSizeChange={() => {
+            // Fire after layout is ready — more reliable than setTimeout
+            if (visibleMessages.length > 0 || isSending) {
+              flatListRef.current?.scrollToEnd({ animated: scrolledRef.current });
+              scrolledRef.current = true;
+            }
+          }}
           showsVerticalScrollIndicator={false}
           keyboardDismissMode="on-drag"
           keyboardShouldPersistTaps="handled"
