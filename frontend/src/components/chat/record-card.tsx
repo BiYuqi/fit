@@ -2,6 +2,7 @@ import { StyleSheet, TouchableOpacity, View } from 'react-native';
 import { SymbolView } from 'expo-symbols';
 import { GlassCard } from '@/components/glass-card';
 import { ThemedText } from '@/components/themed-text';
+import { FontSize, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { useChatStore } from '@/stores/chat-store';
 import { useAuthStore } from '@/stores/auth-store';
@@ -140,17 +141,17 @@ const styles = StyleSheet.create({
   },
   foodLine: {
     flex: 1,
-    fontSize: 15,
+    fontSize: FontSize.base,
     fontWeight: '500',
   },
   foodMeta: {
-    fontSize: 13,
+    fontSize: FontSize.sm,
   },
   calBlock: {
     flexShrink: 0,
     flexDirection: 'row',
     alignItems: 'baseline',
-    marginLeft: 4,
+    marginLeft: Spacing.one,
   },
   calNum: {
     fontSize: 22,
@@ -174,7 +175,7 @@ const styles = StyleSheet.create({
   macroItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
+    gap: Spacing.one,
   },
   macroDot: {
     width: 5,
@@ -190,7 +191,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 3,
-    paddingLeft: 8,
+    paddingLeft: Spacing.two,
   },
   undoLabel: {
     fontSize: 12,

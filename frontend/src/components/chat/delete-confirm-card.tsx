@@ -3,7 +3,7 @@ import { StyleSheet, TouchableOpacity, View } from 'react-native';
 import { SymbolView } from 'expo-symbols';
 import { GlassCard } from '@/components/glass-card';
 import { ThemedText } from '@/components/themed-text';
-import { Colors, Glass, Radius } from '@/constants/theme';
+import { Colors, FontSize, Glass, Radius, Spacing } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useChatStore } from '@/stores/chat-store';
 import { useAuthStore } from '@/stores/auth-store';
@@ -89,7 +89,7 @@ const styles = StyleSheet.create({
   },
   title: {
     flex: 1,
-    fontSize: 15,
+    fontSize: FontSize.base,
     fontWeight: '600',
   },
   sub: {
@@ -98,12 +98,12 @@ const styles = StyleSheet.create({
   },
   actions: {
     flexDirection: 'row',
-    gap: 8,
-    marginTop: 2,
+    gap: Spacing.two,
+    marginTop: Spacing.half,
   },
   btn: {
     borderRadius: Radius.sm,
-    paddingHorizontal: 16,
+    paddingHorizontal: Spacing.three,
     paddingVertical: 9,
     alignItems: 'center',
     justifyContent: 'center',

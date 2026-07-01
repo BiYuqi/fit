@@ -2,7 +2,7 @@ import { useRef, useEffect } from 'react';
 import { Animated, StyleSheet, View } from 'react-native';
 import { ThemedText } from '@/components/themed-text';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { Glass, Radius } from '@/constants/theme';
+import { FontSize, Glass, Radius, Spacing } from '@/constants/theme';
 import { useChatStore } from '@/stores/chat-store';
 import { UserBubble } from './user-bubble';
 import { RecordCard } from './record-card';
@@ -135,7 +135,7 @@ export function MessageItem({ message, isLast }: { message: ChatMessage; isLast?
 
 const styles = StyleSheet.create({
   aiWrapper: {
-    marginVertical: 4,
+    marginVertical: Spacing.one,
     alignItems: 'flex-start',
   },
   aiBubble: {
@@ -147,12 +147,12 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
   },
   aiText: {
-    fontSize: 15,
+    fontSize: FontSize.base,
     lineHeight: 22,
     fontWeight: '400',
   },
   thinkingBubble: {
-    paddingHorizontal: 16,
+    paddingHorizontal: Spacing.three,
     paddingVertical: 14,
     flexDirection: 'row',
     alignItems: 'center',

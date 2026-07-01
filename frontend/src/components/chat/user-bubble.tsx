@@ -1,6 +1,6 @@
 import { StyleSheet, View } from 'react-native';
 import { ThemedText } from '@/components/themed-text';
-import { Glass, Radius } from '@/constants/theme';
+import { FontSize, Glass, Radius, Spacing } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 
 export function UserBubble({ content }: { content?: string | null }) {
@@ -20,7 +20,7 @@ const styles = StyleSheet.create({
   row: {
     flexDirection: 'row',
     justifyContent: 'flex-end',
-    marginVertical: 4,
+    marginVertical: Spacing.one,
   },
   bubble: {
     maxWidth: '85%',
@@ -31,7 +31,7 @@ const styles = StyleSheet.create({
   },
   text: {
     color: '#ffffff',
-    fontSize: 15,
+    fontSize: FontSize.base,
     lineHeight: 22,
     fontWeight: '500',
   },

@@ -2,6 +2,7 @@ import { StyleSheet, TouchableOpacity, View } from 'react-native';
 import { SymbolView } from 'expo-symbols';
 import { GlassCard } from '@/components/glass-card';
 import { ThemedText } from '@/components/themed-text';
+import { FontSize, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { useChatStore } from '@/stores/chat-store';
 import { useAuthStore } from '@/stores/auth-store';
@@ -128,20 +129,20 @@ const styles = StyleSheet.create({
   },
   exerciseLine: {
     flex: 1,
-    fontSize: 15,
+    fontSize: FontSize.base,
     fontWeight: '500',
   },
   exerciseEmoji: {
-    fontSize: 15,
+    fontSize: FontSize.base,
   },
   exerciseMeta: {
-    fontSize: 13,
+    fontSize: FontSize.sm,
   },
   calBlock: {
     flexShrink: 0,
     flexDirection: 'row',
     alignItems: 'baseline',
-    marginLeft: 4,
+    marginLeft: Spacing.one,
   },
   calNum: {
     fontSize: 22,

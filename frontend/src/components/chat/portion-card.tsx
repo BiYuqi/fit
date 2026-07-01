@@ -3,7 +3,7 @@ import { StyleSheet, TextInput, TouchableOpacity, View } from 'react-native';
 import { SymbolView } from 'expo-symbols';
 import { GlassCard } from '@/components/glass-card';
 import { ThemedText } from '@/components/themed-text';
-import { Colors, Glass, Radius } from '@/constants/theme';
+import { Colors, FontSize, Glass, Radius, Spacing } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useChatStore } from '@/stores/chat-store';
 import { useAuthStore } from '@/stores/auth-store';
@@ -51,6 +51,18 @@ export function PortionCard({
     resolve(payload.pending_id, { grams }, token);
   };
 
+  /** Derive a descriptive label for the resolved state, e.g. "已选中份 ≈ 250g". */
+  const resolvedLabel = (() => {
+    if (selected === 'custom') {
+      const g = parseFloat(customGrams);
+      if (!isNaN(g) && g > 0) return `已选 ${g}g`;
+      return '已选择';
+    }
+    const portion = selected ? payload.portions.find(p => p.label === selected) : null;
+    if (portion && portion.grams > 0) return `已选中份 ≈ ${portion.grams}g`;
+    return '已选择';
+  })();
+
   const hasCustom = payload.portions.some(p => p.label === 'custom');
   const allPortions = hasCustom
     ? payload.portions
@@ -68,7 +80,7 @@ export function PortionCard({
         </ThemedText>
 
         {isResolved ? (
-          <ThemedText style={[styles.resolved, { color: colors.textSecondary }]}>已选择</ThemedText>
+          <ThemedText style={[styles.resolved, { color: colors.textSecondary }]}>{resolvedLabel}</ThemedText>
         ) : (
           <>
             {/* 2-column grid */}
@@ -148,23 +160,23 @@ const styles = StyleSheet.create({
     maxWidth: '100%',
   },
   title: {
-    fontSize: 13,
+    fontSize: FontSize.sm,
     fontWeight: '500',
   },
   resolved: {
-    fontSize: 13,
+    fontSize: FontSize.sm,
     fontStyle: 'italic',
   },
   grid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 8,
+    gap: Spacing.two,
   },
   option: {
     width: 130,
     borderRadius: Radius.md,
     padding: 12,
-    gap: 4,
+    gap: Spacing.one,
   },
   optionCustom: {
     justifyContent: 'center',
@@ -177,7 +189,7 @@ const styles = StyleSheet.create({
     gap: 5,
   },
   optionName: {
-    fontSize: 15,
+    fontSize: FontSize.base,
     fontWeight: '600',
     flex: 1,
   },
@@ -185,12 +197,12 @@ const styles = StyleSheet.create({
     flexShrink: 0,
   },
   optionDetail: {
-    fontSize: 11,
+    fontSize: FontSize.xs,
     lineHeight: 15,
   },
   customRow: {
     flexDirection: 'row',
-    gap: 8,
+    gap: Spacing.two,
     alignItems: 'center',
   },
   customInput: {
@@ -198,12 +210,12 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderRadius: Radius.sm,
     paddingHorizontal: 12,
-    paddingVertical: 8,
-    fontSize: 15,
+    paddingVertical: Spacing.two,
+    fontSize: FontSize.base,
   },
   confirmBtn: {
     borderRadius: Radius.sm,
-    paddingHorizontal: 16,
+    paddingHorizontal: Spacing.three,
     paddingVertical: 9,
   },
   confirmText: {

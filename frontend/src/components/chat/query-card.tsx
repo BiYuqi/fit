@@ -1,7 +1,7 @@
 import { StyleSheet, View } from 'react-native';
 import { GlassCard } from '@/components/glass-card';
 import { ThemedText } from '@/components/themed-text';
-import { Colors, Glass } from '@/constants/theme';
+import { Colors, FontSize, Glass, Spacing } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import type { ContextCard } from '@/types/chat';
 
@@ -73,7 +73,7 @@ const styles = StyleSheet.create({
     width: '90%' as any,
   },
   title: {
-    fontSize: 13,
+    fontSize: FontSize.sm,
     fontWeight: '500',
   },
   bigRow: {
@@ -81,12 +81,12 @@ const styles = StyleSheet.create({
     alignItems: 'baseline',
   },
   bigNum: {
-    fontSize: 28,
+    fontSize: FontSize['3xl'],
     fontWeight: '700',
     lineHeight: 32,
   },
   bigUnit: {
-    fontSize: 13,
+    fontSize: FontSize.sm,
     fontWeight: '500',
   },
   trackOuter: {
@@ -107,8 +107,8 @@ const styles = StyleSheet.create({
     fontSize: 12,
   },
   advice: {
-    fontSize: 13,
+    fontSize: FontSize.sm,
     lineHeight: 19,
-    marginTop: 2,
+    marginTop: Spacing.half,
   },
 });
