@@ -30,7 +30,8 @@
 | `docs/AI_PARSING_SPEC.md` | DeepSeek 解析、意图路由、置信度、匹配、上下文卡 |
 | `docs/CALORIE_ENGINE.md` | BMR/TDEE/缺口/目标 计算口径（公式的**唯一定义处**） |
 | `docs/DESIGN_SPEC.md` | UI 行为规格（视觉稿已由 Claude Design 产出） |
-| `docs/TEST_PLAN.md` | 怎么验证 |
+| `docs/TEST_PLAN.md` | 后端验证计划（curl 流程、一致性） |
+| `docs/TESTING.md` | 前端组件测试规范：怎么写、怎么跑、已知坑 |
 | `docs/TASKS.md` | 任务总览：依赖图 + 执行顺序 + 状态 + 进度 |
 | `docs/tasks/*.md` | 一任务一文件：做什么 / 验收 / 可粘贴的提示词 |
 
