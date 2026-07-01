@@ -108,4 +108,30 @@ export async function dailyRoutes(app: FastifyInstance) {
 
     return Array.from(groups.entries()).map(([period, g]) => ({ period, ...g }));
   });
+
+  // ─────────────────────────────────────────────
+  // GET /api/daily/records?from=&to=
+  // ─────────────────────────────────────────────
+  app.get("/api/daily/records", { preHandler: [auth] }, async (req, reply) => {
+    const { sub: user_id } = req.user as { sub: string };
+    const qParsed = RangeQuerySchema.safeParse(req.query);
+    if (!qParsed.success) {
+      return reply.status(400).send({ error: { code: "invalid_params", message: qParsed.error.message } });
+    }
+    const { from, to } = qParsed.data;
+
+    const [records, exercises] = await Promise.all([
+      prisma.foodRecord.findMany({
+        where: { user_id, date: { gte: toDateOnly(from), lte: toDateOnly(to) } },
+        include: { food: true },
+        orderBy: [{ date: "asc" }, { created_at: "asc" }],
+      }),
+      prisma.exerciseRecord.findMany({
+        where: { user_id, date: { gte: toDateOnly(from), lte: toDateOnly(to) } },
+        orderBy: [{ date: "asc" }, { created_at: "asc" }],
+      }),
+    ]);
+
+    return { records, exercises };
+  });
 }
