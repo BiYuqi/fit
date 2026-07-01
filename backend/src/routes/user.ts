@@ -14,7 +14,7 @@ const PutBodySchema = z.object({
   target_weight_kg: z.number().min(20).max(500).optional(),
   activity_level: z.enum(["sedentary", "light", "moderate", "active", "very_active"]).optional(),
   goal_type: z.enum(["cut", "maintain"]).optional(),
-  daily_deficit: z.number().int().min(0).max(750).optional(),
+  daily_deficit: z.number().int().min(0).max(1500).optional(),
   custom_tdee: z.number().int().min(800).max(6000).optional(),
 });
 

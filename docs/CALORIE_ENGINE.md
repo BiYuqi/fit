@@ -37,7 +37,7 @@ protein/fat/carbs 同理（各自 _100g / 100 * weight_g）
 
 ## 5. 目标
 ```
-目标摄入 target_calories = TDEE - daily_deficit   （daily_deficit 默认 500，范围 300~750）
+目标摄入 target_calories = TDEE - daily_deficit   （daily_deficit 默认 500，范围 150~1500）
 目标蛋白 target_protein  = 体重kg * k             （k 取 1.6~2.2，减脂保肌；默认 1.8）
 ```
 膳食宝塔推荐量仅用于"均衡提示"，不参与上述目标计算。

@@ -7,7 +7,7 @@ import {
   parseToolSchema,
 } from "../ai/schema";
 
-const SYSTEM_PROMPT = `你是一个减脂 App 的饮食助手，帮助用户记录饮食与运动。
+export const SYSTEM_PROMPT = `你是一个减脂 App 的饮食助手，帮助用户记录饮食与运动。
 
 请判断用户意图并输出结构化数据：
 - record：用户在描述自己吃了什么或做了什么运动
@@ -118,6 +118,21 @@ export async function parseUserInput(
     raw = JSON.parse(toolCall.function.arguments);
   } catch {
     throw new Error(`Failed to parse tool call arguments: ${toolCall.function.arguments}`);
+  }
+
+  // 防御：DeepSeek 偶尔返回 intent=record 但既无 items 也无 exercise，降级为 chat
+  if (raw && typeof raw === "object" && "intent" in raw) {
+    const obj = raw as Record<string, unknown>;
+    if (obj.intent === "record") {
+      const hasItems = Array.isArray(obj.items) && obj.items.length > 0;
+      const hasExercise = Array.isArray(obj.exercise) && obj.exercise.length > 0;
+      if (!hasItems && !hasExercise) {
+        obj.intent = "chat";
+        delete obj.items;
+        delete obj.exercise;
+        delete obj.meal_type;
+      }
+    }
   }
 
   return ParseResultSchema.parse(raw);

@@ -72,6 +72,7 @@ model User {
   parse_logs       AiParseLog[]
   pending_records  PendingRecord[]
   chat_messages    ChatMessage[]
+  traces           AiTrace[]
 }
 
 // ---------- 食物标准库（seed 导入的目标表）----------
@@ -225,4 +226,51 @@ model ChatMessage {
   user User @relation(fields: [user_id], references: [id])
 
   @@index([user_id, date, created_at])
+}
+
+// ---------- AI 行为追踪（Trace 系统）----------
+model AiTrace {
+  id                String   @id @default(uuid())
+  user_id           String
+  session_id        String?
+  meal_id           String?
+  input_text        String
+  intent            String?
+  status            String   @default("started") // started | ok | partial | failed
+  model_used        String?
+  model_upgraded    Boolean  @default(false)
+  latency_ms        Int?
+  token_usage       Json?
+  error_info        Json?
+  prompt_messages   Json?
+  prompt_tools      Json?
+  prompt_hash       String?
+  state_snapshot    Json?
+  created_at        DateTime @default(now())
+
+  user   User           @relation(fields: [user_id], references: [id])
+  events AiTraceEvent[]
+
+  @@index([user_id, created_at(sort: Desc)])
+  @@index([session_id])
+  @@index([user_id, meal_id])
+  @@index([prompt_hash])
+}
+
+model AiTraceEvent {
+  id           String   @id @default(uuid())
+  trace_id     String
+  item_index   Int?
+  seq          Int
+  event_type   String   // parse | normalize | confidence | decision | output | correction | error
+  state_before Json?
+  state_after  Json?
+  input_state  Json?
+  output_state Json?
+  meta         Json?
+  created_at   DateTime @default(now())
+
+  trace AiTrace @relation(fields: [trace_id], references: [id], onDelete: Cascade)
+
+  @@index([trace_id, item_index, seq])
 }

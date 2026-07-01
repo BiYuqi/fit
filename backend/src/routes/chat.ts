@@ -1,6 +1,7 @@
 import { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { parseUserInput } from "../services/parser";
+import { SYSTEM_PROMPT } from "../services/parser";
 import { matchFood, matchFoodCandidates } from "../services/matcher";
 import { itemNutrition } from "../services/calc";
 import { recompute, buildContextCard } from "../services/summary";
@@ -10,6 +11,13 @@ import type { FoodItem, ParseResult } from "../ai/schema";
 import { callDeepSeekCtx } from "../ai/ctx";
 import { prisma } from "../lib/prisma";
 import type { MealType, PortionLabel } from "@prisma/client";
+import {
+  ChatTrace,
+  ItemTrace,
+  recordModifyCorrection,
+  recordDeleteCorrection,
+  recordResolveCorrection,
+} from "../services/trace";
 
 // ---------- 运动 MET 简表（中英双语关键词） ----------
 const MET_TABLE: Array<[string[], number]> = [
@@ -172,12 +180,35 @@ async function answerDiscuss(
 // 歧义判定双信号：AI is_ambiguous OR DB calorie_spread > 100 kcal/100g
 const FOOD_AMBIGUITY_SPREAD = 100; // kcal/100g 离散度阈值
 
+// ── trace helper：从 matchFoodCandidates 返回值推断匹配路径 ──
+// matchFood 本身不返回 match_path，需要根据 dbCandidates 和 food 的属性推断。
+function inferMatchPath(
+  food: { id: string; name: string; is_estimated: boolean },
+  query: string,
+  dbCandidates: Array<{ id: string; name: string }>,
+): string {
+  // AI 硬估（库里无匹配）
+  if (food.is_estimated) return "ai_estimate";
+  // AI 裁决（有候选但未精确命中，由 AI 从候选中选择）
+  if ((food as any)._adjudicated) return "ai_adjudicate";
+  // 精确匹配
+  if (dbCandidates.length === 1 && dbCandidates[0].id === food.id) {
+    if (dbCandidates[0].name === query) return "exact_name";
+    if ((dbCandidates[0] as any)._aliasMatch) return "alias";
+    return "prefix_true_spec";
+  }
+  // 模糊匹配（多个候选，trgm 命中了某个）
+  if (dbCandidates.length > 1) return "pg_trgm";
+  return "matched";
+}
+
 interface ItemCtx {
   user_id: string;
   meal_type: MealType;
   source: string;
   dateObj: Date;
   withUndo: boolean; // append 时记录卡带 undo
+  itrace?: ItemTrace; // 由 processFoodItem 内部消费，不对外暴露
 }
 
 interface ItemResult {
@@ -190,17 +221,52 @@ interface ItemResult {
 }
 
 async function processFoodItem(item: FoodItem, ctx: ItemCtx): Promise<ItemResult> {
-  const { user_id, meal_type, source, dateObj, withUndo } = ctx;
+  const { user_id, meal_type, source, dateObj, withUndo, itrace } = ctx;
   const { canonical, chosen_label, portions, food_confidence, portion_confidence, raw, is_ambiguous, ai_candidates } = item;
   const query = canonical || raw;
 
+  // 初始化 ItemTrace state
+  if (itrace) {
+    itrace.setState("canonical", canonical);
+    itrace.setState("food_confidence", food_confidence);
+    itrace.setState("portion_confidence", portion_confidence);
+    itrace.setState("is_ambiguous", is_ambiguous);
+  }
+
   const { foods: dbCandidates, calorie_spread } = await matchFoodCandidates(query);
+  if (itrace) itrace.setState("calorie_spread", calorie_spread);
 
   const isAmbiguous =
     is_ambiguous ||
     (food_confidence < 0.85 && dbCandidates.length >= 2 && calorie_spread > FOOD_AMBIGUITY_SPREAD);
 
   if (isAmbiguous) {
+    // normalize → confidence → decision → output（通过 itrace）
+    if (itrace) {
+      const na = { ...itrace.getState(), match_path: "ambiguous_pending", calorie_spread };
+      await itrace.normalize(
+        na,
+        { canonical, raw },
+        { candidates_count: dbCandidates.length, calorie_spread, match_path: "ambiguous_pending" },
+      );
+
+      const ca = { ...itrace.getState(), confidence_verdict: "ambiguous" };
+      await itrace.confidence(
+        ca,
+        { food_confidence, portion_confidence, is_ambiguous, calorie_spread, candidates_count: dbCandidates.length },
+        { food_level: food_confidence >= 0.8 ? "high" : food_confidence >= 0.5 ? "medium" : "low", portion_level: "low", verdict: "ambiguous" },
+        { threshold_food_high: 0.8, threshold_portion_high: 0.8, threshold_food_low: 0.5, calorie_spread_max: FOOD_AMBIGUITY_SPREAD },
+      );
+
+      const da = { ...itrace.getState(), routing_action: "candidate_card" };
+      await itrace.decision(
+        da,
+        { food_level: "medium", portion_level: "low", is_ambiguous, calorie_spread },
+        { action: "candidate_card" },
+        { reason: is_ambiguous ? "AI flagged is_ambiguous=true" : `calorie_spread (${calorie_spread}) > ${FOOD_AMBIGUITY_SPREAD}` },
+      );
+    }
+
     const mediumGrams = (portions.find((p) => p.label === "medium") ?? portions[0])?.grams ?? 150;
     const dbNames = new Set(dbCandidates.map((f) => f.name));
     const aiNames: string[] = (ai_candidates ?? []).filter((n) => !dbNames.has(n));
@@ -222,6 +288,15 @@ async function processFoodItem(item: FoodItem, ctx: ItemCtx): Promise<ItemResult
       },
     });
 
+    if (itrace) {
+      const oa = { ...itrace.getState(), pending_id: pr.id };
+      await itrace.output(
+        oa,
+        { action: "candidate_card" },
+        { result: "pending_created", pending_record_id: pr.id },
+      );
+    }
+
     return {
       needsRecompute: false,
       pending: pr,
@@ -236,7 +311,63 @@ async function processFoodItem(item: FoodItem, ctx: ItemCtx): Promise<ItemResult
 
   const food = await matchFood(query, raw);
 
+  // ── normalize：canonical → food_standard 映射 ──
+  if (itrace) {
+    const matchPath = inferMatchPath(food, query, dbCandidates);
+    const na: Record<string, unknown> = {
+      ...itrace.getState(),
+      matched_food_id: food.id,
+      matched_food_name: food.name,
+      match_path: matchPath,
+      entity_type: "food_standard",
+      entity_id: food.id,
+    };
+
+    await itrace.normalize(
+      na,
+      { canonical, raw },
+      {
+        match_path: matchPath,
+        food_id: food.id,
+        food_name: food.name,
+        category: food.category,
+        calories_100g: food.calories_100g,
+        candidates_count: dbCandidates.length,
+        calorie_spread,
+        adjudicated_by_ai: (food as any)._adjudicated ?? false,
+      },
+    );
+  }
+
+  // ── confidence：根据双信号 + 置信度阈值判定 ──
+  const foodLevel = food_confidence >= 0.8 ? "high" : food_confidence >= 0.5 ? "medium" : "low";
+  const portionLevel = portion_confidence >= 0.8 ? "high" : portion_confidence >= 0.5 ? "medium" : "low";
+  const verdict = food_confidence >= 0.8 && portion_confidence >= 0.8 ? "confident"
+    : food_confidence < 0.5 ? "food_low" : "portion_uncertain";
+
+  // ── confidence event：记录判据 + 阈值 + verdict ──
+  if (itrace) {
+    const ca = { ...itrace.getState(), confidence_verdict: verdict };
+    await itrace.confidence(
+      ca,
+      { food_confidence, portion_confidence, is_ambiguous, calorie_spread, candidates_count: dbCandidates.length },
+      { food_level: foodLevel, portion_level: portionLevel, verdict },
+      { threshold_food_high: 0.8, threshold_portion_high: 0.8, threshold_food_low: 0.5, calorie_spread_max: FOOD_AMBIGUITY_SPREAD },
+    );
+  }
+
   if (food_confidence >= 0.8 && portion_confidence >= 0.8) {
+    // ── decision + output：auto_commit 分支 ──
+    if (itrace) {
+      const da = { ...itrace.getState(), routing_action: "auto_commit", threshold_food_high: 0.8, threshold_portion_high: 0.8 };
+      await itrace.decision(
+        da,
+        { food_level: foodLevel, portion_level: portionLevel, is_ambiguous, calorie_spread },
+        { action: "auto_commit" },
+        { reason: `food_confidence (${food_confidence}) >= 0.8 && portion_confidence (${portion_confidence}) >= 0.8` },
+      );
+    }
+
     const chosenPortion = portions.find((p) => p.label === chosen_label) ?? portions[0];
     const weight_g = chosenPortion.grams;
     const nutrition = itemNutrition(food, weight_g);
@@ -247,15 +378,25 @@ async function processFoodItem(item: FoodItem, ctx: ItemCtx): Promise<ItemResult
         weight_g, calories: nutrition.calories, protein: nutrition.protein_g,
         fat: nutrition.fat_g, carbs: nutrition.carbs_g,
         food_confidence, portion_confidence, source, raw_input: raw, date: dateObj,
+        parse_log_id: itrace?.traceId || null,
       },
     });
+
+    if (itrace) {
+      const oa = { ...itrace.getState(), record_id: record.id };
+      await itrace.output(
+        oa,
+        { action: "auto_commit" },
+        { result: "record_created", record_id: record.id, weight_g, calories: Math.round(nutrition.calories), protein: Math.round(nutrition.protein_g), fat: Math.round(nutrition.fat_g), carbs: Math.round(nutrition.carbs_g) },
+      );
+    }
 
     const payload: any = {
       food_name: food.name, weight_g, calories: Math.round(nutrition.calories),
       protein_g: Math.round(nutrition.protein_g), fat_g: Math.round(nutrition.fat_g),
       carbs_g: Math.round(nutrition.carbs_g), is_estimated: food.is_estimated,
     };
-    if (withUndo) payload.undo = { record_id: record.id }; // append 撤销=删新记录
+    if (withUndo) payload.undo = { record_id: record.id };
 
     return {
       record,
@@ -267,7 +408,17 @@ async function processFoodItem(item: FoodItem, ctx: ItemCtx): Promise<ItemResult
     };
   }
 
-  // 食物唯一但份量不明 → 询问份量
+  // ── decision + output：portion_card 分支（食物唯一但份量不明）──
+  if (itrace) {
+    const da = { ...itrace.getState(), routing_action: "portion_card", threshold_food_high: 0.8, threshold_portion_high: 0.8 };
+    await itrace.decision(
+      da,
+      { food_level: foodLevel, portion_level: portionLevel, is_ambiguous, calorie_spread },
+      { action: "portion_card" },
+      { reason: `portion_confidence (${portion_confidence}) < 0.80` },
+    );
+  }
+
   const portionsWithCal = portions.map((p) => ({
     ...p,
     calories: p.grams > 0 ? Math.round(Number(food.calories_100g) * p.grams / 100) : undefined,
@@ -278,6 +429,15 @@ async function processFoodItem(item: FoodItem, ctx: ItemCtx): Promise<ItemResult
       candidates: { food_id: food.id, food_name: food.name, meal_type, source, portions } as object,
     },
   });
+
+  if (itrace) {
+    const oa = { ...itrace.getState(), pending_id: pr.id };
+    await itrace.output(
+      oa,
+      { action: "portion_card" },
+      { result: "pending_created", pending_record_id: pr.id, food_name: food.name },
+    );
+  }
 
   return {
     needsRecompute: false,
@@ -295,6 +455,7 @@ async function processFoodItem(item: FoodItem, ctx: ItemCtx): Promise<ItemResult
 const MessageBodySchema = z.object({
   text: z.string().min(1).max(2000),
   source: z.enum(["text", "voice"]).default("text"),
+  session_id: z.string().uuid().optional(),
 });
 
 const ResolveBodySchema = z.object({
@@ -316,7 +477,7 @@ export async function chatRoutes(app: FastifyInstance) {
     if (!bodyParsed.success) {
       return reply.status(400).send({ error: { code: "invalid_input", message: bodyParsed.error.message } });
     }
-    const { text, source } = bodyParsed.data;
+    const { text, source, session_id } = bodyParsed.data;
     const { sub: user_id } = req.user as { sub: string };
 
     const today = todayStr();
@@ -333,19 +494,32 @@ export async function chatRoutes(app: FastifyInstance) {
     // 此刻本条消息尚未写 ai_parse_log / food_record，记忆包反映的是「本条之前」状态，正合语义
     const pack = await buildMemoryPack(user_id);
 
+    // ─────────────────────────────────────────
+    // Trace：创建执行链路（AI_TRACE=disabled 时 traceId=""，所有操作静默跳过）
+    // ─────────────────────────────────────────
+    const tctx = await ChatTrace.begin(user_id, text, pack, { sessionId: session_id, promptText: SYSTEM_PROMPT });
+
     // 解析意图（flash → pro 若 zod 校验失败或低置信）
     let parsed: ParseResult;
     let upgraded = false;
+    let modelUsed = "deepseek-v4-flash";
     try {
       parsed = await parseUserInput(text, pack);
     } catch {
       // flash 解析失败（zod 校验 / tool call JSON 解析失败），升 pro 重试
-      parsed = await parseUserInput(text, pack, "deepseek-v4-pro");
-      upgraded = true;
+      modelUsed = "deepseek-v4-pro";
+      try {
+        parsed = await parseUserInput(text, pack, "deepseek-v4-pro");
+        upgraded = true;
+      } catch {
+        // pro 也失败，兜底为 chat
+        parsed = { intent: "chat" } as ParseResult;
+      }
     }
-    if (!upgraded && parsed.intent === "record") {
+    if (!upgraded && parsed.intent === "record" && parsed.items && parsed.items.length > 0) {
       const hasLow = parsed.items.some((i) => i.food_confidence < 0.5);
       if (hasLow) {
+        modelUsed = "deepseek-v4-pro";
         try {
           parsed = await parseUserInput(text, pack, "deepseek-v4-pro");
         } catch {
@@ -364,6 +538,9 @@ export async function chatRoutes(app: FastifyInstance) {
         status: parsed.intent === "record" ? "auto" : "resolved",
       },
     });
+
+    // Trace: 记录 parse event（DeepSeek 返回 → 写入 ai_trace_event）
+    await tctx.recordParse(parsed, modelUsed, upgraded);
 
     // ── query ──────────────────────────────────
     if (parsed.intent === "query") {
@@ -391,6 +568,7 @@ export async function chatRoutes(app: FastifyInstance) {
         },
       });
       messages.push(aiMsg);
+      tctx.ok("query"); // trace 结束：status=ok
       return { intent: "query", reply: aiText, summary_card: pack.card, messages };
     }
 
@@ -401,6 +579,7 @@ export async function chatRoutes(app: FastifyInstance) {
         data: { user_id, date: dateObj, role: "assistant", kind: "text", content: aiText },
       });
       messages.push(aiMsg);
+      tctx.ok("chat");
       return { intent: "chat", reply: aiText, summary_card: pack.card, messages };
     }
 
@@ -410,7 +589,6 @@ export async function chatRoutes(app: FastifyInstance) {
       const target = pack.recent_records.find((r) => r.ref === discParsed.target);
       let aiText: string;
       if (!target) {
-        // 找不到目标记录，退化为 chat
         aiText = await answerChat(text, pack);
       } else {
         const fullRecord = target.kind === "food"
@@ -425,6 +603,7 @@ export async function chatRoutes(app: FastifyInstance) {
         data: { user_id, date: dateObj, role: "assistant", kind: "text", content: aiText },
       });
       messages.push(aiMsg);
+      tctx.ok("discuss");
       return { intent: "discuss", reply: aiText, summary_card: pack.card, messages };
     }
 
@@ -437,6 +616,7 @@ export async function chatRoutes(app: FastifyInstance) {
         });
         messages.push(aiMsg);
         const card = await buildContextCard(user_id);
+        tctx.partial("modify"); // trace 结束：status=partial（找不到 target）
         return { intent: "modify", reply: aiMsg.content, summary_card: card, messages };
       }
 
@@ -456,12 +636,14 @@ export async function chatRoutes(app: FastifyInstance) {
         });
         messages.push(aiMsg);
         const card = await buildContextCard(user_id);
+        tctx.ok("modify"); // trace 结束（correction 在用户确认时由 resolve 写）
         return { intent: "modify", reply: `确认删除「${target.name}」吗？`, pending: pr, summary_card: card, messages };
       }
 
       // append → 在 target 所属餐追加新食物（继承 meal_type），高置信直入库 + 撤销
       if (parsed.action === "append") {
         const meal_type = (target.meal_type ?? guessMealType()) as MealType;
+        await tctx.setMeal(meal_type); // trace: 关联 meal + 写入 state_snapshot
         const records: object[] = [];
         const replyParts: string[] = [];
         let pending: object | null = null;
@@ -469,8 +651,9 @@ export async function chatRoutes(app: FastifyInstance) {
         const confirmedCreateFns: Array<() => Promise<any>> = [];
         const pendingCreateFns: Array<() => Promise<any>> = [];
 
-        for (const item of (parsed.items ?? [])) {
-          const r = await processFoodItem(item, { user_id, meal_type, source, dateObj, withUndo: true });
+        for (let idx = 0; idx < (parsed.items ?? []).length; idx++) {
+          const item = (parsed.items ?? [])[idx];
+          const r = await processFoodItem(item, { user_id, meal_type, source, dateObj, withUndo: true, itrace: tctx.itemTrace(idx) });
           if (r.record) records.push(r.record);
           if (r.replyPart) replyParts.push(r.replyPart);
           if (r.needsRecompute) needsRecompute = true;
@@ -484,6 +667,7 @@ export async function chatRoutes(app: FastifyInstance) {
         const reply = records.length > 0
           ? `已追加：${replyParts.join("，")}。`
           : pending ? "请帮我确认追加内容。" : "好的。";
+        tctx.ok("modify", { mealType: meal_type });
         return { intent: "modify", reply, records: records.length ? records : undefined, pending: pending ?? undefined, summary_card: card, messages };
       }
 
@@ -548,6 +732,18 @@ export async function chatRoutes(app: FastifyInstance) {
         },
       });
       messages.push(aiMsg);
+      // Trace: correction event（modify update——用户主动修改了 AI 的记录）
+      await recordModifyCorrection({
+        traceId: tctx.traceId,
+        recordId: rec.id,
+        foodId: rec.food_id,
+        foodName: food.name,
+        prevState: prev_state,
+        newState: { food_name: food.name, food_id: food.id, portion_label, weight_g, calories: Math.round(nutrition.calories) },
+        isFoodChange: !!change.food,
+        modifyConfidence: (parsed as any).modify_confidence,
+      });
+      tctx.ok("modify");
       return { intent: "modify", reply: content, record: updated, summary_card: card, messages };
     }
 
@@ -555,6 +751,9 @@ export async function chatRoutes(app: FastifyInstance) {
     const user = await prisma.user.findUniqueOrThrow({ where: { id: user_id } });
     const weight_kg = Number(user.weight_kg) || 70;
     const meal_type = (extractMealTypeFromText(text) ?? parsed.meal_type ?? guessMealType()) as MealType;
+
+    // Trace: 确定 meal_type 后写入 meal_id + state_snapshot
+    await tctx.setMeal(meal_type);
 
     const records: object[] = [];
     let pending: object | null = null;
@@ -567,8 +766,10 @@ export async function chatRoutes(app: FastifyInstance) {
     const pendingCreateFns: Array<() => Promise<any>> = [];
 
     // 处理食物条目（逐条走共用 helper：歧义→候选卡 / 份量不明→份量卡 / 高置信→自动入库）
-    for (const item of parsed.items) {
-      const r = await processFoodItem(item, { user_id, meal_type, source, dateObj, withUndo: false });
+    let itemIdx = 0;
+    for (const item of (parsed.items ?? [])) {
+      const r = await processFoodItem(item, { user_id, meal_type, source, dateObj, withUndo: false, itrace: tctx.itemTrace(itemIdx) });
+      itemIdx++;
       if (r.record) records.push(r.record);
       if (r.replyPart) replyParts.push(r.replyPart);
       if (r.needsRecompute) needsRecompute = true;
@@ -626,6 +827,8 @@ export async function chatRoutes(app: FastifyInstance) {
       replyText = "已记录。";
     }
 
+    // Trace 结束：status=ok，所有 item 的 event 已在 processFoodItem 内写入
+    tctx.ok("record", { mealType: meal_type });
     return {
       intent: "record",
       reply: replyText,
@@ -675,6 +878,13 @@ export async function chatRoutes(app: FastifyInstance) {
       const summary_card = await buildContextCard(user_id);
       const aiMsg = await prisma.chatMessage.create({
         data: { user_id, date: dateObj, role: "assistant", kind: "text", content: `已删除：${candidates.name}` },
+      });
+      // Trace: correction event（用户确认删除）
+      recordDeleteCorrection({
+        recordId: candidates.record_id,
+        kind: candidates.kind,
+        name: candidates.name,
+        pendingId: id,
       });
       return { summary_card, messages: [aiMsg] };
     }
@@ -767,6 +977,17 @@ export async function chatRoutes(app: FastifyInstance) {
     });
 
     await prisma.pendingRecord.update({ where: { id }, data: { status: "resolved" } });
+
+    // Trace: correction event（用户从 portion_card / candidate_card 选择了具体份量或食物）
+    recordResolveCorrection({
+      foodName: food.name,
+      foodId: food.id,
+      portionLabel: portion_label,
+      weightG: weight_g,
+      pendingId: id,
+      pendingType: pr.type,
+      candidates: candidates as Record<string, unknown>,
+    });
 
     await recompute(user_id, today);
     const summary_card = await buildContextCard(user_id);

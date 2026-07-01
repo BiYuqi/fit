@@ -68,8 +68,8 @@ const GOAL_OPTIONS = [
   { value: 'maintain' as const, label: '维持' },
 ];
 
-const DEFICIT_MIN = 300;
-const DEFICIT_MAX = 750;
+const DEFICIT_MIN = 150;
+const DEFICIT_MAX = 1500;
 
 const ACTIVITY_LABEL: Record<string, string> = Object.fromEntries(
   ACTIVITY_OPTIONS.map((o) => [o.value, o.label]),

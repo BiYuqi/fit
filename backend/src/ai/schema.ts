@@ -54,9 +54,12 @@ export const ParseResultSchema = z.discriminatedUnion("intent", [
   z.object({
     intent: z.literal("record"),
     meal_type: MealTypeSchema.optional(),
-    items: z.array(FoodItemSchema).min(1),
+    items: z.array(FoodItemSchema).optional(),
     exercise: z.array(ExerciseItemSchema).optional(),
-  }),
+  }).refine(
+    (v) => (v.items && v.items.length > 0) || (v.exercise && v.exercise.length > 0),
+    { message: "record 意图至少需要 items 或 exercise 之一" },
+  ),
   z.object({
     intent: z.literal("query"),
   }),

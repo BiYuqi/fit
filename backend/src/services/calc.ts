@@ -12,7 +12,7 @@ export interface UserProfile {
   age: number;
   sex: Sex;
   activity_level: ActivityLevel;
-  daily_deficit?: number;  // default 500, range 300–750
+  daily_deficit?: number;  // default 500, range 150–1500
   protein_factor?: number; // default 1.8, range 1.6–2.2
 }
 
