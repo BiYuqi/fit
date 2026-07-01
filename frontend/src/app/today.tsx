@@ -2,6 +2,7 @@ import { useCallback, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from 'expo-router';
+import Svg, { Circle } from 'react-native-svg';
 
 import { GlassCard } from '@/components/glass-card';
 import { ThemedText } from '@/components/themed-text';
@@ -13,42 +14,49 @@ import { Colors, Glass, BottomTabInset, Spacing, FontSize } from '@/constants/th
 // ─── Nutrient palette (matches design) ───────────────────────────────────────
 const NUT_COLOR = { protein: '#34C759', fat: '#FF9F0A', carbs: '#5E5CE6' };
 
-// ─── Ring progress (pure View — half-circle rotation trick) ──────────────────
-// Uses two clipped halves each containing the full ring border.
-// right clip fills 0→50 %, left clip fills 50→100 %.
+// ─── Ring progress (SVG — reliable cross-platform) ───────────────────────────
 const RING_SIZE   = 108;
 const RING_STROKE = 12;
+const RING_RADIUS = (RING_SIZE - RING_STROKE) / 2;       // 48
+const RING_CIRC   = 2 * Math.PI * RING_RADIUS;           // ~301.6
+const RING_CENTER = RING_SIZE / 2;                        // 54
 
 function RingProgress({ progress, isDark }: { progress: number; isDark: boolean }) {
   const capped  = Math.min(Math.max(progress, 0), 1);
-  const degrees = capped * 360;
   const tint    = Glass[isDark ? 'dark' : 'light'].tint;
   const track   = Colors[isDark ? 'dark' : 'light'].backgroundElement;
-
-  // Rotation angles: from -180 (hidden) → 0 (fully revealed)
-  const rightRot = Math.min(degrees, 180) - 180;
-  const leftRot  = Math.max(degrees - 180, 0) - 180;
-
-  const ringBase = {
-    width: RING_SIZE, height: RING_SIZE,
-    borderRadius: RING_SIZE / 2, borderWidth: RING_STROKE,
-    position: 'absolute' as const,
-  };
+  const offset  = RING_CIRC * (1 - capped);
 
   return (
     <View style={styles.ringWrap}>
-      {/* Gray track */}
-      <View style={[ringBase, { top: 0, left: 0, borderColor: track }]} />
-      {/* Right half clip */}
-      <View style={styles.ringClipR}>
-        <View style={[ringBase, { left: -(RING_SIZE / 2), borderColor: tint,
-          transform: [{ rotate: `${rightRot}deg` }] }]} />
-      </View>
-      {/* Left half clip */}
-      <View style={styles.ringClipL}>
-        <View style={[ringBase, { left: 0, borderColor: tint,
-          transform: [{ rotate: `${leftRot}deg` }] }]} />
-      </View>
+      {/* SVG ring rotated -90° so progress starts from top (12 o'clock) */}
+      <Svg
+        width={RING_SIZE}
+        height={RING_SIZE}
+        style={{ position: 'absolute', transform: [{ rotate: '-90deg' }] }}
+      >
+        {/* Gray track (full circle) */}
+        <Circle
+          cx={RING_CENTER}
+          cy={RING_CENTER}
+          r={RING_RADIUS}
+          stroke={track}
+          strokeWidth={RING_STROKE}
+          fill="none"
+        />
+        {/* Blue progress arc */}
+        <Circle
+          cx={RING_CENTER}
+          cy={RING_CENTER}
+          r={RING_RADIUS}
+          stroke={tint}
+          strokeWidth={RING_STROKE}
+          fill="none"
+          strokeDasharray={RING_CIRC}
+          strokeDashoffset={offset}
+          strokeLinecap="round"
+        />
+      </Svg>
       {/* Center label */}
       <View style={styles.ringCenter}>
         <ThemedText style={styles.ringPct}>{Math.round(capped * 100)}%</ThemedText>
@@ -262,8 +270,6 @@ const styles = StyleSheet.create({
 
   // Ring
   ringWrap:   { width: RING_SIZE, height: RING_SIZE, flexShrink: 0 },
-  ringClipR:  { position: 'absolute', width: RING_SIZE / 2, height: RING_SIZE, left: RING_SIZE / 2, top: 0, overflow: 'hidden' },
-  ringClipL:  { position: 'absolute', width: RING_SIZE / 2, height: RING_SIZE, left: 0,            top: 0, overflow: 'hidden' },
   ringCenter: {
     position: 'absolute',
     top: RING_STROKE, left: RING_STROKE, right: RING_STROKE, bottom: RING_STROKE,
