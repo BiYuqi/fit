@@ -1,8 +1,9 @@
 import { StyleSheet, TouchableOpacity, View } from 'react-native';
 import { SymbolView } from 'expo-symbols';
+import { GlassCard } from '@/components/glass-card';
 import { ThemedText } from '@/components/themed-text';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { Colors, Glass, Radius } from '@/constants/theme';
+import { Colors } from '@/constants/theme';
 import { useChatStore } from '@/stores/chat-store';
 import { useAuthStore } from '@/stores/auth-store';
 import type { RecordCardPayload } from '@/types/chat';
@@ -32,7 +33,6 @@ export function RecordCard({
   const scheme = useColorScheme();
   const isDark = scheme === 'dark';
   const colors = Colors[isDark ? 'dark' : 'light'];
-  const glass = Glass[isDark ? 'dark' : 'light'];
   const meal = MEAL_LABEL[mealType ?? ''] ?? '加餐';
 
   const { undo, undoneCards } = useChatStore();
@@ -47,15 +47,7 @@ export function RecordCard({
 
   return (
     <View style={styles.wrapper}>
-      <View style={[
-        styles.card,
-        isUndone && styles.cardUndone,
-        {
-          backgroundColor: isDark ? 'rgba(44,44,48,0.92)' : '#FFFFFF',
-          borderColor: glass.border,
-          ...glass.shadow,
-        },
-      ]}>
+      <GlassCard padding={12} gap={8} style={[styles.card, isUndone && styles.cardUndone]}>
         {/* badge */}
         <View style={styles.badgeRow}>
           <SymbolView name="checkmark.circle.fill" size={13} tintColor={MACRO_DOTS.protein} />
@@ -104,7 +96,7 @@ export function RecordCard({
             )}
           </>
         )}
-      </View>
+      </GlassCard>
     </View>
   );
 }
@@ -130,10 +122,6 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
   },
   card: {
-    borderRadius: Radius.lg,
-    borderWidth: StyleSheet.hairlineWidth,
-    padding: 12,
-    gap: 8,
     width: '90%' as any,
   },
   cardUndone: {

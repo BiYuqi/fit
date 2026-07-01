@@ -4,11 +4,19 @@ import { Platform, StyleSheet, View, ViewProps } from 'react-native';
 import { BlurIntensity, Glass, Radius } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 
-type GlassCardProps = ViewProps & { blurIntensity?: number };
+type GlassCardProps = ViewProps & {
+  blurIntensity?: number;
+  /** Override default padding (16). Applied to the inner card / BlurView. */
+  padding?: number;
+  /** Gap between children, applied to the inner card. */
+  gap?: number;
+};
 
 export function GlassCard({
   style,
   blurIntensity = BlurIntensity.glass,
+  padding: paddingOverride,
+  gap,
   children,
   ...props
 }: GlassCardProps) {
@@ -17,6 +25,11 @@ export function GlassCard({
   const glass = Glass[isDark ? 'dark' : 'light'];
   const shadow = glass.shadow;
 
+  // Inner card style — starts with base then overrides padding / gap if provided.
+  const inner: any[] = [styles.card, { borderColor: glass.border }];
+  if (paddingOverride !== undefined) inner.push({ padding: paddingOverride });
+  if (gap !== undefined) inner.push({ gap });
+
   if (Platform.OS === 'ios') {
     return (
       // Shadow must be on an outer View — BlurView overflow:hidden clips it
@@ -24,7 +37,7 @@ export function GlassCard({
         <BlurView
           intensity={blurIntensity}
           tint={isDark ? 'systemChromeMaterialDark' : 'systemChromeMaterialLight'}
-          style={[styles.card, { borderColor: glass.border }]}
+          style={inner}
           {...props}>
           {children}
         </BlurView>
@@ -32,10 +45,10 @@ export function GlassCard({
     );
   }
 
+  // Android / web fallback — solid background; style goes last so caller wins
+  inner.push({ backgroundColor: glass.background }, shadow, style);
   return (
-    <View
-      style={[styles.card, { backgroundColor: glass.background, borderColor: glass.border }, shadow, style]}
-      {...props}>
+    <View style={inner} {...props}>
       {children}
     </View>
   );

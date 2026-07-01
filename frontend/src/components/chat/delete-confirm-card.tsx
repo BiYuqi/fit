@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { StyleSheet, TouchableOpacity, View } from 'react-native';
 import { SymbolView } from 'expo-symbols';
+import { GlassCard } from '@/components/glass-card';
 import { ThemedText } from '@/components/themed-text';
 import { Colors, Glass, Radius } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
@@ -34,14 +35,7 @@ export function DeleteConfirmCard({
 
   return (
     <View style={styles.wrapper}>
-      <View style={[
-        styles.card,
-        {
-          backgroundColor: isDark ? 'rgba(44,44,48,0.92)' : '#FFFFFF',
-          borderColor: glass.border,
-          ...glass.shadow,
-        },
-      ]}>
+      <GlassCard padding={12} gap={8} style={styles.card}>
         <View style={styles.titleRow}>
           <SymbolView name="trash" size={14} tintColor={done ? colors.textSecondary : DESTRUCTIVE} />
           <ThemedText style={[styles.title, { color: colors.text }]} numberOfLines={2}>
@@ -75,7 +69,7 @@ export function DeleteConfirmCard({
             </TouchableOpacity>
           </View>
         )}
-      </View>
+      </GlassCard>
     </View>
   );
 }
@@ -87,10 +81,6 @@ const styles = StyleSheet.create({
   card: {
     alignSelf: 'flex-start',
     maxWidth: '100%',
-    borderRadius: Radius.lg,
-    borderWidth: StyleSheet.hairlineWidth,
-    padding: 12,
-    gap: 8,
   },
   titleRow: {
     flexDirection: 'row',

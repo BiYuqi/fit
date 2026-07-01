@@ -1,6 +1,7 @@
 import { StyleSheet, View } from 'react-native';
+import { GlassCard } from '@/components/glass-card';
 import { ThemedText } from '@/components/themed-text';
-import { Colors, Glass, Radius } from '@/constants/theme';
+import { Colors, Glass } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import type { ContextCard } from '@/types/chat';
 
@@ -31,14 +32,7 @@ export function QueryCard({
 
   return (
     <View style={styles.wrapper}>
-      <View style={[
-        styles.card,
-        {
-          backgroundColor: isDark ? 'rgba(44,44,48,0.92)' : '#FFFFFF',
-          borderColor: glass.border,
-          ...glass.shadow,
-        },
-      ]}>
+      <GlassCard padding={12} gap={8} style={styles.card}>
         {/* Title */}
         <ThemedText style={[styles.title, { color: colors.textSecondary }]}>今天还可以吃</ThemedText>
 
@@ -65,7 +59,7 @@ export function QueryCard({
         {content ? (
           <ThemedText style={[styles.advice, { color: colors.textSecondary }]}>{content}</ThemedText>
         ) : null}
-      </View>
+      </GlassCard>
     </View>
   );
 }
@@ -76,10 +70,6 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
   },
   card: {
-    borderRadius: Radius.lg,
-    borderWidth: StyleSheet.hairlineWidth,
-    padding: 12,
-    gap: 8,
     width: '90%' as any,
   },
   title: {
@@ -91,13 +81,13 @@ const styles = StyleSheet.create({
     alignItems: 'baseline',
   },
   bigNum: {
-    fontSize: 44,
+    fontSize: 28,
     fontWeight: '700',
-    lineHeight: 48,
+    lineHeight: 32,
   },
   bigUnit: {
-    fontSize: 18,
-    fontWeight: '600',
+    fontSize: 13,
+    fontWeight: '500',
   },
   trackOuter: {
     height: 6,
