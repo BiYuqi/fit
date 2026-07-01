@@ -2,7 +2,7 @@ import { StyleSheet, TouchableOpacity, View } from 'react-native';
 import { SymbolView } from 'expo-symbols';
 import { ThemedText } from '@/components/themed-text';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { Colors, Glass } from '@/constants/theme';
+import { Colors, Glass, Radius } from '@/constants/theme';
 import { useChatStore } from '@/stores/chat-store';
 import { useAuthStore } from '@/stores/auth-store';
 import type { ExerciseCardPayload } from '@/types/chat';
@@ -85,12 +85,11 @@ export function ExerciseCard({
 
 const styles = StyleSheet.create({
   wrapper: {
-    paddingHorizontal: 16,
-    marginVertical: 4,
+    marginVertical: 6,
     alignItems: 'flex-start',
   },
   card: {
-    borderRadius: 16,
+    borderRadius: Radius.lg,
     borderWidth: StyleSheet.hairlineWidth,
     padding: 12,
     gap: 8,

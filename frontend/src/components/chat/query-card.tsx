@@ -72,7 +72,6 @@ export function QueryCard({
 
 const styles = StyleSheet.create({
   wrapper: {
-    paddingHorizontal: 16,
     marginVertical: 6,
     alignItems: 'flex-start',
   },

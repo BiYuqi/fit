@@ -8,7 +8,7 @@ export function ClarifyCard({ payload }: { payload: ClarifyCardPayload }) {
   const theme = useTheme();
   return (
     <View style={styles.wrapper}>
-      <GlassCard style={styles.card}>
+      <GlassCard style={[styles.card, { padding: 12 }]}>
         <ThemedText style={styles.icon}>🤔</ThemedText>
         <ThemedText style={styles.title}>
           我不太确定「{payload.query}」是什么食物
@@ -23,13 +23,12 @@ export function ClarifyCard({ payload }: { payload: ClarifyCardPayload }) {
 
 const styles = StyleSheet.create({
   wrapper: {
-    paddingHorizontal: 16,
-    marginVertical: 4,
+    marginVertical: 6,
     alignItems: 'flex-start',
   },
   card: {
     maxWidth: '84%',
-    gap: 6,
+    gap: 8,
   },
   icon: {
     fontSize: 22,

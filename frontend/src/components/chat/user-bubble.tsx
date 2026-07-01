@@ -20,7 +20,6 @@ const styles = StyleSheet.create({
   row: {
     flexDirection: 'row',
     justifyContent: 'flex-end',
-    paddingHorizontal: 16,
     marginVertical: 4,
   },
   bubble: {

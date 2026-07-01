@@ -135,7 +135,6 @@ export function MessageItem({ message, isLast }: { message: ChatMessage; isLast?
 
 const styles = StyleSheet.create({
   aiWrapper: {
-    paddingHorizontal: 16,
     marginVertical: 4,
     alignItems: 'flex-start',
   },

@@ -144,7 +144,6 @@ export function PortionCard({
 
 const styles = StyleSheet.create({
   wrapper: {
-    paddingHorizontal: 16,
     marginVertical: 6,
   },
   card: {
@@ -152,8 +151,8 @@ const styles = StyleSheet.create({
     maxWidth: '100%',
     borderRadius: Radius.lg,
     borderWidth: StyleSheet.hairlineWidth,
-    padding: 16,
-    gap: 12,
+    padding: 12,
+    gap: 8,
   },
   cardResolved: {
     padding: 10,
