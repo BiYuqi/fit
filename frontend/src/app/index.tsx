@@ -47,7 +47,12 @@ function EmptyState() {
 export default function ChatScreen() {
   const insets = useSafeAreaInsets();
   const flatListRef = useRef<FlatList<ChatMessage>>(null);
-  const scrolledRef = useRef(false);
+  // Scroll-intent refs — written by effects, consumed by onContentSizeChange
+  // Using refs (not state) avoids stale-closure in the FlatList callback
+  const shouldScrollRef    = useRef(false);
+  const scrollAnimatedRef  = useRef(false);
+  const lastScrolledDateRef = useRef('');
+  const prevLenRef          = useRef(0);
 
   const { token } = useAuthStore();
   const {
@@ -88,6 +93,32 @@ export default function ChatScreen() {
     loadDates(token);
   }, [token]);
 
+  // Effects only SET intent refs — never call scrollToEnd directly.
+  // Actual scroll happens in onContentSizeChange, which fires after FlatList
+  // has finished measuring content (the only moment scrollToEnd is reliable).
+
+  useEffect(() => {
+    if (visibleMessages.length === 0) { prevLenRef.current = 0; return; }
+    const dateChanged = lastScrolledDateRef.current !== selectedDate;
+    const prevLen = prevLenRef.current;
+    prevLenRef.current = visibleMessages.length;
+    if (dateChanged) {
+      lastScrolledDateRef.current = selectedDate;
+      shouldScrollRef.current   = true;
+      scrollAnimatedRef.current = false;
+    } else if (visibleMessages.length > prevLen) {
+      shouldScrollRef.current   = true;
+      scrollAnimatedRef.current = true;
+    }
+  }, [selectedDate, visibleMessages.length]);
+
+  useEffect(() => {
+    if (isSending) {
+      shouldScrollRef.current   = true;
+      scrollAnimatedRef.current = true;
+    }
+  }, [isSending]);
+
 
   const handleSend = useCallback(
     (text: string) => {
@@ -100,7 +131,7 @@ export default function ChatScreen() {
   const handleSelectDate = useCallback(
     (date: string) => {
       if (!token) return;
-      scrolledRef.current = false;
+      lastScrolledDateRef.current = ''; // force scroll on next message load
       setDate(date, token);
     },
     [token, setDate],
@@ -129,37 +160,42 @@ export default function ChatScreen() {
 
   return (
     <ThemedView style={[styles.root, { backgroundColor: 'transparent' }]}>
-      {isLoading && messages.length === 0 ? (
-        <View style={[styles.loadingCenter, { paddingTop: topPad }]}>
-          <ActivityIndicator />
-        </View>
-      ) : (
-        <FlatList
-          ref={flatListRef}
-          data={visibleMessages}
-          renderItem={renderItem}
-          keyExtractor={keyExtractor}
-          style={styles.flatList}
-          contentContainerStyle={[
-            styles.list,
-            { paddingTop: topPad },
-            visibleMessages.length === 0 && styles.listEmpty,
-          ]}
-          ListEmptyComponent={<EmptyState />}
-          ListFooterComponent={isSending ? <ThinkingBubble /> : null}
-          onContentSizeChange={() => {
-            // Fire after layout is ready — more reliable than setTimeout
-            if (visibleMessages.length > 0 || isSending) {
-              flatListRef.current?.scrollToEnd({ animated: scrolledRef.current });
-              scrolledRef.current = true;
-            }
-          }}
-          showsVerticalScrollIndicator={false}
-          keyboardDismissMode="on-drag"
-          keyboardShouldPersistTaps="handled"
-          automaticallyAdjustKeyboardInsets
-        />
-      )}
+      {/* FlatList stays mounted at all times so flatListRef is never null */}
+      <FlatList
+        ref={flatListRef}
+        data={visibleMessages}
+        renderItem={renderItem}
+        keyExtractor={keyExtractor}
+        style={styles.flatList}
+        contentContainerStyle={[
+          styles.list,
+          { paddingTop: topPad },
+          visibleMessages.length === 0 && styles.listEmpty,
+        ]}
+        ListEmptyComponent={
+          isLoading ? (
+            <View style={styles.loadingCenter}>
+              <ActivityIndicator />
+            </View>
+          ) : (
+            <EmptyState />
+          )
+        }
+        ListFooterComponent={isSending ? <ThinkingBubble /> : null}
+        initialNumToRender={200}
+        maxToRenderPerBatch={200}
+        windowSize={99}
+        onContentSizeChange={() => {
+          if (shouldScrollRef.current) {
+            shouldScrollRef.current = false;
+            flatListRef.current?.scrollToEnd({ animated: scrollAnimatedRef.current });
+          }
+        }}
+        showsVerticalScrollIndicator={false}
+        keyboardDismissMode="on-drag"
+        keyboardShouldPersistTaps="handled"
+        automaticallyAdjustKeyboardInsets
+      />
 
       {/* Floating date pill — centered at top, absolute over messages */}
       <View style={[styles.datePillWrapper, { top: insets.top + 10 }]} pointerEvents="box-none">
@@ -194,6 +230,7 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
+    paddingTop: 60,
   },
   datePillWrapper: {
     position: 'absolute',

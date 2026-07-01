@@ -53,9 +53,8 @@ export function DateSelector({ selectedDate, onSelect }: Props) {
   const handleChange = (_event: DateTimePickerEvent, date?: Date) => {
     if (date) {
       onSelect(localDateStr(date));
+      setOpen(false);
     }
-    // On iOS inline, keep open until user taps backdrop
-    if (Platform.OS !== 'ios') setOpen(false);
   };
 
   return (
