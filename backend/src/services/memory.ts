@@ -84,8 +84,8 @@ export async function buildMemoryPack(user_id: string): Promise<MemoryPack> {
   const todayDate = toDateOnly(todayStr());
 
   // 近3天（不含今天）的起始日
-  const sevenDaysAgo = new Date(todayDate);
-  sevenDaysAgo.setUTCDate(sevenDaysAgo.getUTCDate() - 3);
+  const threeDaysAgo = new Date(todayDate);
+  threeDaysAgo.setUTCDate(threeDaysAgo.getUTCDate() - 3);
   const yesterday = new Date(todayDate);
   yesterday.setUTCDate(yesterday.getUTCDate() - 1);
 
@@ -108,13 +108,13 @@ export async function buildMemoryPack(user_id: string): Promise<MemoryPack> {
     }),
     // 近7天已有 summary 的天
     prisma.dailySummary.findMany({
-      where: { user_id, date: { gte: sevenDaysAgo, lte: yesterday } },
+      where: { user_id, date: { gte: threeDaysAgo, lte: yesterday } },
       orderBy: { date: "desc" },
     }),
     // 近7天有记录但可能没有 summary 的天（实时聚合兜底）
     prisma.foodRecord.groupBy({
       by: ["date"],
-      where: { user_id, date: { gte: sevenDaysAgo, lte: yesterday } },
+      where: { user_id, date: { gte: threeDaysAgo, lte: yesterday } },
       _sum: { calories: true, protein: true, fat: true, carbs: true },
     }),
   ]);
@@ -210,56 +210,4 @@ export async function buildMemoryPack(user_id: string): Promise<MemoryPack> {
     recent_turns,
     recent_days,
   };
-}
-
-// 渲染为紧凑文本块，作为 system context 拼进 prompt（去 payload、去闲聊长文本）
-export function renderMemoryBlock(pack: MemoryPack): string {
-  const { profile: p, card, recent_records, recent_turns } = pack;
-  const lines: string[] = [];
-
-  // L2 画像 + 今日进度
-  const prof: string[] = [];
-  if (p.gender) prof.push(p.gender === "male" ? "男" : "女");
-  if (p.age != null) prof.push(`${p.age}岁`);
-  if (p.height_cm != null) prof.push(`身高${p.height_cm}`);
-  if (p.weight_kg != null) prof.push(`体重${p.weight_kg}`);
-  if (p.target_weight_kg != null) prof.push(`目标体重${p.target_weight_kg}`);
-  prof.push(p.goal_type === "cut" ? "目标减脂" : "目标维持");
-  prof.push(`每日缺口${p.daily_deficit}`);
-  lines.push(`【用户档案】${prof.join(" ")}`);
-  lines.push(
-    `【今日进度】摄入${card.today.in} 目标${card.targets.calories} 还可吃${card.today.remaining} 蛋白${card.today.p}/${card.targets.protein}`
-  );
-
-  // L1 今日已记录
-  if (recent_records.length > 0) {
-    lines.push("【今日已记录】");
-    for (const r of recent_records) {
-      if (r.kind === "food") {
-        lines.push(
-          `- ${r.ref} ${MEAL_ZH[r.meal_type ?? ""] ?? ""}·${r.name} ${PORTION_ZH[r.portion ?? ""] ?? ""} ${r.weight_g}g ${r.calories}kcal`
-        );
-      } else {
-        lines.push(`- ${r.ref} 运动·${r.name} ${r.duration_min ?? "?"}min 消耗${r.calories}kcal`);
-      }
-    }
-  }
-
-  // L0 最近对话（旧→新）
-  if (recent_turns.length > 0) {
-    lines.push("【最近对话】(旧→新)");
-    for (const t of recent_turns) {
-      const act =
-        t.intent === "record"
-          ? `记录(${(t.foods ?? []).map((f) => `${f.name}/${f.portion}`).join("、")})`
-          : t.intent === "query"
-          ? "查询"
-          : t.intent === "chat"
-          ? "闲聊/咨询"
-          : "?";
-      lines.push(`- 用户:"${t.said}" → ${act}`);
-    }
-  }
-
-  return lines.join("\n");
 }
