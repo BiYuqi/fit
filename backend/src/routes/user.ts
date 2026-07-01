@@ -14,7 +14,8 @@ const PutBodySchema = z.object({
   target_weight_kg: z.number().min(20).max(500).optional(),
   activity_level: z.enum(["sedentary", "light", "moderate", "active", "very_active"]).optional(),
   goal_type: z.enum(["cut", "maintain"]).optional(),
-  daily_deficit: z.number().int().min(300).max(750).optional(),
+  daily_deficit: z.number().int().min(0).max(750).optional(),
+  custom_tdee: z.number().int().min(800).max(6000).optional(),
 });
 
 function computeDerived(user: User) {
@@ -32,10 +33,15 @@ function computeDerived(user: User) {
     daily_deficit: user.daily_deficit,
   };
 
-  const { target_calories, target_protein_g } = dailyTargets(profile);
+  const td = user.custom_tdee != null ? user.custom_tdee : Math.round(tdee(profile) * 10) / 10;
+  const b = Math.round(bmr(profile) * 10) / 10;
+  const deficit = user.daily_deficit ?? 500;
+  const target_calories = Math.round(td - deficit);
+  const target_protein_g = Math.round(Number(user.weight_kg) * 1.8);
+
   return {
-    bmr: Math.round(bmr(profile) * 10) / 10,
-    tdee: Math.round(tdee(profile) * 10) / 10,
+    bmr: b,
+    tdee: td,
     target_calories,
     target_protein: target_protein_g,
   };
@@ -54,6 +60,7 @@ function formatUser(user: User) {
     activity_level: user.activity_level,
     goal_type: user.goal_type,
     daily_deficit: user.daily_deficit,
+    custom_tdee: user.custom_tdee,
     onboarded: user.onboarded,
     created_at: user.created_at,
     ...computeDerived(user),

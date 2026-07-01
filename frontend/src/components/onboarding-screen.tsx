@@ -23,7 +23,7 @@ import { useAuthStore } from '@/stores/auth-store';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
-const TOTAL_STEPS = 7;
+const TOTAL_STEPS = 8;
 
 const ACTIVITY_OPTIONS = [
   { value: 'sedentary' as const, label: '久坐', desc: '几乎不运动，以办公室生活为主', icon: { ios: 'laptopcomputer' as const, android: 'computer' as const, web: 'computer' as const } },
@@ -37,6 +37,11 @@ const PACE_OPTIONS = [
   { value: 250, label: '温和', desc: '约 0.25 kg/周 · 最容易坚持', recommended: false },
   { value: 420, label: '标准', desc: '约 0.4 kg/周 · 速度与可持续兼顾', recommended: true },
   { value: 600, label: '激进', desc: '约 0.6 kg/周 · 需要更强毅力', recommended: false },
+];
+
+const GOAL_TYPE_OPTIONS = [
+  { value: 'cut' as const, label: '减脂', desc: '创造热量缺口，逐步降低体重', icon: { ios: 'arrow.down.circle' as const, android: 'trending_down' as const, web: 'trending_down' as const } },
+  { value: 'maintain' as const, label: '维持', desc: '保持当前体重，摄入约等于消耗', icon: { ios: 'equal.circle' as const, android: 'balance' as const, web: 'balance' as const } },
 ];
 
 const ACTIVITY_COEFF: Record<string, number> = {
@@ -56,6 +61,7 @@ type FormData = {
   weight_kg: number;
   target_weight_kg: number;
   activity_level: 'sedentary' | 'light' | 'moderate' | 'active' | 'very_active';
+  goal_type: 'cut' | 'maintain';
   daily_deficit: number;
 };
 
@@ -83,9 +89,9 @@ function fmt(n: number) {
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-type Props = { onComplete: () => void };
+type Props = { onComplete: () => void; initialData?: Partial<FormData> };
 
-export function OnboardingScreen({ onComplete }: Props) {
+export function OnboardingScreen({ onComplete, initialData }: Props) {
   const [step, setStep] = useState(1);
   const [submitting, setSubmitting] = useState(false);
   const [profile, setProfile] = useState<ProfileResp | null>(null);
@@ -103,16 +109,19 @@ export function OnboardingScreen({ onComplete }: Props) {
   const text3 = scheme === 'light' ? 'rgba(0,0,0,0.22)' : 'rgba(255,255,255,0.28)';
   const hairline = scheme === 'light' ? 'rgba(0,0,0,0.08)' : 'rgba(255,255,255,0.10)';
 
+  const defaults: FormData = {
+    gender: 'female',
+    age: 25,
+    height_cm: 165,
+    weight_kg: 60,
+    target_weight_kg: 55,
+    activity_level: 'light',
+    goal_type: 'cut',
+    daily_deficit: 420,
+  };
+
   const { watch, setValue, getValues } = useForm<FormData>({
-    defaultValues: {
-      gender: 'female',
-      age: 25,
-      height_cm: 165,
-      weight_kg: 60,
-      target_weight_kg: 55,
-      activity_level: 'light',
-      daily_deficit: 420,
-    },
+    defaultValues: initialData ? { ...defaults, ...initialData } : defaults,
   });
 
   const fd = watch();
@@ -125,22 +134,27 @@ export function OnboardingScreen({ onComplete }: Props) {
     setSubmitting(true);
     try {
       const data = getValues();
+      const body: Record<string, unknown> = {
+        gender: data.gender,
+        age: data.age,
+        height_cm: data.height_cm,
+        weight_kg: data.weight_kg,
+        target_weight_kg: data.target_weight_kg,
+        activity_level: data.activity_level,
+        goal_type: data.goal_type,
+      };
+      if (data.goal_type === 'cut') {
+        body.daily_deficit = data.daily_deficit;
+      } else {
+        body.daily_deficit = 0;
+      }
       const resp = await apiFetch<ProfileResp>('/api/user/profile', {
         method: 'PUT',
         token,
-        body: JSON.stringify({
-          gender: data.gender,
-          age: data.age,
-          height_cm: data.height_cm,
-          weight_kg: data.weight_kg,
-          target_weight_kg: data.target_weight_kg,
-          activity_level: data.activity_level,
-          goal_type: 'cut',
-          daily_deficit: data.daily_deficit,
-        }),
+        body: JSON.stringify(body),
       });
       setProfile(resp);
-      setStep(7);
+      setStep(8);
     } catch {
       setSubmitError('提交失败，请重试');
     } finally {
@@ -148,9 +162,9 @@ export function OnboardingScreen({ onComplete }: Props) {
     }
   };
 
-  const tdeeEstimate = step >= 6 ? estimateTDEE(fd) : 0;
-  const targetEstimate = step >= 6 ? tdeeEstimate - fd.daily_deficit : 0;
-  const isResult = step === 7;
+  const tdEstimate = step >= 7 ? estimateTDEE(fd) : 0;
+  const targetEstimate = step >= 7 ? tdEstimate - fd.daily_deficit : 0;
+  const isResult = step === 8;
 
   // ── Stepper helpers ──────────────────────────────────────────────────────
   function Stepper({
@@ -416,8 +430,65 @@ export function OnboardingScreen({ onComplete }: Props) {
               </View>
             )}
 
-            {/* ══════════════════ Step 6: Goal Pace ══════════════════ */}
+            {/* ══════════════════ Step 6: Goal Type ══════════════════ */}
             {step === 6 && (
+              <View style={ss.stepContent}>
+                <Text style={[ss.title, { color: colors.text }]}>你的目标是什么？</Text>
+                <Text style={[ss.subtitle, { color: colors.textSecondary }]}>
+                  减脂会创造热量缺口，维持则摄入约等于消耗。
+                </Text>
+                <View style={ss.activityList}>
+                  {GOAL_TYPE_OPTIONS.map((opt) => {
+                    const selected = fd.goal_type === opt.value;
+                    return (
+                      <TouchableOpacity
+                        key={opt.value}
+                        style={[
+                          ss.activityCard,
+                          {
+                            backgroundColor: selected ? accentSoft : cardBg,
+                            borderWidth: selected ? 1.5 : 0.5,
+                            borderColor: selected ? accent : cardBorder,
+                          },
+                        ]}
+                        onPress={() => setValue('goal_type', opt.value)}
+                        activeOpacity={0.8}>
+                        <SymbolView
+                          name={opt.icon}
+                          size={24}
+                          tintColor={selected ? accent : colors.textSecondary}
+                          style={ss.activityIcon}
+                        />
+                        <View style={ss.activityText}>
+                          <Text style={[ss.activityLabel, { color: selected ? accent : colors.text }]}>
+                            {opt.label}
+                          </Text>
+                          <Text style={[ss.activityDesc, { color: selected ? accent : colors.textSecondary, opacity: selected ? 0.85 : 1 }]}>
+                            {opt.desc}
+                          </Text>
+                        </View>
+                        {selected ? (
+                          <SymbolView
+                            name={{ ios: 'checkmark.circle.fill', android: 'check_circle', web: 'check_circle' }}
+                            size={22}
+                            tintColor={accent}
+                            style={{ width: 22, height: 22 }}
+                          />
+                        ) : (
+                          <View style={[ss.radioSmall, { borderColor: text3 }]} />
+                        )}
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+                {submitError && fd.goal_type === 'maintain' && (
+                  <Text style={ss.errorText}>{submitError}</Text>
+                )}
+              </View>
+            )}
+
+            {/* ══════════════════ Step 7: Goal Pace ══════════════════ */}
+            {step === 7 && fd.goal_type === 'cut' && (
               <View style={ss.stepContent}>
                 <Text style={[ss.title, { color: colors.text }]}>想用什么节奏减？</Text>
                 <Text style={[ss.subtitle, { color: colors.textSecondary }]}>
@@ -480,7 +551,7 @@ export function OnboardingScreen({ onComplete }: Props) {
                 <View style={[ss.previewCard, { backgroundColor: cardBg, borderColor: cardBorder }]}>
                   <View style={ss.previewRow}>
                     <Text style={[ss.previewRowLabel, { color: colors.textSecondary }]}>总消耗 TDEE</Text>
-                    <Text style={[ss.previewRowVal, { color: colors.text }]}>{fmt(tdeeEstimate)}</Text>
+                    <Text style={[ss.previewRowVal, { color: colors.text }]}>{fmt(tdEstimate)}</Text>
                     <Text style={[ss.previewRowSep, { color: colors.textSecondary }]}> − </Text>
                     <Text style={[ss.previewRowLabel, { color: colors.textSecondary }]}>缺口</Text>
                     <Text style={[ss.previewRowVal, { color: '#34C759' }]}>{fmt(fd.daily_deficit)}</Text>
@@ -501,8 +572,8 @@ export function OnboardingScreen({ onComplete }: Props) {
               </View>
             )}
 
-            {/* ══════════════════ Step 7: Result ══════════════════ */}
-            {step === 7 && profile && (
+            {/* ══════════════════ Step 8: Result ══════════════════ */}
+            {step === 8 && profile && (
               <View style={ss.stepContent}>
                 <View style={ss.resultHero}>
                   <View style={[ss.resultIcon, { backgroundColor: accent, shadowColor: accent }]}>
@@ -514,25 +585,35 @@ export function OnboardingScreen({ onComplete }: Props) {
                     />
                   </View>
                   <Text style={[ss.resultTagline, { color: colors.textSecondary }]}>
-                    为你算好啦，你每天大约可以吃
+                    {fd.goal_type === 'maintain'
+                      ? '维持当前体重，你每天大约可以吃'
+                      : '为你算好啦，你每天大约可以吃'}
                   </Text>
                   <View style={ss.resultBigNum}>
                     <Text style={[ss.resultBigVal, { color: accent }]}>{fmt(Math.round(profile.target_calories))}</Text>
                     <Text style={[ss.resultBigUnit, { color: colors.textSecondary }]}>kcal</Text>
                   </View>
                   <Text style={[ss.resultSub, { color: colors.textSecondary }]}>
-                    按每天 −{fmt(profile.tdee - Math.round(profile.target_calories))} kcal 缺口，
-                    预计每周减约 {((profile.tdee - Math.round(profile.target_calories)) / 1000).toFixed(1)} kg
+                    {fd.goal_type === 'maintain'
+                      ? '摄入约等于总消耗，保持体重稳定。'
+                      : `按每天 −${fmt(profile.tdee - Math.round(profile.target_calories))} kcal 缺口，
+                    预计每周减约 ${((profile.tdee - Math.round(profile.target_calories)) / 1000).toFixed(1)} kg`}
                   </Text>
                 </View>
 
                 {/* Breakdown card */}
                 <View style={[ss.breakdownCard, { backgroundColor: cardBg, borderColor: cardBorder }]}>
-                  {[
-                    { label: '总消耗 TDEE', val: `${fmt(Math.round(profile.tdee))} kcal`, accent: false },
-                    { label: '每日缺口', val: `− ${fmt(profile.tdee - Math.round(profile.target_calories))} kcal`, accent: true },
-                    { label: '目标摄入', val: `${fmt(Math.round(profile.target_calories))} kcal`, accent: false, bold: true },
-                  ].map((row, i, arr) => (
+                  {(fd.goal_type === 'maintain'
+                    ? [
+                        { label: '总消耗 TDEE', val: `${fmt(Math.round(profile.tdee))} kcal`, accent: false },
+                        { label: '目标摄入', val: `${fmt(Math.round(profile.target_calories))} kcal`, accent: false, bold: true },
+                      ]
+                    : [
+                        { label: '总消耗 TDEE', val: `${fmt(Math.round(profile.tdee))} kcal`, accent: false },
+                        { label: '每日缺口', val: `− ${fmt(profile.tdee - Math.round(profile.target_calories))} kcal`, accent: true },
+                        { label: '目标摄入', val: `${fmt(Math.round(profile.target_calories))} kcal`, accent: false, bold: true },
+                      ]
+                  ).map((row, i, arr) => (
                     <View key={row.label}>
                       <View style={ss.breakdownRow}>
                         <Text style={[ss.breakdownLabel, { color: colors.textSecondary }]}>{row.label}</Text>
@@ -581,7 +662,21 @@ export function OnboardingScreen({ onComplete }: Props) {
                 />
               </TouchableOpacity>
             )}
-            {step === 6 && (
+            {step === 6 && fd.goal_type === 'cut' && (
+              <TouchableOpacity
+                style={[ss.cta, { backgroundColor: accent, shadowColor: accent }]}
+                onPress={goNext}
+                activeOpacity={0.85}>
+                <Text style={ss.ctaText}>继续</Text>
+                <SymbolView
+                  name={{ ios: 'arrow.right', android: 'arrow_forward', web: 'arrow_forward' }}
+                  size={18}
+                  tintColor="#fff"
+                  style={{ width: 18, height: 18 }}
+                />
+              </TouchableOpacity>
+            )}
+            {step === 6 && fd.goal_type === 'maintain' && (
               <TouchableOpacity
                 style={[ss.cta, { backgroundColor: accent, shadowColor: accent }]}
                 onPress={submit}
@@ -602,7 +697,28 @@ export function OnboardingScreen({ onComplete }: Props) {
                 )}
               </TouchableOpacity>
             )}
-            {step === 7 && (
+            {step === 7 && fd.goal_type === 'cut' && (
+              <TouchableOpacity
+                style={[ss.cta, { backgroundColor: accent, shadowColor: accent }]}
+                onPress={submit}
+                disabled={submitting}
+                activeOpacity={0.85}>
+                {submitting ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <>
+                    <Text style={ss.ctaText}>完成设置</Text>
+                    <SymbolView
+                      name={{ ios: 'checkmark', android: 'check', web: 'check' }}
+                      size={18}
+                      tintColor="#fff"
+                      style={{ width: 18, height: 18 }}
+                    />
+                  </>
+                )}
+              </TouchableOpacity>
+            )}
+            {step === 8 && (
               <TouchableOpacity
                 style={[ss.cta, { backgroundColor: accent, shadowColor: accent }]}
                 onPress={onComplete}

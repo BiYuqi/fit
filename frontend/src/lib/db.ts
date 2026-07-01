@@ -70,3 +70,8 @@ export async function pruneOldMessages(): Promise<void> {
   cutoff.setDate(cutoff.getDate() - 30);
   await db.runAsync('DELETE FROM chat_messages WHERE date < ?', [cutoff.toISOString().slice(0, 10)]);
 }
+
+export async function clearCache(): Promise<void> {
+  const db = await getDb();
+  await db.runAsync('DELETE FROM chat_messages');
+}

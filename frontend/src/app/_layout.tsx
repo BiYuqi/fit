@@ -11,6 +11,7 @@ import { Colors } from '@/constants/theme';
 import { apiFetch } from '@/lib/api';
 import { queryClient } from '@/lib/query-client';
 import { useAuthStore } from '@/stores/auth-store';
+import { useOnboardingReviewStore } from '@/stores/onboarding-review-store';
 
 type Profile = { onboarded: boolean };
 
@@ -19,6 +20,7 @@ function AppShell() {
   const colorScheme = useColorScheme();
   const scheme = colorScheme === 'dark' ? 'dark' : 'light';
   const { token, isLoading, init } = useAuthStore();
+  const { active: reviewActive, initialData: reviewData, endReview } = useOnboardingReviewStore();
 
   useEffect(() => {
     init();
@@ -33,6 +35,11 @@ function AppShell() {
 
   const showLoading = isLoading || (!!token && profileLoading);
 
+  const handleOnboardingComplete = () => {
+    endReview();
+    queryClient.invalidateQueries({ queryKey: ['profile'] });
+  };
+
   return (
     <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
       <AnimatedSplashOverlay />
@@ -42,12 +49,18 @@ function AppShell() {
         </View>
       )}
       {!showLoading && !token && <LoginScreen />}
-      {!showLoading && token && profile && !profile.onboarded && (
+      {!showLoading && token && reviewActive && (
+        <OnboardingScreen
+          initialData={reviewData ?? undefined}
+          onComplete={handleOnboardingComplete}
+        />
+      )}
+      {!showLoading && token && profile && !profile.onboarded && !reviewActive && (
         <OnboardingScreen
           onComplete={() => queryClient.invalidateQueries({ queryKey: ['profile'] })}
         />
       )}
-      {!showLoading && token && profile?.onboarded && <AppTabs />}
+      {!showLoading && token && profile?.onboarded && !reviewActive && <AppTabs />}
     </ThemeProvider>
   );
 }
