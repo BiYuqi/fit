@@ -49,7 +49,7 @@ export default function ChatScreen() {
   const flatListRef = useRef<FlatList<ChatMessage>>(null);
   // Scroll-intent refs — written by effects, consumed by onContentSizeChange
   // Using refs (not state) avoids stale-closure in the FlatList callback
-  const shouldScrollRef    = useRef(false);
+  const shouldScrollRef    = useRef(true);
   const scrollAnimatedRef  = useRef(false);
   const lastScrolledDateRef = useRef('');
   const prevLenRef          = useRef(0);
@@ -89,13 +89,21 @@ export default function ChatScreen() {
 
   useEffect(() => {
     if (!token) return;
+    // 如果 store 残留的是其他日期的消息，先清掉，避免渲染旧日期内容再闪到新日期
+    const s = useChatStore.getState();
+    if (s.selectedDate !== localDateStr() && s.messages.length > 0) {
+      useChatStore.setState({ messages: [] });
+    }
     loadForDate(localDateStr(), token);
     loadDates(token);
   }, [token]);
 
-  // Effects only SET intent refs — never call scrollToEnd directly.
-  // Actual scroll happens in onContentSizeChange, which fires after FlatList
-  // has finished measuring content (the only moment scrollToEnd is reliable).
+  // Scroll intent: two paths
+  // ─ Date change (incl. initial mount): set flag for onContentSizeChange
+  //   AND direct scroll via rAF — whichever fires later wins, both are
+  //   safe because the other is a no-op if we're already at the bottom.
+  // ─ New message appended: set flag only, onContentSizeChange reliably
+  //   fires for content-size changes.
 
   useEffect(() => {
     if (visibleMessages.length === 0) { prevLenRef.current = 0; return; }
@@ -106,6 +114,9 @@ export default function ChatScreen() {
       lastScrolledDateRef.current = selectedDate;
       shouldScrollRef.current   = true;
       scrollAnimatedRef.current = false;
+      requestAnimationFrame(() => {
+        flatListRef.current?.scrollToEnd({ animated: false });
+      });
     } else if (visibleMessages.length > prevLen) {
       shouldScrollRef.current   = true;
       scrollAnimatedRef.current = true;
