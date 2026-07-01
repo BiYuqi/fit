@@ -2,11 +2,37 @@ import { StyleSheet, TouchableOpacity, View } from 'react-native';
 import { SymbolView } from 'expo-symbols';
 import { GlassCard } from '@/components/glass-card';
 import { ThemedText } from '@/components/themed-text';
-import { useColorScheme } from '@/hooks/use-color-scheme';
-import { Colors } from '@/constants/theme';
+import { useTheme } from '@/hooks/use-theme';
 import { useChatStore } from '@/stores/chat-store';
 import { useAuthStore } from '@/stores/auth-store';
 import type { ExerciseCardPayload } from '@/types/chat';
+
+const EXERCISE_BADGE = '#5E5CE6';
+
+/** Map exercise type to an emoji via keyword matching. Falls back to 💪. */
+function exerciseEmoji(type: string): string {
+  const t = type.toLowerCase();
+  if (/跑|慢跑|快走|竞走|马拉松/.test(t)) return '🏃';
+  if (/骑|单车|自行车|动感单车/.test(t)) return '🚴';
+  if (/游泳|蛙泳|自由泳|蝶泳|仰泳/.test(t)) return '🏊';
+  if (/力量|举重|哑铃|杠铃|深蹲|硬拉|卧推|器械/.test(t)) return '🏋️';
+  if (/瑜伽|拉伸/.test(t)) return '🧘';
+  if (/跳绳/.test(t)) return '🏃';
+  if (/散步|走路|徒步/.test(t)) return '🚶';
+  if (/篮球/.test(t)) return '🏀';
+  if (/足球/.test(t)) return '⚽';
+  if (/羽毛球/.test(t)) return '🏸';
+  if (/乒乓/.test(t)) return '🏓';
+  if (/网球/.test(t)) return '🎾';
+  if (/舞蹈|跳舞|街舞|爵士/.test(t)) return '💃';
+  if (/登山|爬山|攀岩/.test(t)) return '🧗';
+  if (/拳击|格斗|搏击/.test(t)) return '🥊';
+  if (/滑雪|滑冰/.test(t)) return '⛷️';
+  if (/冲浪|划船|皮划艇/.test(t)) return '🚣';
+  if (/高强度间歇|hiit|tabata/.test(t)) return '🔥';
+  if (/普拉提/.test(t)) return '🧘';
+  return '💪';
+}
 
 export function ExerciseCard({
   payload,
@@ -15,9 +41,7 @@ export function ExerciseCard({
   payload: ExerciseCardPayload;
   messageId: string;
 }) {
-  const scheme = useColorScheme();
-  const isDark = scheme === 'dark';
-  const colors = Colors[isDark ? 'dark' : 'light'];
+  const colors = useTheme();
 
   const { undo, undoneCards } = useChatStore();
   const { token } = useAuthStore();
@@ -31,44 +55,50 @@ export function ExerciseCard({
 
   return (
     <View style={styles.wrapper}>
-      <GlassCard padding={12} gap={8} style={[styles.card, isUndone && styles.cardUndone]}>
-        {/* badge */}
-        <View style={styles.badgeRow}>
-          <SymbolView name="checkmark.circle.fill" size={13} tintColor="#5E5CE6" />
-          <ThemedText style={[styles.badgeText, { color: '#5E5CE6' }]}>已录入</ThemedText>
-        </View>
-
-        {/* Exercise info row */}
-        <View style={styles.mainRow}>
-          <View style={styles.infoBlock}>
-            <ThemedText style={[styles.type, { color: colors.text }]}>
-              {payload.type}
-            </ThemedText>
-            <ThemedText style={[styles.meta, { color: colors.textSecondary }]}>
+      <GlassCard padding={10} gap={undoInfo ? 5 : 0} style={[styles.card, isUndone && styles.cardUndone]}>
+        {/* Row 1: badge icon + type / duration + calorie number */}
+        <View style={styles.row1}>
+          <SymbolView
+            name="checkmark.circle.fill"
+            size={12}
+            tintColor={EXERCISE_BADGE}
+            style={styles.badgeIcon}
+          />
+          <ThemedText style={styles.exerciseLine} numberOfLines={1}>
+            <ThemedText style={styles.exerciseEmoji}>{exerciseEmoji(payload.type)}</ThemedText>
+            {' '}{payload.type}{' '}
+            <ThemedText themeColor="textSecondary" style={styles.exerciseMeta}>
               {payload.duration_min}min
             </ThemedText>
-          </View>
-          <View style={styles.calorieBlock}>
-            <ThemedText style={[styles.calorieNum, { color: colors.text }]}>
-              {payload.calories_burned}
+          </ThemedText>
+          <View style={styles.calBlock}>
+            <ThemedText style={styles.calNum}>{payload.calories_burned}</ThemedText>
+            <ThemedText themeColor="textSecondary" style={styles.calUnit}>
+              kcal
             </ThemedText>
-            <ThemedText style={[styles.calorieUnit, { color: colors.textSecondary }]}>kcal</ThemedText>
           </View>
         </View>
 
-        {/* Undo */}
+        {/* Row 2 (only when undo present) */}
         {undoInfo && (
-          <>
-            <View style={[styles.divider, { backgroundColor: colors.hairline }]} />
+          <View style={styles.undoRow}>
             {isUndone ? (
-              <ThemedText style={[styles.undoneText, { color: colors.textSecondary }]}>已撤销</ThemedText>
+              <ThemedText themeColor="textSecondary" style={styles.undoneLabel}>
+                已撤销
+              </ThemedText>
             ) : (
-              <TouchableOpacity style={styles.undoRow} onPress={handleUndo} activeOpacity={0.6}>
-                <SymbolView name="arrow.uturn.backward" size={12} tintColor={colors.textSecondary} />
-                <ThemedText style={[styles.undoText, { color: colors.textSecondary }]}>撤销</ThemedText>
+              <TouchableOpacity style={styles.undoBtn} onPress={handleUndo} activeOpacity={0.6}>
+                <SymbolView
+                  name="arrow.uturn.backward"
+                  size={11}
+                  tintColor={colors.textSecondary}
+                />
+                <ThemedText themeColor="textSecondary" style={styles.undoLabel}>
+                  撤销
+                </ThemedText>
               </TouchableOpacity>
             )}
-          </>
+          </View>
         )}
       </GlassCard>
     </View>
@@ -86,63 +116,55 @@ const styles = StyleSheet.create({
   cardUndone: {
     opacity: 0.55,
   },
-  badgeRow: {
+
+  // ── Row 1 ──
+  row1: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 5,
+    gap: 6,
   },
-  badgeText: {
-    fontSize: 12,
-    fontWeight: '600',
+  badgeIcon: {
+    marginTop: 1,
   },
-  mainRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
-    gap: 8,
-  },
-  infoBlock: {
+  exerciseLine: {
     flex: 1,
-    gap: 2,
+    fontSize: 15,
+    fontWeight: '500',
   },
-  type: {
-    fontSize: 17,
-    fontWeight: '700',
-    lineHeight: 21,
+  exerciseEmoji: {
+    fontSize: 15,
   },
-  meta: {
+  exerciseMeta: {
     fontSize: 13,
   },
-  calorieBlock: {
+  calBlock: {
     flexShrink: 0,
     flexDirection: 'row',
     alignItems: 'baseline',
-    gap: 2,
+    marginLeft: 4,
   },
-  calorieNum: {
-    fontSize: 28,
+  calNum: {
+    fontSize: 22,
     fontWeight: '700',
-    lineHeight: 32,
   },
-  calorieUnit: {
-    fontSize: 13,
-    fontWeight: '500',
+  calUnit: {
+    fontSize: 12,
   },
-  divider: {
-    height: StyleSheet.hairlineWidth,
-  },
+
+  // ── Undo row ──
   undoRow: {
     flexDirection: 'row',
+    justifyContent: 'flex-end',
+  },
+  undoBtn: {
+    flexDirection: 'row',
     alignItems: 'center',
-    gap: 5,
-    alignSelf: 'flex-start',
-    paddingVertical: 2,
+    gap: 3,
   },
-  undoText: {
-    fontSize: 13,
-    fontWeight: '500',
+  undoLabel: {
+    fontSize: 12,
   },
-  undoneText: {
+  undoneLabel: {
     fontSize: 12,
     fontStyle: 'italic',
   },

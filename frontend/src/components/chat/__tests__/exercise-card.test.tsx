@@ -52,23 +52,26 @@ describe('ExerciseCard', () => {
   it('renders exercise type, duration, and calories', () => {
     renderCard(basePayload());
 
-    expect(screen.getByText('跑步')).toBeOnTheScreen();
-    expect(screen.getByText('30min')).toBeOnTheScreen();
+    // compact layout: type and duration are in a nested Text, use regex
+    expect(screen.getByText(/跑步/)).toBeOnTheScreen();
+    expect(screen.getByText(/30min/)).toBeOnTheScreen();
     expect(screen.getByText('325')).toBeOnTheScreen();
     expect(screen.getByText('kcal')).toBeOnTheScreen();
   });
 
-  it('renders the checkmark badge', () => {
+  it('renders in compact layout', () => {
+    // compact layout: badge is icon-only (no "已录入" text), type + duration + calories on one row
     renderCard(basePayload());
-    expect(screen.getByText('已录入')).toBeOnTheScreen();
+    expect(screen.getByText(/跑步/)).toBeOnTheScreen();
+    expect(screen.getByText('325')).toBeOnTheScreen();
   });
 
   it('renders without duration_min gracefully', () => {
     renderCard(basePayload({ duration_min: 0 }));
 
-    expect(screen.getByText('0min')).toBeOnTheScreen();
+    expect(screen.getByText(/0min/)).toBeOnTheScreen();
     // type and calories should still render
-    expect(screen.getByText('跑步')).toBeOnTheScreen();
+    expect(screen.getByText(/跑步/)).toBeOnTheScreen();
   });
 
   // ── Undo: absent ─────────────────────────────────────────────────────

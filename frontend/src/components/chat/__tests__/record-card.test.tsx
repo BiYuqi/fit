@@ -60,22 +60,24 @@ describe('RecordCard', () => {
   it('renders food name, weight, calories', () => {
     renderCard(basePayload());
 
-    expect(screen.getByText('鸡胸肉')).toBeOnTheScreen();
+    // compact layout: food name is in a nested Text, use regex
+    expect(screen.getByText(/鸡胸肉/)).toBeOnTheScreen();
     expect(screen.getByText('200')).toBeOnTheScreen();
     expect(screen.getByText('kcal')).toBeOnTheScreen();
-    // Weight appears in the meal-info line: "加餐 · 150g" (default meal label when no mealType)
+    // Weight is in nested foodMeta Text: "加餐 · 150g"
     expect(screen.getByText(/150g/)).toBeOnTheScreen();
   });
 
   it('renders all three macros', () => {
     renderCard(basePayload());
 
-    expect(screen.getByText('35g')).toBeOnTheScreen();
-    expect(screen.getByText('4g')).toBeOnTheScreen();
-    expect(screen.getByText('2g')).toBeOnTheScreen();
-    expect(screen.getByText('蛋白')).toBeOnTheScreen();
-    expect(screen.getByText('脂肪')).toBeOnTheScreen();
-    expect(screen.getByText('碳水')).toBeOnTheScreen();
+    // compact layout: macros are inline text "蛋白 35g", use regex
+    expect(screen.getByText(/35g/)).toBeOnTheScreen();
+    expect(screen.getByText(/4g/)).toBeOnTheScreen();
+    expect(screen.getByText(/2g/)).toBeOnTheScreen();
+    expect(screen.getByText(/蛋白/)).toBeOnTheScreen();
+    expect(screen.getByText(/脂肪/)).toBeOnTheScreen();
+    expect(screen.getByText(/碳水/)).toBeOnTheScreen();
   });
 
   it.each([
@@ -89,9 +91,11 @@ describe('RecordCard', () => {
     expect(screen.getByText(new RegExp(label))).toBeOnTheScreen();
   });
 
-  it('renders the checkmark badge', () => {
+  it('renders in compact layout', () => {
+    // compact layout: badge is icon-only (no "已录入" text), food + calories on one row
     renderCard(basePayload());
-    expect(screen.getByText('已录入')).toBeOnTheScreen();
+    expect(screen.getByText(/鸡胸肉/)).toBeOnTheScreen();
+    expect(screen.getByText('200')).toBeOnTheScreen();
   });
 
   it('shows calorie number prominently', () => {
