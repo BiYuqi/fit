@@ -9,6 +9,7 @@ export type OnboardingFormData = {
   activity_level: 'sedentary' | 'light' | 'moderate' | 'active' | 'very_active';
   goal_type: 'cut' | 'maintain';
   daily_deficit: number;
+  custom_tdee: number | null;
 };
 
 type ReviewState = {

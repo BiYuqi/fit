@@ -631,6 +631,7 @@ export default function SettingsScreen() {
       activity_level: (profile.activity_level as OnboardingFormData['activity_level']) ?? 'light',
       goal_type: (profile.goal_type as OnboardingFormData['goal_type']) ?? 'cut',
       daily_deficit: profile.daily_deficit ?? 500,
+      custom_tdee: profile.custom_tdee ?? null,
     });
   };
 
