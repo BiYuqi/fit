@@ -408,8 +408,8 @@ export function OnboardingScreen({ onComplete, initialData }: Props) {
                       activeOpacity={0.8}
                     >
                       <View style={[ss.genderIconBox, { backgroundColor: selected ? accent : colors.backgroundElement }]}>
-                        <Text style={[ss.genderIconChar, { color: selected ? '#fff' : colors.text }]}>
-                          {g === 'female' ? 'F' : 'M'}
+                        <Text style={[ss.genderIconChar, { color: selected ? '#fff' : g === 'female' ? '#FF2D55' : '#007AFF' }]}>
+                          {g === 'female' ? '♀' : '♂'}
                         </Text>
                       </View>
                       <Text style={[ss.genderLabel, { color: selected ? accent : colors.text, flex: 1 }]}>
