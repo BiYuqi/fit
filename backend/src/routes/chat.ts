@@ -6,7 +6,7 @@ import { itemNutrition } from "../services/calc";
 import { recompute, buildContextCard } from "../services/summary";
 import { buildMemoryPack } from "../services/memory";
 import type { MemoryPack } from "../services/memory";
-import type { FoodItem } from "../ai/schema";
+import type { FoodItem, ParseResult } from "../ai/schema";
 import { callDeepSeekCtx } from "../ai/ctx";
 import { prisma } from "../lib/prisma";
 import type { MealType, PortionLabel } from "@prisma/client";
@@ -333,9 +333,17 @@ export async function chatRoutes(app: FastifyInstance) {
     // 此刻本条消息尚未写 ai_parse_log / food_record，记忆包反映的是「本条之前」状态，正合语义
     const pack = await buildMemoryPack(user_id);
 
-    // 解析意图（flash → pro 若低置信）
-    let parsed = await parseUserInput(text, pack);
-    if (parsed.intent === "record") {
+    // 解析意图（flash → pro 若 zod 校验失败或低置信）
+    let parsed: ParseResult;
+    let upgraded = false;
+    try {
+      parsed = await parseUserInput(text, pack);
+    } catch {
+      // flash 解析失败（zod 校验 / tool call JSON 解析失败），升 pro 重试
+      parsed = await parseUserInput(text, pack, "deepseek-v4-pro");
+      upgraded = true;
+    }
+    if (!upgraded && parsed.intent === "record") {
       const hasLow = parsed.items.some((i) => i.food_confidence < 0.5);
       if (hasLow) {
         try {
