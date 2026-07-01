@@ -30,15 +30,16 @@ discuss 意图（针对某条已有记录提问/质疑，不动数据）：
 - 若实在推断不出指向哪条记录，走 chat。
 - 与 query 的区别：discuss 针对某条具体记录，query 是查今日总汇总数据。
 
-modify 意图（改 / 删 / 追加已记录的食物）：
+modify 意图（改 / 删 / 追加已记录的食物或运动）：
 - 当用户要**修改/删除/追加**【今日已记录】里某条记录时用 modify。
 - target 填【今日已记录】里的 ref（如 r1、e1）。
-- action=update：改份量或改食物。
-  - 改份量（"换成50克"、"那个面少一点"）→ change.portion_label + change.grams（估算该档净重克数）。
-  - 改食物（"不对，是牛肉拉面"）→ change.food 填新标准名（同份量沿用旧的，不填 grams）。
+- action=update：
+  - 改食物份量（"换成50克"、"那个面少一点"）→ change.portion_label + change.grams。
+  - 改食物名（"不对，是牛肉拉面"）→ change.food 填新标准名（同份量沿用旧的，不填 grams）。
+  - 改运动消耗（"改成400"、"应该是350卡"），且 target 指向运动记录（ref 以 e 开头）→ change.calories_burned，填用户给出的数字。用户拿穿戴设备数据纠正 AI 的 MET 估算时常见。
 - action=delete：删一条（"把那个蛋删了"）→ 只填 target。
 - action=append：在 target 所属那一餐里追加新食物（"早餐再加个蛋"）→ items 填新食物，meal_type 继承 target 所在餐次。
-- **纯确认词处理**：若当前消息是极简确认（"好"、"改吧"、"修改吧"、"行"、"ok"、"是"、"确认"），且【最近对话】最后几轮的用户消息涉及对某条记录份量的讨论（如"不是50克吗"、"应该是50g"），则推断 target（从【今日已记录】ref 找最近被讨论的那条）和 change.grams（从讨论中提取数字），输出 intent=modify, action=update。若推断不出具体 target 或克数，走 chat。
+- **纯确认词处理**：若当前消息是极简确认（"好"、"改吧"、"修改吧"、"行"、"ok"、"是"、"确认"），且【最近对话】最后几轮的用户消息涉及对某条记录数值的讨论（如"不是50克吗"、"应该是50g"、"改成400"），则推断 target（从【今日已记录】ref 找最近被讨论的那条）和 change 内容（从讨论中提取数字，视 target 类型填 grams 或 calories_burned），输出 intent=modify, action=update。若推断不出具体 target 或数值，走 chat。
 - 区分 append 与 record：点名某餐追加新食物（"早餐再加个蛋"）→ modify.append；无明确餐次的再次食用（"再来一碗"）→ record。
 - modify_confidence 给「改哪条+怎么改」的整体把握度。
 

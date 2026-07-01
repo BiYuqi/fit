@@ -671,15 +671,55 @@ export async function chatRoutes(app: FastifyInstance) {
         return { intent: "modify", reply, records: records.length ? records : undefined, pending: pending ?? undefined, summary_card: card, messages };
       }
 
-      // update → 改份量 / 改食物，高置信直改 + 重算 + 撤销
-      if (target.kind !== "food") {
+      // update → 改份量 / 改食物 / 改运动消耗，高置信直改 + 重算 + 撤销
+
+      // ── 运动记录更新 ──
+      if (target.kind === "exercise") {
+        const exRec = await prisma.exerciseRecord.findFirst({ where: { id: target.record_id, user_id } });
+        if (!exRec) {
+          const aiMsg = await prisma.chatMessage.create({
+            data: { user_id, date: dateObj, role: "assistant", kind: "text", content: "这条运动记录好像已经不在了。" },
+          });
+          messages.push(aiMsg);
+          const card = await buildContextCard(user_id);
+          return { intent: "modify", reply: aiMsg.content, summary_card: card, messages };
+        }
+
+        const change = parsed.change ?? {};
+        if (!change.calories_burned) {
+          const aiMsg = await prisma.chatMessage.create({
+            data: { user_id, date: dateObj, role: "assistant", kind: "text", content: '请告诉我新的消耗热量是多少？比如「改成 400 千卡」。', },
+          });
+          messages.push(aiMsg);
+          const card = await buildContextCard(user_id);
+          return { intent: "modify", reply: aiMsg.content, summary_card: card, messages };
+        }
+
+        const prev_calories = exRec.calories_burned;
+        const updated = await prisma.exerciseRecord.update({
+          where: { id: exRec.id },
+          data: { calories_burned: change.calories_burned },
+        });
+        await recompute(user_id, today);
+        const card = await buildContextCard(user_id);
+        const content = `已更新：${exRec.type} 消耗 ${Math.round(change.calories_burned)} kcal（原估算 ${Math.round(prev_calories)} kcal）`;
         const aiMsg = await prisma.chatMessage.create({
-          data: { user_id, date: dateObj, role: "assistant", kind: "text", content: "目前只支持修改饮食记录哦。" },
+          data: {
+            user_id, date: dateObj, role: "assistant", kind: "exercise_card", content,
+            payload: {
+              exercise_id: updated.id, type: exRec.type, duration_min: exRec.duration_min,
+              calories_burned: change.calories_burned,
+              undo: { record_id: updated.id, prev_state: { calories_burned: prev_calories, kind: "exercise" as const } },
+            } as object,
+            record_id: updated.id as string,
+          },
         });
         messages.push(aiMsg);
-        const card = await buildContextCard(user_id);
-        return { intent: "modify", reply: aiMsg.content, summary_card: card, messages };
+        tctx.ok("modify");
+        return { intent: "modify", reply: content, summary_card: card, messages };
       }
+
+      // ── 食物记录更新 ──
       const rec = await prisma.foodRecord.findFirst({ where: { id: target.record_id, user_id } });
       if (!rec) {
         const aiMsg = await prisma.chatMessage.create({
@@ -1024,7 +1064,10 @@ export async function chatRoutes(app: FastifyInstance) {
       food_id: z.string(),
       portion_label: z.enum(["small", "medium", "large", "custom"]),
       weight_g: z.number().positive(),
-    }).optional(),
+    }).or(z.object({
+      calories_burned: z.number().positive(),
+      kind: z.literal("exercise"),
+    })).optional(),
   });
 
   app.post("/api/records/:id/undo", { preHandler: [auth] }, async (req, reply) => {
@@ -1035,35 +1078,54 @@ export async function chatRoutes(app: FastifyInstance) {
       return reply.status(400).send({ error: { code: "invalid_input", message: bodyParsed.error.message } });
     }
 
-    const rec = await prisma.foodRecord.findFirst({ where: { id, user_id } });
-    if (!rec) {
-      return reply.status(404).send({ error: { code: "not_found", message: "Record not found" } });
-    }
-    const recDate = rec.date.toISOString().slice(0, 10);
-
-    const prev = bodyParsed.data.prev_state;
-    if (prev) {
-      // update 撤销 → 还原食物/份量/克数并重算
-      const food = await prisma.foodStandard.findUnique({ where: { id: prev.food_id } });
-      if (!food) {
-        return reply.status(400).send({ error: { code: "invalid_food", message: "Previous food not found" } });
+    // 先试食物记录，再试运动记录
+    const foodRec = await prisma.foodRecord.findFirst({ where: { id, user_id } });
+    if (foodRec) {
+      const recDate = foodRec.date.toISOString().slice(0, 10);
+      const prev = bodyParsed.data.prev_state;
+      if (prev && "food_id" in prev) {
+        // update 撤销 → 还原食物/份量/克数并重算
+        const food = await prisma.foodStandard.findUnique({ where: { id: prev.food_id } });
+        if (!food) {
+          return reply.status(400).send({ error: { code: "invalid_food", message: "Previous food not found" } });
+        }
+        const nutrition = itemNutrition(food, prev.weight_g);
+        await prisma.foodRecord.update({
+          where: { id },
+          data: {
+            food_id: prev.food_id, portion_label: prev.portion_label as PortionLabel, weight_g: prev.weight_g,
+            calories: nutrition.calories, protein: nutrition.protein_g, fat: nutrition.fat_g, carbs: nutrition.carbs_g,
+          },
+        });
+      } else {
+        // append 撤销 → 删新记录
+        await prisma.foodRecord.delete({ where: { id } });
       }
-      const nutrition = itemNutrition(food, prev.weight_g);
-      await prisma.foodRecord.update({
-        where: { id },
-        data: {
-          food_id: prev.food_id, portion_label: prev.portion_label as PortionLabel, weight_g: prev.weight_g,
-          calories: nutrition.calories, protein: nutrition.protein_g, fat: nutrition.fat_g, carbs: nutrition.carbs_g,
-        },
-      });
-    } else {
-      // append 撤销 → 删新记录
-      await prisma.foodRecord.delete({ where: { id } });
+      await recompute(user_id, recDate);
+      const summary_card = await buildContextCard(user_id);
+      return { ok: true, summary_card };
     }
 
-    await recompute(user_id, recDate);
-    const summary_card = await buildContextCard(user_id);
-    return { ok: true, summary_card };
+    const exRec = await prisma.exerciseRecord.findFirst({ where: { id, user_id } });
+    if (exRec) {
+      const recDate = exRec.date.toISOString().slice(0, 10);
+      const prev = bodyParsed.data.prev_state;
+      if (prev && "kind" in prev && prev.kind === "exercise") {
+        // update 撤销 → 还原消耗热量
+        await prisma.exerciseRecord.update({
+          where: { id },
+          data: { calories_burned: prev.calories_burned },
+        });
+      } else {
+        // 无 prev_state → 删记录（append 撤销）
+        await prisma.exerciseRecord.delete({ where: { id } });
+      }
+      await recompute(user_id, recDate);
+      const summary_card = await buildContextCard(user_id);
+      return { ok: true, summary_card };
+    }
+
+    return reply.status(404).send({ error: { code: "not_found", message: "Record not found" } });
   });
 
   // ─────────────────────────────────────────────

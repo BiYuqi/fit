@@ -23,6 +23,9 @@ export type UndoPrevState = {
   food_id: string;
   portion_label: string;
   weight_g: number;
+} | {
+  calories_burned: number;
+  kind: 'exercise';
 };
 
 export type RecordUndo = {
@@ -94,6 +97,7 @@ export type ExerciseCardPayload = {
   type: string;
   duration_min: number;
   calories_burned: number;
+  undo?: RecordUndo;
 };
 
 export type SendMessageResponse = {

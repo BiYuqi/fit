@@ -119,7 +119,7 @@ export function MessageItem({ message, isLast }: { message: ChatMessage; isLast?
       );
 
     case 'exercise_card':
-      return p ? <ExerciseCard payload={p as unknown as ExerciseCardPayload} /> : null;
+      return p ? <ExerciseCard payload={p as unknown as ExerciseCardPayload} messageId={message.id} /> : null;
 
     case 'delete_confirm_card': {
       const pid = (p as DeleteConfirmCardPayload)?.pending_id;
