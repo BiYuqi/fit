@@ -93,13 +93,14 @@ matchFood（单一最佳匹配）—— 字面只召回，AI 裁决（防"蛋白
 进 Chat 页时后端预生成，**只放聚合值不放原始记录**，token 极小，每记一条刷新，随请求一并传给 DeepSeek。
 ```json
 {
-  "today":  {"in":1320,"out":1900,"deficit":580,"p":70,"f":40,"c":150,"remaining":580},
-  "week":   {"avg_deficit":-450,"logged_days":6},
-  "month":  {"logged_days":23,"avg_in":1400},
-  "targets":{"calories":1600,"protein":110}
+  "today":     {"in":1320,"out":1900,"deficit":580,"p":70,"f":40,"c":150,"remaining":580},
+  "yesterday": {"in":1500,"deficit":400,"p":80,"f":50,"c":160},
+  "week":      {"avg_deficit":-450,"logged_days":6},
+  "month":     {"logged_days":23,"avg_in":1400},
+  "targets":   {"calories":1600,"protein":110}
 }
 ```
-`query` 意图直接用此卡回答，**不必每轮查库**。
+`query` 意图：**近3天**用卡直接回答；更早日期（前天之前、指定日期等）实时查 `daily_summary`，无 summary 则聚合 `food_record`。
 
 > 区分：**显示用全量聊天记录（chat_message），喂 AI 用「对话记忆包」（§7）**。两者不同，别混。上下文卡是记忆包里的 L2 聚合层。
 
@@ -110,7 +111,7 @@ matchFood（单一最佳匹配）—— 字面只召回，AI 裁决（防"蛋白
 
 | 层 | 内容 | 解决 | 来源 | 取多少 |
 |---|---|---|---|---|
-| **L2 画像·永久** | `user_profile` + 上下文卡（§6） | 「懂我」：体重/目标/缺口/剩余额度 | `users` + `daily_summary` | 固定，永久在场 |
+| **L2 画像·永久** | `user_profile` + 上下文卡（§6）+ `recent_days`（近3天每日明细） | 「懂我」：体重/目标/缺口/剩余额度；能答「昨天/前天/大前天吃了多少」 | `users` + `daily_summary`（兜底 `food_record` 实时聚合） | 固定，永久在场 |
 | **L1 工作记忆·今天** | `recent_records`：今天每条记录的**当前值快照** + `ref` + `record_id` | 「A 是哪一行、现在多少克/卡」；`record_id` 供 §9 discuss 定位记录详情 | `food_record` / `exercise_record`（今天） | 今天全部，超 20 条折叠更早的 |
 | **L0 对话窗口·最近** | `recent_turns`：最近几轮「用户说了啥 + AI 做了啥动作」的结构化摘要 | 指代与时序：「那个」「再加」「不对我说中份」 | `ai_parse_log`(+join `food_record`) | 最近 **5 轮**，**滑动窗口** |
 
@@ -137,7 +138,13 @@ L0 摘要（**去卡片 payload、去闲聊长文本**，只留意图 + 动作�
 
 ```
 callDeepSeekCtx(pack, messages, opts)
-  └─ compressContext(pack) → 压缩文本（L2画像 + L1记录[max20] + L0对话[max5轮]）
+  └─ compressContext(pack) → 压缩文本：
+       【当前日期】今天是 YYYY-MM-DD（北京时间）
+       【用户档案】…
+       【今日进度】摄入/目标/剩余/蛋白
+       【近3日每日摄入】YYYY-MM-DD 摄入Xkcal …（有记录的天才输出）
+       【今日已记录】[max20] r1/e1 …
+       【最近对话】[max5轮] 旧→新
   └─ 插入 system message → callDeepSeek(fullMessages, opts)
 ```
 
