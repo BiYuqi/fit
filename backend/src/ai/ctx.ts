@@ -11,9 +11,17 @@ const PORTION_ZH: Record<string, string> = {
   small: "小份", medium: "中份", large: "大份", custom: "自定",
 };
 
+function todayStrCtx(): string {
+  const local = new Date(Date.now() + 8 * 3600 * 1000);
+  return local.toISOString().slice(0, 10);
+}
+
 export function compressContext(pack: MemoryPack): string {
-  const { profile: p, card, recent_records, recent_turns } = pack;
+  const { profile: p, card, recent_records, recent_turns, recent_days } = pack;
   const lines: string[] = [];
+
+  // 日期锚点：让 AI 知道"今天/昨天/前天"对应的实际日期
+  lines.push(`【当前日期】今天是 ${todayStrCtx()}（北京时间）`);
 
   // L2 画像 + 今日进度
   const prof: string[] = [];
@@ -28,6 +36,13 @@ export function compressContext(pack: MemoryPack): string {
   lines.push(
     `【今日进度】摄入${card.today.in} 目标${card.targets.calories} 还可吃${card.today.remaining} 蛋白${card.today.p}/${card.targets.protein}`
   );
+  // 近3天每日明细（有记录的天才输出）
+  if (recent_days.length > 0) {
+    lines.push("【近3日每日摄入】");
+    for (const d of recent_days) {
+      lines.push(`  ${d.date} 摄入${d.in}kcal 蛋白${d.p}g 脂肪${d.f}g 碳水${d.c}g`);
+    }
+  }
 
   // L1 今日已记录（超过 RECORD_LIMIT 条则折叠更早的）
   const total = recent_records.length;

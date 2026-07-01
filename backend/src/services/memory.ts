@@ -63,26 +63,42 @@ export interface TurnSummary {
   foods?: Array<{ name: string; portion: string }>; // record 意图时的动作锚点
 }
 
+export interface DaySummary {
+  date: string;   // YYYY-MM-DD
+  in: number;
+  deficit: number;
+  p: number;
+  f: number;
+  c: number;
+}
+
 export interface MemoryPack {
   profile: MemoryProfile;
   card: ContextCard;
   recent_records: RecordRef[];
   recent_turns: TurnSummary[];
+  recent_days: DaySummary[];   // 近7天每日汇总（不含今天）
 }
 
 export async function buildMemoryPack(user_id: string): Promise<MemoryPack> {
-  const today = toDateOnly(todayStr());
+  const todayDate = toDateOnly(todayStr());
 
-  const [user, card, foods, exercises, logs] = await Promise.all([
+  // 近3天（不含今天）的起始日
+  const sevenDaysAgo = new Date(todayDate);
+  sevenDaysAgo.setUTCDate(sevenDaysAgo.getUTCDate() - 3);
+  const yesterday = new Date(todayDate);
+  yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+
+  const [user, card, foods, exercises, logs, summaryRows, liveAgg] = await Promise.all([
     prisma.user.findUniqueOrThrow({ where: { id: user_id } }),
     buildContextCard(user_id),
     prisma.foodRecord.findMany({
-      where: { user_id, date: today },
+      where: { user_id, date: todayDate },
       include: { food: true },
       orderBy: { created_at: "asc" },
     }),
     prisma.exerciseRecord.findMany({
-      where: { user_id, date: today },
+      where: { user_id, date: todayDate },
       orderBy: { created_at: "asc" },
     }),
     prisma.aiParseLog.findMany({
@@ -90,7 +106,55 @@ export async function buildMemoryPack(user_id: string): Promise<MemoryPack> {
       orderBy: { created_at: "desc" },
       take: TURN_WINDOW,
     }),
+    // 近7天已有 summary 的天
+    prisma.dailySummary.findMany({
+      where: { user_id, date: { gte: sevenDaysAgo, lte: yesterday } },
+      orderBy: { date: "desc" },
+    }),
+    // 近7天有记录但可能没有 summary 的天（实时聚合兜底）
+    prisma.foodRecord.groupBy({
+      by: ["date"],
+      where: { user_id, date: { gte: sevenDaysAgo, lte: yesterday } },
+      _sum: { calories: true, protein: true, fat: true, carbs: true },
+    }),
   ]);
+
+  // 合并：summary 优先，没有则用 foodRecord 实时聚合
+  const summaryMap = new Map(
+    summaryRows.map((r) => [r.date.toISOString().slice(0, 10), r])
+  );
+  const liveMap = new Map(
+    liveAgg.map((r) => [r.date.toISOString().slice(0, 10), r])
+  );
+
+  const allDates = new Set([...summaryMap.keys(), ...liveMap.keys()]);
+  const recent_days: DaySummary[] = Array.from(allDates)
+    .sort()
+    .reverse()
+    .map((date) => {
+      const s = summaryMap.get(date);
+      if (s) {
+        return {
+          date,
+          in: Math.round(s.calories_in),
+          deficit: Math.round(s.deficit),
+          p: Math.round(s.protein),
+          f: Math.round(s.fat),
+          c: Math.round(s.carbs),
+        };
+      }
+      const l = liveMap.get(date)!;
+      return {
+        date,
+        in: Math.round(l._sum.calories ?? 0),
+        deficit: 0,
+        p: Math.round(l._sum.protein ?? 0),
+        f: Math.round(l._sum.fat ?? 0),
+        c: Math.round(l._sum.carbs ?? 0),
+      };
+    });
+
+  const today = todayDate;
 
   // L1 今日记录快照（食物 r*、运动 e*）
   const recent_records: RecordRef[] = [
@@ -144,6 +208,7 @@ export async function buildMemoryPack(user_id: string): Promise<MemoryPack> {
     card,
     recent_records,
     recent_turns,
+    recent_days,
   };
 }
 
