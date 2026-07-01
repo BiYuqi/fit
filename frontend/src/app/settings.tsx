@@ -528,7 +528,7 @@ export default function SettingsScreen() {
   const [modalType, setModalType] = useState<
     | 'gender' | 'age' | 'height' | 'weight'
     | 'activity' | 'targetWeight' | 'goalType'
-    | 'targetCalories' | 'tdee'
+    | 'tdee'
     | null
   >(null);
 
@@ -604,13 +604,6 @@ export default function SettingsScreen() {
   const activityLevel = profile?.activity_level ?? 'light';
 
   // ── Summary card editing ───────────────────────────────────────────────
-
-  const handleTargetCaloriesChange = (newTarget: number) => {
-    // target_calories = TDEE - deficit → deficit = TDEE - target_calories
-    const newDeficit = Math.round(tdee - newTarget);
-    const clamped = Math.min(DEFICIT_MAX, Math.max(DEFICIT_MIN, newDeficit));
-    saveField({ daily_deficit: clamped });
-  };
 
   const handleTdeeChange = (newTdee: number) => {
     saveField({ custom_tdee: newTdee });
@@ -700,7 +693,7 @@ export default function SettingsScreen() {
                   </View>
 
                   <View style={styles.summaryValues}>
-                    <TouchableOpacity onPress={() => openModal('targetCalories')} activeOpacity={0.6}>
+                    <View>
                       <ThemedText themeColor="textSecondary" style={styles.summaryLabel}>
                         每日目标摄入
                       </ThemedText>
@@ -712,11 +705,11 @@ export default function SettingsScreen() {
                           kcal
                         </ThemedText>
                       </View>
-                    </TouchableOpacity>
+                    </View>
                     <View style={{ flex: 1 }} />
                     <TouchableOpacity style={styles.summaryMetaItem} onPress={() => openModal('tdee')} activeOpacity={0.6}>
                       <ThemedText themeColor="textSecondary" style={styles.summaryMetaLabel}>
-                        TDEE
+                        每日消耗
                       </ThemedText>
                       <ThemedText style={styles.summaryMetaVal}>{fmt(tdee)}</ThemedText>
                     </TouchableOpacity>
@@ -759,7 +752,7 @@ export default function SettingsScreen() {
                   </View>
 
                   <View style={styles.summaryValues}>
-                    <TouchableOpacity onPress={() => openModal('targetCalories')} activeOpacity={0.6}>
+                    <View>
                       <ThemedText themeColor="textSecondary" style={styles.summaryLabel}>
                         每日目标摄入
                       </ThemedText>
@@ -771,11 +764,11 @@ export default function SettingsScreen() {
                           kcal
                         </ThemedText>
                       </View>
-                    </TouchableOpacity>
+                    </View>
                     <View style={{ flex: 1 }} />
                     <TouchableOpacity style={styles.summaryMetaItem} onPress={() => openModal('tdee')} activeOpacity={0.6}>
                       <ThemedText themeColor="textSecondary" style={styles.summaryMetaLabel}>
-                        TDEE
+                        每日消耗
                       </ThemedText>
                       <ThemedText style={styles.summaryMetaVal}>{fmt(tdee)}</ThemedText>
                     </TouchableOpacity>
@@ -1023,24 +1016,8 @@ export default function SettingsScreen() {
       />
 
       <StepperModal
-        visible={modalType === 'targetCalories'}
-        title="每日目标摄入"
-        value={targetCalories}
-        unit="kcal"
-        min={800}
-        max={5000}
-        step={10}
-        onValueChange={handleTargetCaloriesChange}
-        onClose={closeModal}
-        colors={colors}
-        glass={glass}
-        accent={accent}
-        isDark={isDark}
-      />
-
-      <StepperModal
         visible={modalType === 'tdee'}
-        title="TDEE"
+        title="每日消耗"
         value={tdee}
         unit="kcal"
         min={800}
