@@ -91,8 +91,9 @@ function NutrientRow({
 }
 
 // ─── Hint text ────────────────────────────────────────────────────────────────
-function hint(calIn: number, calTarget: number, protein: number, proteinTarget: number): string {
-  if (calTarget > 0 && calIn > calTarget * 1.05)
+function hint(calIn: number, calTarget: number, totalOut: number, protein: number, proteinTarget: number): string {
+  // 真正超标：摄入超过总消耗（TDEE + 运动），缺口为负
+  if (totalOut > 0 && calIn > totalOut)
     return '今天热量已超标，晚餐尽量清淡一些。';
   if (proteinTarget > 0 && protein < proteinTarget * 0.5)
     return `蛋白还差 ${Math.round(proteinTarget - protein)}g，晚餐来份鸡胸或鸡蛋补一补。`;
@@ -111,8 +112,15 @@ function todayLabel() {
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface DailySummary {
   calories_in: number; total_out: number; deficit: number;
-  tdee: number; protein: number; fat: number; carbs: number;
+  tdee: number; exercise_out: number; protein: number; fat: number; carbs: number;
   target_calories: number; target_protein: number;
+}
+
+interface ExerciseRecord {
+  id: string;
+  type: string;
+  duration_min: number | null;
+  calories_burned: number;
 }
 
 // ─── Screen ───────────────────────────────────────────────────────────────────
@@ -124,13 +132,15 @@ export default function TodayScreen() {
   const glass  = Glass[isDark ? 'dark' : 'light'];
 
   const [summary, setSummary] = useState<DailySummary | null>(null);
+  const [exercises, setExercises] = useState<ExerciseRecord[]>([]);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
     if (!token) return;
     try {
-      const res = await apiFetch<{ summary: DailySummary | null }>('/api/daily/today', { token });
+      const res = await apiFetch<{ summary: DailySummary | null; exercises: ExerciseRecord[] }>('/api/daily/today', { token });
       setSummary(res.summary);
+      setExercises(res.exercises ?? []);
     } catch { /* keep stale */ } finally { setLoading(false); }
   }, [token]);
 
@@ -141,6 +151,7 @@ export default function TodayScreen() {
   const totalOut      = summary?.total_out    ?? 0;
   const deficit       = summary?.deficit      ?? 0;
   const tdee          = summary?.tdee         ?? 0;
+  const exerciseOut   = summary?.exercise_out ?? 0;
   const protein       = summary?.protein      ?? 0;
   const fat           = summary?.fat          ?? 0;
   const carbs         = summary?.carbs        ?? 0;
@@ -215,6 +226,34 @@ export default function TodayScreen() {
             </View>
           </GlassCard>
 
+          {/* ── Card 3: exercise ──────────────────────────────────── */}
+          {(exercises.length > 0 || exerciseOut > 0) && (
+            <GlassCard style={styles.card3}>
+              <View style={styles.exHeader}>
+                <ThemedText style={styles.exTitle}>🏃 今日运动</ThemedText>
+                {exerciseOut > 0 && (
+                  <ThemedText style={styles.exTotal}>消耗 {fmt(exerciseOut)} kcal</ThemedText>
+                )}
+              </View>
+              {exercises.length > 0 && (
+                <View style={styles.exList}>
+                  {exercises.map((ex) => (
+                    <View key={ex.id} style={[styles.exItem, { borderColor: colors.hairline }]}>
+                      <View style={styles.exItemLeft}>
+                        <View style={[styles.exDot, { backgroundColor: NUT_COLOR.carbs }]} />
+                        <ThemedText style={styles.exType}>{ex.type}</ThemedText>
+                        {ex.duration_min != null && (
+                          <ThemedText themeColor="textSecondary" style={styles.exDur}>{ex.duration_min}min</ThemedText>
+                        )}
+                      </View>
+                      <ThemedText style={styles.exCal}>{fmt(ex.calories_burned)} kcal</ThemedText>
+                    </View>
+                  ))}
+                </View>
+              )}
+            </GlassCard>
+          )}
+
           {/* ── Hint card ──────────────────────────────────────────── */}
           {calIn > 0 && (
             <View style={[styles.hintCard, {
@@ -223,7 +262,7 @@ export default function TodayScreen() {
             }]}>
               <ThemedText style={styles.hintIcon}>🌿</ThemedText>
               <ThemedText style={styles.hintText}>
-                {hint(calIn, calTarget, protein, proteinTarget)}
+                {hint(calIn, calTarget, totalOut, protein, proteinTarget)}
               </ThemedText>
             </View>
           )}
@@ -267,6 +306,25 @@ const styles = StyleSheet.create({
   // Card 2 — border-radius 22px (design exact value)
   card2: { borderRadius: 22 },
   card2Inner: { paddingHorizontal: 2 },  // GlassCard gives 16; design wants 18 → +2
+
+  // Card 3 — exercise
+  card3: { borderRadius: 22 },
+  exHeader: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  exTitle: { fontSize: 15, fontWeight: '600' },
+  exTotal: { fontSize: 14, fontWeight: '700', color: NUT_COLOR.carbs },
+  exList:  { gap: 8 },
+  exItem: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingTop: 8, borderTopWidth: 0.5,
+  },
+  exItemLeft: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  exDot:  { width: 7, height: 7, borderRadius: 3.5 },
+  exType: { fontSize: 14 },
+  exDur:  { fontSize: 12 },
+  exCal:  { fontSize: 14, fontWeight: '600' },
 
   // Ring
   ringWrap:   { width: RING_SIZE, height: RING_SIZE, flexShrink: 0 },
