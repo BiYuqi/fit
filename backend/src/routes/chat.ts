@@ -115,7 +115,10 @@ async function fetchDayData(user_id: string, dateStr: string) {
   return `${dateStr} 摄入${total}kcal 蛋白${Math.round(agg._sum.protein ?? 0)}g 脂肪${Math.round(agg._sum.fat ?? 0)}g 碳水${Math.round(agg._sum.carbs ?? 0)}g`;
 }
 
-async function answerQuery(question: string, pack: MemoryPack, extraCtx?: string): Promise<string> {
+async function answerQuery(question: string, pack: MemoryPack, extraCtx?: string): Promise<{
+  text: string;
+  usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+}> {
   const res = await callDeepSeekCtx(
     pack,
     [
@@ -127,10 +130,16 @@ async function answerQuery(question: string, pack: MemoryPack, extraCtx?: string
     ],
     { model: "deepseek-v4-flash" },
   );
-  return res.choices[0]?.message?.content ?? "暂时无法回答";
+  return {
+    text: res.choices[0]?.message?.content ?? "暂时无法回答",
+    usage: res.usage ?? { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+  };
 }
 
-async function answerChat(text: string, pack: MemoryPack): Promise<string> {
+async function answerChat(text: string, pack: MemoryPack): Promise<{
+  text: string;
+  usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+}> {
   const res = await callDeepSeekCtx(
     pack,
     [
@@ -144,7 +153,10 @@ async function answerChat(text: string, pack: MemoryPack): Promise<string> {
     ],
     { model: "deepseek-v4-flash" },
   );
-  return res.choices[0]?.message?.content ?? "好的";
+  return {
+    text: res.choices[0]?.message?.content ?? "好的",
+    usage: res.usage ?? { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+  };
 }
 
 async function answerDiscuss(
@@ -152,7 +164,10 @@ async function answerDiscuss(
   target: import("../services/memory").RecordRef,
   fullRecord: { portion_label: string; food_confidence: number; portion_confidence: number; raw_input: string | null; food: { name: string; calories_100g: unknown } | null } | null,
   pack: MemoryPack,
-): Promise<string> {
+): Promise<{
+  text: string;
+  usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+}> {
   const PORTION_ZH: Record<string, string> = { small: "小份", medium: "中份", large: "大份", custom: "自定" };
   let detail = `【被询问的记录】\n- 食物：${target.name}\n- 克数：${target.weight_g}g（${PORTION_ZH[target.portion ?? ""] ?? target.portion ?? "?"}份）\n- 热量：${target.calories}kcal`;
   if (fullRecord) {
@@ -173,7 +188,10 @@ async function answerDiscuss(
     ],
     { model: "deepseek-v4-flash" },
   );
-  return res.choices[0]?.message?.content ?? "我来解释一下这条记录的来由…";
+  return {
+    text: res.choices[0]?.message?.content ?? "我来解释一下这条记录的来由…",
+    usage: res.usage ?? { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+  };
 }
 
 // ---------- 单条食物处理（record 与 modify.append 共用） ----------
@@ -503,19 +521,25 @@ export async function chatRoutes(app: FastifyInstance) {
     try {
     // 解析意图（flash → pro 若 zod 校验失败或低置信）
     let parsed: ParseResult;
+    let parseUsage: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | undefined;
     let upgraded = false;
     let modelUsed = "deepseek-v4-flash";
     try {
-      parsed = await parseUserInput(text, pack);
+      const pr = await parseUserInput(text, pack);
+      parsed = pr.result;
+      parseUsage = pr.usage;
     } catch {
       // flash 解析失败（zod 校验 / tool call JSON 解析失败），升 pro 重试
       modelUsed = "deepseek-v4-pro";
       try {
-        parsed = await parseUserInput(text, pack, "deepseek-v4-pro");
+        const pr = await parseUserInput(text, pack, "deepseek-v4-pro");
+        parsed = pr.result;
+        parseUsage = pr.usage;
         upgraded = true;
       } catch {
         // pro 也失败，兜底为 chat
         parsed = { intent: "chat" } as ParseResult;
+        parseUsage = undefined;
       }
     }
     if (!upgraded && parsed.intent === "record" && parsed.items && parsed.items.length > 0) {
@@ -523,9 +547,11 @@ export async function chatRoutes(app: FastifyInstance) {
       if (hasLow) {
         modelUsed = "deepseek-v4-pro";
         try {
-          parsed = await parseUserInput(text, pack, "deepseek-v4-pro");
+          const pr = await parseUserInput(text, pack, "deepseek-v4-pro");
+          parsed = pr.result;
+          parseUsage = pr.usage;
         } catch {
-          /* 保留 flash 结果 */
+          /* 保留 flash 结果（含 flash 的 usage） */
         }
       }
     }
@@ -557,7 +583,7 @@ export async function chatRoutes(app: FastifyInstance) {
           if (row) extraCtx = `【实时查询】${row}`;
         }
       }
-      const aiText = await answerQuery(text, pack, extraCtx);
+      const { text: aiText, usage: queryUsage } = await answerQuery(text, pack, extraCtx);
       // 只有明确问今天的问题才展示 query_card 卡片；问历史的用纯文本气泡
       const isTodayQuery = /今天|今日|现在|还可以|剩余|还剩/.test(text);
       const aiMsg = await prisma.chatMessage.create({
@@ -571,18 +597,18 @@ export async function chatRoutes(app: FastifyInstance) {
         },
       });
       messages.push(aiMsg);
-      tctx.ok("query"); // trace 结束：status=ok
+      tctx.ok("query", { tokenUsage: queryUsage }); // trace 结束：status=ok
       return { intent: "query", reply: aiText, summary_card: pack.card, messages };
     }
 
     // ── chat ───────────────────────────────────
     if (parsed.intent === "chat") {
-      const aiText = await answerChat(text, pack);
+      const { text: aiText, usage: chatUsage } = await answerChat(text, pack);
       const aiMsg = await prisma.chatMessage.create({
         data: { user_id, date: dateObj, role: "assistant", kind: "text", content: aiText },
       });
       messages.push(aiMsg);
-      tctx.ok("chat");
+      tctx.ok("chat", { tokenUsage: chatUsage });
       return { intent: "chat", reply: aiText, summary_card: pack.card, messages };
     }
 
@@ -591,8 +617,11 @@ export async function chatRoutes(app: FastifyInstance) {
       const discParsed = parsed as { intent: "discuss"; target: string };
       const target = pack.recent_records.find((r) => r.ref === discParsed.target);
       let aiText: string;
+      let discussUsage: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
       if (!target) {
-        aiText = await answerChat(text, pack);
+        const r = await answerChat(text, pack);
+        aiText = r.text;
+        discussUsage = r.usage;
       } else {
         const fullRecord = target.kind === "food"
           ? await prisma.foodRecord.findFirst({
@@ -600,13 +629,15 @@ export async function chatRoutes(app: FastifyInstance) {
               include: { food: true },
             })
           : null;
-        aiText = await answerDiscuss(text, target, fullRecord as any, pack);
+        const r = await answerDiscuss(text, target, fullRecord as any, pack);
+        aiText = r.text;
+        discussUsage = r.usage;
       }
       const aiMsg = await prisma.chatMessage.create({
         data: { user_id, date: dateObj, role: "assistant", kind: "text", content: aiText },
       });
       messages.push(aiMsg);
-      tctx.ok("discuss");
+      tctx.ok("discuss", { tokenUsage: discussUsage });
       return { intent: "discuss", reply: aiText, summary_card: pack.card, messages };
     }
 
@@ -619,7 +650,7 @@ export async function chatRoutes(app: FastifyInstance) {
         });
         messages.push(aiMsg);
         const card = await buildContextCard(user_id);
-        tctx.partial("modify"); // trace 结束：status=partial（找不到 target）
+        tctx.partial("modify", { tokenUsage: parseUsage }); // trace 结束：status=partial（找不到 target）
         return { intent: "modify", reply: aiMsg.content, summary_card: card, messages };
       }
 
@@ -639,7 +670,7 @@ export async function chatRoutes(app: FastifyInstance) {
         });
         messages.push(aiMsg);
         const card = await buildContextCard(user_id);
-        tctx.ok("modify"); // trace 结束（correction 在用户确认时由 resolve 写）
+        tctx.ok("modify", { tokenUsage: parseUsage }); // trace 结束（correction 在用户确认时由 resolve 写）
         return { intent: "modify", reply: `确认删除「${target.name}」吗？`, pending: pr, summary_card: card, messages };
       }
 
@@ -670,7 +701,7 @@ export async function chatRoutes(app: FastifyInstance) {
         const reply = records.length > 0
           ? `已追加：${replyParts.join("，")}。`
           : pending ? "请帮我确认追加内容。" : "好的。";
-        tctx.ok("modify", { mealType: meal_type });
+        tctx.ok("modify", { mealType: meal_type, tokenUsage: parseUsage });
         return { intent: "modify", reply, records: records.length ? records : undefined, pending: pending ?? undefined, summary_card: card, messages };
       }
 
@@ -718,7 +749,7 @@ export async function chatRoutes(app: FastifyInstance) {
           },
         });
         messages.push(aiMsg);
-        tctx.ok("modify");
+        tctx.ok("modify", { tokenUsage: parseUsage });
         return { intent: "modify", reply: content, summary_card: card, messages };
       }
 
@@ -786,7 +817,7 @@ export async function chatRoutes(app: FastifyInstance) {
         isFoodChange: !!change.food,
         modifyConfidence: (parsed as any).modify_confidence,
       });
-      tctx.ok("modify");
+      tctx.ok("modify", { tokenUsage: parseUsage });
       return { intent: "modify", reply: content, record: updated, summary_card: card, messages };
     }
 
@@ -871,7 +902,7 @@ export async function chatRoutes(app: FastifyInstance) {
     }
 
     // Trace 结束：status=ok，所有 item 的 event 已在 processFoodItem 内写入
-    tctx.ok("record", { mealType: meal_type });
+    tctx.ok("record", { mealType: meal_type, tokenUsage: parseUsage });
     return {
       intent: "record",
       reply: replyText,

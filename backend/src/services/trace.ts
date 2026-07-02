@@ -149,7 +149,7 @@ export class ChatTrace {
   }
 
   /** 正常结束 trace，写入 intent + status="ok" + 聚合字段 */
-  ok(intent: string, extra?: { mealType?: string }): void {
+  ok(intent: string, extra?: { mealType?: string; tokenUsage?: object }): void {
     const lat = Date.now() - this.tStart;
     finalizeTrace(this.traceId, {
       intent,
@@ -157,6 +157,7 @@ export class ChatTrace {
       modelUsed: this.modelUsed,
       modelUpgraded: this.upgraded,
       latencyMs: lat,
+      tokenUsage: extra?.tokenUsage,
       promptHash: this.promptHash,
       promptMessages: [{ user: this.inputText }] as object,
       mealId: extra?.mealType
@@ -180,13 +181,14 @@ export class ChatTrace {
   }
 
   /** 部分成功（如 modify 找不到 target） */
-  partial(intent: string): void {
+  partial(intent: string, extra?: { tokenUsage?: object }): void {
     finalizeTrace(this.traceId, {
       intent,
       status: "partial",
       modelUsed: this.modelUsed,
       modelUpgraded: this.upgraded,
       latencyMs: Date.now() - this.tStart,
+      tokenUsage: extra?.tokenUsage,
       promptHash: this.promptHash,
       promptMessages: [{ user: this.inputText }] as object,
     });

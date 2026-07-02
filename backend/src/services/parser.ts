@@ -93,7 +93,7 @@ export async function parseUserInput(
   text: string,
   pack: MemoryPack,
   model = "deepseek-v4-flash"
-): Promise<ParseResult> {
+): Promise<{ result: ParseResult; usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number } }> {
   const messages: Array<{ role: "system" | "user"; content: string }> = [
     { role: "system", content: SYSTEM_PROMPT },
     { role: "user", content: text },
@@ -136,5 +136,7 @@ export async function parseUserInput(
     }
   }
 
-  return ParseResultSchema.parse(raw);
+  const result = ParseResultSchema.parse(raw);
+  const usage = res.usage ?? { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+  return { result, usage };
 }
