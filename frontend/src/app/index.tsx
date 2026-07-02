@@ -15,7 +15,7 @@ import { SymbolView } from 'expo-symbols';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { formatChatTime, formatDateLabel, CHAT_TIME_GAP_MS } from '@/lib/format';
+import { formatChatTime, formatDateLabel, localDateStr, dateOnly, CHAT_TIME_GAP_MS } from '@/lib/format';
 import { ChatInput } from '@/components/chat/chat-input';
 import { MessageItem, ThinkingBubble } from '@/components/chat/message-item';
 import { SearchModal } from '@/components/chat/search-modal';
@@ -81,7 +81,7 @@ function EmptyState() {
   const hour = new Date().getHours();
   const greeting = hour < 12 ? '早上好' : hour < 18 ? '下午好' : '晚上好';
   return (
-    <View style={styles.empty}>
+    <View style={[styles.empty, invertedFix]}>
       <ThemedText style={styles.emptyGreeting}>{greeting} 👋</ThemedText>
       <ThemedText style={[styles.emptyHint, { color: theme.textSecondary }]}>
         今天吃了什么？告诉我吧
@@ -90,9 +90,23 @@ function EmptyState() {
   );
 }
 
+// In inverted FlatList, the container is scaleY(-1); each cell un-flips itself.
+// The empty component sits outside the cell wrapper, so it needs manual un-flip.
+const invertedFix = { transform: [{ scaleY: -1 }] } as const;
+
 export default function ChatScreen({ isActive = true }: { isActive?: boolean }) {
   const insets = useSafeAreaInsets();
   const flatListRef = useRef<FlatList<ChatMessage>>(null);
+
+  // Each time the tab activates, bump the FlatList key to force a clean mount.
+  // A freshly mounted inverted FlatList naturally renders at the bottom —
+  // no scrollToIndex needed, no flash of old scroll position.
+  const prevActiveRef = useRef(isActive);
+  const listKeyRef = useRef(0);
+  if (isActive && !prevActiveRef.current) {
+    listKeyRef.current += 1;
+  }
+  prevActiveRef.current = isActive;
 
   const scheme = useColorScheme();
   const isDark = scheme === 'dark';
@@ -108,14 +122,17 @@ export default function ChatScreen({ isActive = true }: { isActive?: boolean }) 
     isLoading,
     chatDates,
     resolvedPendings,
-    loadAllMessages,
+    jumpTarget,
+    loadRecentMessages,
+    loadMoreMessages,
+    jumpToMessage,
+    jumpToDate,
+    clearJumpTarget,
     loadDates,
     send,
   } = useChatStore();
 
   const [searchOpen, setSearchOpen] = useState(false);
-  const [pendingJumpId, setPendingJumpId] = useState<string | null>(null);
-  const [pendingJumpDate, setPendingJumpDate] = useState<string | null>(null);
 
   const PENDING_KINDS = new Set(['portion_card', 'candidate_card', 'clarify_card']);
 
@@ -147,20 +164,21 @@ export default function ChatScreen({ isActive = true }: { isActive?: boolean }) 
   // Initial load
   useEffect(() => {
     if (!token) return;
-    loadAllMessages(token);
+    loadRecentMessages(token);
     loadDates(token);
-  }, [token]);
+  }, [token, loadRecentMessages, loadDates]);
 
-  // When tab becomes active, scroll to newest messages so the user always
-  // sees the latest conversation.  Trade-off: loses previous scroll position —
-  // if the user was reading history, switching to another tab and back resets
-  // to the bottom instead of restoring where they left off.
+  // When tab activates: if the current window is a historical one (from
+  // search jump), reload today's window.  Scroll-to-bottom is handled by
+  // the FlatList key bump above — a fresh inverted FlatList starts at bottom.
   useEffect(() => {
-    if (isActive && visibleMessages.length > 0) {
-      // In inverted FlatList, index 0 = newest message = visual bottom.
-      flatListRef.current?.scrollToIndex({ index: 0, animated: false });
+    if (!isActive || !token) return;
+    const msgs = useChatStore.getState().messages;
+    if (msgs.length === 0) return;
+    if (!msgs.some(m => dateOnly(m.date) === localDateStr())) {
+      loadRecentMessages(token);
     }
-  }, [isActive]);
+  }, [isActive, token, loadRecentMessages]);
 
   const handleSend = useCallback(
     (text: string) => {
@@ -170,33 +188,41 @@ export default function ChatScreen({ isActive = true }: { isActive?: boolean }) 
     [token, send],
   );
 
-  // ── Jump handlers (pending → consumed on modal closed) ──
-  const handleJumpToMessage = useCallback((messageId: string) => {
-    setPendingJumpId(messageId);
+  // ── Search result handlers ──
+  const handleSearchResult = useCallback((messageId: string) => {
     setSearchOpen(false);
-  }, []);
+    jumpToMessage(messageId);
+  }, [jumpToMessage]);
 
-  const handleJumpToDate = useCallback((date: string) => {
-    setPendingJumpDate(date);
+  const handleDateSelect = useCallback((date: string) => {
     setSearchOpen(false);
-  }, []);
+    jumpToDate(date);
+  }, [jumpToDate]);
 
-  const handleModalClosed = useCallback(() => {
-    if (pendingJumpId) {
-      const idx = visibleMessages.findIndex(m => m.id === pendingJumpId);
-      if (idx >= 0) {
-        flatListRef.current?.scrollToIndex({ index: idx, animated: true, viewPosition: 0.5 });
+  // ── Respond to jumpTarget after messages window loads ──
+  useEffect(() => {
+    if (!jumpTarget) return;
+    let idx = -1;
+    if (jumpTarget.type === 'message') {
+      idx = visibleMessages.findIndex(m => m.id === jumpTarget.id);
+    } else {
+      // visibleMessages is reverse (new→old), first chronological of date = last in array
+      for (let i = visibleMessages.length - 1; i >= 0; i--) {
+        if (visibleMessages[i].date === jumpTarget.date) { idx = i; break; }
       }
-      setPendingJumpId(null);
     }
-    if (pendingJumpDate) {
-      const idx = visibleMessages.findIndex(m => m.date === pendingJumpDate);
-      if (idx >= 0) {
-        flatListRef.current?.scrollToIndex({ index: idx, animated: true, viewPosition: 0.5 });
-      }
-      setPendingJumpDate(null);
+    clearJumpTarget();
+    if (idx >= 0) {
+      // Phase 1: instant rough jump — forces FlatList to render target area
+      flatListRef.current?.scrollToIndex({ index: idx, animated: false, viewPosition: 0 });
+      // Phase 2: delayed precise scroll — FlatList has now measured real item heights
+      const id = setTimeout(() => {
+        flatListRef.current?.scrollToIndex({ index: idx, animated: true, viewPosition: 0 });
+      }, 400);
+      // Safety: cancel if component unmounts or new jump arrives
+      return () => clearTimeout(id);
     }
-  }, [visibleMessages, pendingJumpId, pendingJumpDate]);
+  }, [jumpTarget, visibleMessages, clearJumpTarget]);
 
   const renderItem = useCallback(
     ({ item, index }: { item: ChatMessage; index: number }) => {
@@ -215,13 +241,11 @@ export default function ChatScreen({ isActive = true }: { isActive?: boolean }) 
         !next ||
         new Date(item.created_at).getTime() - new Date(next.created_at).getTime() > CHAT_TIME_GAP_MS;
 
-      return (
-        <>
-          <MessageItem message={item} isLast={index === 0} />
-          {showTime && <TimeLabel time={item.created_at} />}
-          {showDate && <DateSeparatorView date={item.date} />}
-        </>
-      );
+      const parts: React.ReactNode[] = [];
+      parts.push(<MessageItem key={`msg-${item.id}`} message={item} isLast={index === 0} />);
+      if (showTime) parts.push(<TimeLabel key={`t-${item.id}`} time={item.created_at} />);
+      if (showDate) parts.push(<DateSeparatorView key={`d-${item.id}`} date={item.date} />);
+      return <>{parts}</>;
     },
     [visibleMessages],
   );
@@ -239,11 +263,14 @@ export default function ChatScreen({ isActive = true }: { isActive?: boolean }) 
     >
     <ThemedView style={[styles.root, { backgroundColor: 'transparent' }]}>
       <FlatList
+        key={listKeyRef.current}
         ref={flatListRef}
         inverted
         data={visibleMessages}
         renderItem={renderItem}
         keyExtractor={keyExtractor}
+        onEndReached={() => { if (token) loadMoreMessages(token); }}
+        onEndReachedThreshold={0.3}
         style={styles.flatList}
         contentContainerStyle={[
           styles.list,
@@ -260,9 +287,11 @@ export default function ChatScreen({ isActive = true }: { isActive?: boolean }) 
           )
         }
         ListHeaderComponent={isSending ? <ThinkingBubble /> : null}
-        initialNumToRender={12}
-        maxToRenderPerBatch={10}
-        windowSize={7}
+        initialNumToRender={20}
+        maxToRenderPerBatch={15}
+        windowSize={21}
+        removeClippedSubviews={false}
+        scrollEventThrottle={16}
         onScrollToIndexFailed={(info) => {
           const estimatedOffset = info.index * 80;
           flatListRef.current?.scrollToOffset({ offset: estimatedOffset, animated: true });
@@ -326,11 +355,9 @@ export default function ChatScreen({ isActive = true }: { isActive?: boolean }) 
       <SearchModal
         visible={searchOpen}
         onClose={() => setSearchOpen(false)}
-        onClosed={handleModalClosed}
-        allMessages={messages}
         chatDates={chatDates}
-        onJumpToMessage={handleJumpToMessage}
-        onJumpToDate={handleJumpToDate}
+        onSearchResult={handleSearchResult}
+        onDateSelect={handleDateSelect}
       />
 
       <ChatInput onSend={handleSend} isSending={isSending} />

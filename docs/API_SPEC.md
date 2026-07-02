@@ -69,5 +69,10 @@ resp: 聚合数组，每项 `{ period, calories_in, total_out, deficit, protein,
 resp: `{ date, messages: chat_message[] }`，按 created_at 升序。
 > 用于按日期加载对话线程（顶部"今天 ▼"切换）。前端先读本地 SQLite 再用此接口同步。
 
+### GET /api/chat/messages/range?from=YYYY-MM-DD&to=YYYY-MM-DD
+resp: `{ messages: chat_message[], resolved_pending_ids: string[] }`，按 created_at 升序。
+> 全量读取日期范围内的消息，供前端数据本地化（SQLite 全量缓存 → FlatList 连续渲染 + 搜索纯内存过滤）。
+> 包含 `resolved_pending_ids`（和单日查询逻辑一致）供前端隐藏已处理的 pending 卡。
+
 ### GET /api/chat/dates?from=&to=
 resp: `{ dates: ["YYYY-MM-DD", ...] }`，有对话的日期列表，供线程选择器。

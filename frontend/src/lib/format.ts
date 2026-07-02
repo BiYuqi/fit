@@ -3,6 +3,11 @@ export function localDateStr(d: Date = new Date()): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
+/** Normalize any date-ish string to "YYYY-MM-DD". Handles ISO timestamps from server. */
+export function dateOnly(s: string): string {
+  return s.slice(0, 10);
+}
+
 // WeChat-style chat timestamp
 export function formatChatTime(isoStr: string): string {
   const date = new Date(isoStr);

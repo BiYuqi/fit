@@ -32,10 +32,15 @@ export interface ChatStoreState {
   loading: boolean;
   resolvedPendings: Record<string, boolean>;
   undoneCards: Record<string, boolean>;
+  jumpTarget: { type: string; id?: string; date?: string } | null;
   undo: ReturnType<typeof jest.fn>;
   send: ReturnType<typeof jest.fn>;
   resolve: ReturnType<typeof jest.fn>;
-  loadAllMessages: ReturnType<typeof jest.fn>;
+  loadRecentMessages: ReturnType<typeof jest.fn>;
+  loadMoreMessages: ReturnType<typeof jest.fn>;
+  jumpToMessage: ReturnType<typeof jest.fn>;
+  jumpToDate: ReturnType<typeof jest.fn>;
+  clearJumpTarget: ReturnType<typeof jest.fn>;
 }
 
 export function createMockChatStore(overrides: Partial<ChatStoreState> = {}): ChatStoreState {
@@ -45,10 +50,15 @@ export function createMockChatStore(overrides: Partial<ChatStoreState> = {}): Ch
     loading: false,
     resolvedPendings: {},
     undoneCards: {},
+    jumpTarget: null,
     undo: jest.fn(),
     send: jest.fn(),
     resolve: jest.fn(),
-    loadAllMessages: jest.fn(),
+    loadRecentMessages: jest.fn(),
+    loadMoreMessages: jest.fn(),
+    jumpToMessage: jest.fn(),
+    jumpToDate: jest.fn(),
+    clearJumpTarget: jest.fn(),
     ...overrides,
   };
 }

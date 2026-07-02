@@ -1,4 +1,4 @@
-import { useRef, useEffect } from 'react';
+import { useRef, useEffect, memo } from 'react';
 import { Animated, StyleSheet, View } from 'react-native';
 import { ThemedText } from '@/components/themed-text';
 import { useColorScheme } from '@/hooks/use-color-scheme';
@@ -83,8 +83,8 @@ function AiTextBubble({ content }: { content?: string | null }) {
   );
 }
 
-export function MessageItem({ message, isLast }: { message: ChatMessage; isLast?: boolean }) {
-  const { resolvedPendings } = useChatStore();
+export const MessageItem = memo(function MessageItem({ message, isLast }: { message: ChatMessage; isLast?: boolean }) {
+  const resolvedPendings = useChatStore(s => s.resolvedPendings);
 
   if (message.role === 'user') {
     return <UserBubble content={message.content} />;
@@ -131,7 +131,7 @@ export function MessageItem({ message, isLast }: { message: ChatMessage; isLast?
     default:
       return <AiTextBubble content={message.content} />;
   }
-}
+});
 
 const styles = StyleSheet.create({
   aiWrapper: {

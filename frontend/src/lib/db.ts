@@ -1,5 +1,6 @@
 import * as SQLite from 'expo-sqlite';
 import type { ChatMessage } from '@/types/chat';
+import { dateOnly } from '@/lib/format';
 
 let _db: SQLite.SQLiteDatabase | null = null;
 
@@ -20,6 +21,7 @@ function parseRow(r: MessageRow): ChatMessage {
     role: r.role as 'user' | 'assistant',
     kind: (r.kind ?? 'text') as ChatMessage['kind'],
     payload: r.payload ? JSON.parse(r.payload) : null,
+    date: dateOnly(r.date), // normalize at read boundary
   };
 }
 
@@ -42,6 +44,8 @@ export async function getDb(): Promise<SQLite.SQLiteDatabase> {
   // Migrate existing tables that may be missing newer columns
   try { await _db.execAsync('ALTER TABLE chat_messages ADD COLUMN kind TEXT NOT NULL DEFAULT "text"'); } catch {}
   try { await _db.execAsync('ALTER TABLE chat_messages ADD COLUMN record_id TEXT'); } catch {}
+  // Normalize existing date values from full ISO → "YYYY-MM-DD"
+  try { await _db.execAsync("UPDATE chat_messages SET date = substr(date, 1, 10) WHERE length(date) > 10"); } catch {}
   return _db;
 }
 
@@ -56,12 +60,13 @@ export async function getCachedMessages(date: string): Promise<ChatMessage[]> {
 
 export async function upsertMessages(date: string, messages: ChatMessage[]): Promise<void> {
   const db = await getDb();
+  const d = dateOnly(date); // normalize at write boundary
   for (const msg of messages) {
     await db.runAsync(
       'INSERT OR REPLACE INTO chat_messages (id, date, role, kind, content, payload, record_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
       [
         msg.id,
-        date,
+        d,
         msg.role,
         msg.kind ?? 'text',
         msg.content ?? null,
@@ -91,4 +96,58 @@ export async function getAllMessages(): Promise<ChatMessage[]> {
     'SELECT * FROM chat_messages ORDER BY date ASC, created_at ASC',
   );
   return rows.map(parseRow);
+}
+
+/** 精确日期范围查询。from/to 均包含，接受 "YYYY-MM-DD" 和完整 ISO 两种格式。 */
+export async function getMessagesInRange(
+  from: string,
+  to: string,
+): Promise<ChatMessage[]> {
+  const db = await getDb();
+  // date() handles both "YYYY-MM-DD" and full ISO stored before migration
+  const rows = await db.getAllAsync<MessageRow>(
+    'SELECT * FROM chat_messages WHERE date(date) >= date(?) AND date(date) <= date(?) ORDER BY date ASC, created_at ASC',
+    [from, to],
+  );
+  return rows.map(parseRow);
+}
+
+/** 居中窗口查询——加载目标日期前后各 windowDays 天的消息。 */
+export async function getMessagesAround(
+  date: string,
+  windowDays = 3,
+): Promise<ChatMessage[]> {
+  const d = new Date(dateOnly(date) + 'T12:00:00');
+  if (isNaN(d.getTime())) return [];
+  const from = new Date(d);
+  from.setDate(from.getDate() - windowDays);
+  const to = new Date(d);
+  to.setDate(to.getDate() + windowDays);
+  return getMessagesInRange(
+    from.toISOString().slice(0, 10),
+    to.toISOString().slice(0, 10),
+  );
+}
+
+/** 搜索消息 — SQLite LIKE，按日期倒序。 */
+export async function searchMessages(
+  query: string,
+  limit = 50,
+): Promise<ChatMessage[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<MessageRow>(
+    'SELECT * FROM chat_messages WHERE kind = ? AND content LIKE ? ORDER BY date DESC, created_at DESC LIMIT ?',
+    ['text', `%${query}%`, limit],
+  );
+  return rows.map(parseRow);
+}
+
+/** 根据 id 查消息日期。不存在返回 null。返回 "YYYY-MM-DD"。 */
+export async function getMessageDateById(id: string): Promise<string | null> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ date: string }>(
+    'SELECT date FROM chat_messages WHERE id = ?',
+    [id],
+  );
+  return row?.date ?? null;
 }

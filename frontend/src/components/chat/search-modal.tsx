@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   FlatList,
   Modal,
@@ -17,6 +17,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ThemedText } from '@/components/themed-text';
 import { Glass, Radius } from '@/constants/theme';
 import { formatChatTime, formatDateLabel, localDateStr } from '@/lib/format';
+import { searchMessages } from '@/lib/db';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useTheme } from '@/hooks/use-theme';
 import type { ChatMessage } from '@/types/chat';
@@ -24,11 +25,9 @@ import type { ChatMessage } from '@/types/chat';
 type Props = {
   visible: boolean;
   onClose: () => void;
-  onClosed: () => void;
-  allMessages: ChatMessage[];
   chatDates: string[];
-  onJumpToMessage: (messageId: string) => void;
-  onJumpToDate: (date: string) => void;
+  onSearchResult: (messageId: string) => void;
+  onDateSelect: (date: string) => void;
 };
 
 const TODAY = new Date();
@@ -37,11 +36,9 @@ const MIN_DATE = new Date(TODAY.getFullYear(), TODAY.getMonth(), TODAY.getDate()
 export function SearchModal({
   visible,
   onClose,
-  onClosed,
-  allMessages,
   chatDates,
-  onJumpToMessage,
-  onJumpToDate,
+  onSearchResult,
+  onDateSelect,
 }: Props) {
   const insets = useSafeAreaInsets();
   const scheme = useColorScheme();
@@ -58,34 +55,46 @@ export function SearchModal({
 
   const [searchQuery, setSearchQuery] = useState('');
   const [showDatePicker, setShowDatePicker] = useState(false);
+  const [results, setResults] = useState<ChatMessage[]>([]);
 
-  const results = useMemo(() => {
-    if (!searchQuery.trim()) return [];
-    const q = searchQuery.toLowerCase();
-    return allMessages
-      .filter(m => m.content?.toLowerCase().includes(q))
-      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-      .slice(0, 50);
-  }, [searchQuery, allMessages]);
+  // Reset state when modal opens — avoid stale results from previous search
+  useEffect(() => {
+    if (visible) {
+      setSearchQuery('');
+      setResults([]);
+      setShowDatePicker(false);
+    }
+  }, [visible]);
+
+  useEffect(() => {
+    if (!searchQuery.trim()) {
+      setResults([]);
+      return;
+    }
+    let cancelled = false;
+    searchMessages(searchQuery, 50).then(rows => {
+      if (!cancelled) setResults(rows);
+    });
+    return () => { cancelled = true; };
+  }, [searchQuery]);
 
   const handleSelectDate = useCallback(
     (_event: DateTimePickerEvent, date?: Date) => {
       setShowDatePicker(false);
       if (date) {
-        const dateStr = localDateStr(date);
-        onJumpToDate(dateStr);
-        onClose();
+        onDateSelect(localDateStr(date));
+        // onDateSelect already calls setSearchOpen(false) — don't double-close
       }
     },
-    [onJumpToDate, onClose],
+    [onDateSelect],
   );
 
   const handleResultPress = useCallback(
     (messageId: string) => {
-      onJumpToMessage(messageId);
-      onClose();
+      onSearchResult(messageId);
+      // onSearchResult already calls setSearchOpen(false) — don't double-close
     },
-    [onJumpToMessage, onClose],
+    [onSearchResult],
   );
 
   const chatDatesSet = useMemo(() => new Set(chatDates), [chatDates]);
@@ -127,7 +136,6 @@ export function SearchModal({
       visible={visible}
       transparent
       animationType="fade"
-      onDismiss={onClosed}
       onRequestClose={onClose}
     >
       <TouchableOpacity

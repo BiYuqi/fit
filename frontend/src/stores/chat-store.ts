@@ -1,12 +1,25 @@
 import { create } from 'zustand';
 import { apiFetch } from '@/lib/api';
-import { getAllMessages, upsertMessages } from '@/lib/db';
-import { localDateStr } from '@/lib/format';
+import { getMessagesInRange, getMessagesAround, getMessageDateById, upsertMessages } from '@/lib/db';
+import { localDateStr, dateOnly } from '@/lib/format';
 import type { ChatMessage, ContextCard, SendMessageResponse, ResolveResponse, UndoPrevState } from '@/types/chat';
 
 function todayStr() {
   return localDateStr();
 }
+
+// Prevent concurrent loadMoreMessages calls + cooldown after each load
+let _loadingMore = false;
+let _loadMoreCooldown: ReturnType<typeof setTimeout> | null = null;
+let _noMoreData = false;
+
+// Generation counter: bumped by jumpToMessage/jumpToDate so any in-flight
+// loadRecentMessages aborts instead of overwriting the jump window.
+let _syncGeneration = 0;
+
+type JumpTarget =
+  | { type: 'message'; id: string }
+  | { type: 'date'; date: string };
 
 type ChatStore = {
   messages: ChatMessage[];
@@ -16,9 +29,14 @@ type ChatStore = {
   summaryCard: ContextCard | null;
   resolvedPendings: Record<string, true>;
   undoneCards: Record<string, true>;
+  jumpTarget: JumpTarget | null;
 
-  loadAllMessages: (token: string) => Promise<void>;
+  loadRecentMessages: (token: string) => Promise<void>;
   loadDates: (token: string) => Promise<void>;
+  loadMoreMessages: (token: string) => Promise<void>;
+  jumpToMessage: (messageId: string) => Promise<void>;
+  jumpToDate: (date: string) => Promise<void>;
+  clearJumpTarget: () => void;
   send: (text: string, token: string) => Promise<void>;
   resolve: (pendingId: string, choice: string | { grams: number }, token: string) => Promise<void>;
   undo: (messageId: string, recordId: string, prevState: UndoPrevState | undefined, token: string) => Promise<void>;
@@ -32,6 +50,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   summaryCard: null,
   resolvedPendings: {},
   undoneCards: {},
+  jumpTarget: null,
 
   loadDates: async (token: string) => {
     try {
@@ -50,28 +69,29 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }
   },
 
-  loadAllMessages: async (token: string) => {
+  loadRecentMessages: async (token: string) => {
+    const gen = ++_syncGeneration;
     set({ isLoading: true });
-    // 1. Show cached immediately
+
+    const to = todayStr();
+    const fromDate = new Date();
+    fromDate.setDate(fromDate.getDate() - 6); // 7-day display window
+    const from = localDateStr(fromDate);
+
+    // 1. Read display window from SQLite (instant — data already cached by T26)
     try {
-      const cached = await getAllMessages();
-      if (cached.length > 0) {
-        set({ messages: cached });
-      }
-    } catch {
-      // ignore
-    }
-    // 2. Sync from server (90-day range)
+      const cached = await getMessagesInRange(from, to);
+      if (_syncGeneration !== gen) return; // cancelled by jump
+      if (cached.length > 0) set({ messages: cached });
+    } catch { /* ignore */ }
+
+    // 2. Sync from server (catches new messages since last sync)
     try {
-      const to = todayStr();
-      const from = new Date();
-      from.setDate(from.getDate() - 89);
-      const fromStr = localDateStr(from);
       const data = await apiFetch<{ messages: ChatMessage[]; resolved_pending_ids?: string[] }>(
-        `/api/chat/messages/range?from=${fromStr}&to=${to}`,
+        `/api/chat/messages/range?from=${from}&to=${to}`,
         { token },
       );
-      // Group by date and upsert into SQLite
+      if (_syncGeneration !== gen) return; // cancelled by jump
       const byDate = new Map<string, ChatMessage[]>();
       for (const m of data.messages) {
         const list = byDate.get(m.date);
@@ -81,19 +101,129 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       for (const [date, msgs] of byDate) {
         await upsertMessages(date, msgs);
       }
+      if (_syncGeneration !== gen) return; // cancelled by jump
       const resolvedFromServer: Record<string, true> = {};
       for (const id of data.resolved_pending_ids ?? []) {
         resolvedFromServer[id] = true;
       }
+      // 3. Re-read window (includes server's new messages)
+      const window = await getMessagesInRange(from, to);
+      if (_syncGeneration !== gen) return; // cancelled by jump
       set(s => ({
-        messages: data.messages,
+        messages: window,
         resolvedPendings: { ...s.resolvedPendings, ...resolvedFromServer },
       }));
-    } catch {
-      // keep cache on error
-    }
+    } catch { /* keep cache on error */ }
+
+    if (_syncGeneration !== gen) return; // cancelled by jump
     set({ isLoading: false });
   },
+
+  loadMoreMessages: async (token: string) => {
+    if (_loadingMore || _loadMoreCooldown || _noMoreData) return;
+    const { messages } = get();
+    if (messages.length === 0) return;
+
+    _loadingMore = true;
+
+    try {
+      const earliestDate = dateOnly(messages[0].date);
+      const toDate = new Date(earliestDate + 'T12:00:00');
+      if (isNaN(toDate.getTime())) return; // invalid date guard
+      toDate.setDate(toDate.getDate() - 1);
+      const fromDate = new Date(toDate);
+      fromDate.setDate(fromDate.getDate() - 6);
+
+      const fromStr = fromDate.toISOString().slice(0, 10);
+      const toStr = toDate.toISOString().slice(0, 10);
+
+      let older = await getMessagesInRange(fromStr, toStr);
+
+      // SQLite empty (fresh install) → fallback to server
+      if (older.length === 0) {
+        try {
+          const data = await apiFetch<{ messages: ChatMessage[] }>(
+            `/api/chat/messages/range?from=${fromStr}&to=${toStr}`,
+            { token },
+          );
+          if (data.messages.length > 0) {
+            const byDate = new Map<string, ChatMessage[]>();
+            for (const m of data.messages) {
+              const list = byDate.get(m.date);
+              if (list) list.push(m);
+              else byDate.set(m.date, [m]);
+            }
+            for (const [date, msgs] of byDate) {
+              await upsertMessages(date, msgs);
+            }
+            older = await getMessagesInRange(fromStr, toStr);
+          }
+        } catch { /* stay empty */ }
+      }
+
+      if (older.length === 0) {
+        _noMoreData = true; // prevent further loads
+      } else {
+        set({ messages: [...older, ...messages] });
+        // Cooldown before next load — prevents onEndReached loop
+        _loadMoreCooldown = setTimeout(() => { _loadMoreCooldown = null; }, 500);
+      }
+    } finally {
+      _loadingMore = false;
+    }
+  },
+
+  jumpToMessage: async (messageId: string) => {
+    _syncGeneration++; // cancel any in-flight loadRecentMessages
+    try {
+      const targetDateFull = await getMessageDateById(messageId);
+      if (!targetDateFull) {
+        console.warn('[jumpToMessage] message not found in SQLite:', messageId);
+        set({ isLoading: false });
+        return;
+      }
+      const targetDate = dateOnly(targetDateFull);
+      const window = await getMessagesAround(targetDate, 1);
+      if (window.length === 0) {
+        console.warn('[jumpToMessage] empty window for date:', targetDate);
+        set({ isLoading: false });
+        return;
+      }
+      _noMoreData = false;
+      set({
+        messages: window,
+        jumpTarget: { type: 'message', id: messageId },
+        isLoading: false,
+      });
+    } catch (e) {
+      console.error('[jumpToMessage] error:', e);
+      set({ isLoading: false });
+    }
+  },
+
+  jumpToDate: async (date: string) => {
+    _syncGeneration++; // cancel any in-flight loadRecentMessages
+    try {
+      const targetDate = dateOnly(date);
+      const window = await getMessagesAround(targetDate, 1);
+      if (window.length === 0) {
+        console.warn('[jumpToDate] empty window for date:', targetDate);
+        set({ isLoading: false });
+        return;
+      }
+      _noMoreData = false;
+      set({
+        messages: window,
+        jumpTarget: { type: 'date', date: targetDate },
+        isLoading: false,
+      });
+    } catch (e) {
+      console.error('[jumpToDate] error:', e);
+      set({ isLoading: false });
+    }
+  },
+
+  clearJumpTarget: () => set({ jumpTarget: null }),
 
   send: async (text: string, token: string) => {
     const tempId = `temp-${Date.now()}`;
