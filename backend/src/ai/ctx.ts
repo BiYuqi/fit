@@ -31,10 +31,10 @@ export function compressContext(pack: MemoryPack): string {
   if (p.weight_kg != null) prof.push(`体重${p.weight_kg}`);
   if (p.target_weight_kg != null) prof.push(`目标体重${p.target_weight_kg}`);
   prof.push(p.goal_type === "cut" ? "目标减脂" : "目标维持");
-  prof.push(`每日缺口${p.daily_deficit}`);
+  if (p.daily_deficit) prof.push(`目标缺口${p.daily_deficit}`);
   lines.push(`【用户档案】${prof.join(" ")}`);
   lines.push(
-    `【今日进度】摄入${card.today.in} 目标${card.targets.calories} 还可吃${card.today.remaining} 蛋白${card.today.p}/${card.targets.protein}`
+    `【今日进度】摄入${card.today.in}kcal 总消耗${card.today.out}kcal 实际缺口${card.today.deficit}kcal 目标摄入${card.targets.calories}kcal 还可吃${card.today.remaining}kcal 蛋白${card.today.p}/${card.targets.protein}g`
   );
   // 近3天每日明细（有记录的天才输出）
   if (recent_days.length > 0) {
