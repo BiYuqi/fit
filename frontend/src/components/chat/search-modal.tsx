@@ -136,7 +136,7 @@ export function SearchModal({
         onPress={onClose}
       >
         <View
-          style={[styles.card, { paddingTop: insets.top + 12 }]}
+          style={styles.card}
           onStartShouldSetResponder={() => true}
         >
           <BlurView intensity={52} tint={blurTint} style={styles.cardInner}>
@@ -150,7 +150,7 @@ export function SearchModal({
             />
 
             {/* Top bar */}
-            <View style={styles.topBar}>
+            <View style={[styles.topBar, { paddingTop: insets.top + 12 }]}>
               <TouchableOpacity onPress={onClose} hitSlop={8}>
                 <ThemedText style={[styles.cancelBtn, { color: glass.tint }]}>
                   取消
