@@ -27,7 +27,6 @@ type ChatStore = {
   isLoading: boolean;
   chatDates: string[];
   summaryCard: ContextCard | null;
-  resolvedPendings: Record<string, true>;
   undoneCards: Record<string, true>;
   jumpTarget: JumpTarget | null;
 
@@ -48,7 +47,6 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   isLoading: false,
   chatDates: [],
   summaryCard: null,
-  resolvedPendings: {},
   undoneCards: {},
   jumpTarget: null,
 
@@ -86,8 +84,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     } catch { /* ignore */ }
 
     // 2. Sync from server (catches new messages since last sync)
+    //    Card messages now carry `payload.resolved` from the backend — no separate
+    //    resolved_pending_ids array needed.
     try {
-      const data = await apiFetch<{ messages: ChatMessage[]; resolved_pending_ids?: string[] }>(
+      const data = await apiFetch<{ messages: ChatMessage[] }>(
         `/api/chat/messages/range?from=${from}&to=${to}`,
         { token },
       );
@@ -102,17 +102,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         await upsertMessages(date, msgs);
       }
       if (_syncGeneration !== gen) return; // cancelled by jump
-      const resolvedFromServer: Record<string, true> = {};
-      for (const id of data.resolved_pending_ids ?? []) {
-        resolvedFromServer[id] = true;
-      }
-      // 3. Re-read window (includes server's new messages)
+      // 3. Re-read window (includes server's new messages, each card carrying its own resolved status)
       const window = await getMessagesInRange(from, to);
       if (_syncGeneration !== gen) return; // cancelled by jump
-      set(s => ({
-        messages: window,
-        resolvedPendings: { ...s.resolvedPendings, ...resolvedFromServer },
-      }));
+      set({ messages: window });
     } catch { /* keep cache on error */ }
 
     if (_syncGeneration !== gen) return; // cancelled by jump
@@ -277,25 +270,46 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       set(s => {
         const existingIds = new Set(s.messages.map(m => m.id));
         const toAdd = newMsgs.filter(m => !existingIds.has(m.id));
-        const resolvedIdx = s.messages.findIndex(
+        // Look up the card's portions for unit info
+        const card = s.messages.find(m => (m.payload as any)?.pending_id === pendingId);
+        const portions = ((card?.payload as any)?.portions ?? []) as Array<{ label: string; grams: number; unit?: string }>;
+        // Enrich the card's payload with resolution details so it renders correctly
+        let resolution: Record<string, unknown> = { resolved: true };
+        if (typeof choice === 'object' && 'grams' in choice) {
+          resolution.resolved_grams = choice.grams;
+          resolution.resolved_unit = portions.find(p => p.label === 'custom')?.unit ?? 'g';
+        } else {
+          const chosen = portions.find(p => p.label === choice);
+          resolution.resolved_portion = choice as string;
+          resolution.resolved_grams = chosen?.grams;
+          resolution.resolved_unit = chosen?.unit ?? 'g';
+        }
+        const nextMessages = s.messages.map(m =>
+          (m.payload as any)?.pending_id === pendingId
+            ? { ...m, payload: { ...(m.payload as any), ...resolution } }
+            : m,
+        );
+        const resolvedIdx = nextMessages.findIndex(
           m => (m.payload as any)?.pending_id === pendingId,
         );
-        let nextMessages: ChatMessage[];
         if (resolvedIdx >= 0 && toAdd.length > 0) {
-          nextMessages = [...s.messages];
           nextMessages.splice(resolvedIdx + 1, 0, ...toAdd);
         } else {
-          nextMessages = [...s.messages, ...toAdd];
+          nextMessages.push(...toAdd);
         }
         return {
           messages: nextMessages,
           summaryCard: res.summary_card ?? s.summaryCard,
-          resolvedPendings: { ...s.resolvedPendings, [pendingId]: true },
         };
       });
     } catch {
+      // On failure, still mark as resolved so the card doesn't look stuck
       set(s => ({
-        resolvedPendings: { ...s.resolvedPendings, [pendingId]: true },
+        messages: s.messages.map(m =>
+          (m.payload as any)?.pending_id === pendingId
+            ? { ...m, payload: { ...(m.payload as any), resolved: true } }
+            : m,
+        ),
       }));
     }
   },

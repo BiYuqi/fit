@@ -57,7 +57,7 @@ export function RecordCard({
           <ThemedText style={styles.foodLine} numberOfLines={1}>
             {payload.food_name}{' '}
             <ThemedText themeColor="textSecondary" style={styles.foodMeta}>
-              {meal} · {payload.weight_g}g
+              {meal} · {payload.weight_g}{payload.unit ?? 'g'}
             </ThemedText>
           </ThemedText>
           <View style={styles.calBlock}>

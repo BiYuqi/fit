@@ -17,6 +17,7 @@ export type PortionLabel = z.infer<typeof PortionLabelSchema>;
 export const PortionSchema = z.object({
   label: PortionLabelSchema,
   grams: z.number().positive(),
+  unit: z.enum(["g", "ml"]).optional().default("g"),
 });
 
 // ---------- 单个食物条目 ----------
@@ -147,7 +148,7 @@ export const parseToolSchema = {
               quantity_expr: { type: "string", description: "原始份量表达，如'一碗'、'半个'" },
               portions: {
                 type: "array",
-                description: "小/中/大三档克数估算",
+                description: "小/中/大三档份量估算，含单位和克数(ml)",
                 items: {
                   type: "object",
                   required: ["label", "grams"],
@@ -155,6 +156,7 @@ export const parseToolSchema = {
                   properties: {
                     label: { type: "string", enum: ["small", "medium", "large", "custom"] },
                     grams: { type: "number" },
+                    unit: { type: "string", enum: ["g", "ml"], description: "固体食物用g，液体/饮品用ml" },
                   },
                 },
               },

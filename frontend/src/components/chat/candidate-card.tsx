@@ -54,7 +54,7 @@ export function CandidateCard({
 
         {disabled ? (
           <ThemedText style={[styles.resolved, { color: colors.textSecondary }]}>
-            {isStale ? '已过期' : '已选择'}
+            {isResolved ? `已选择${selected ? ` · ${selected}` : ''}` : isStale ? '已过期' : '已选择'}
           </ThemedText>
         ) : (
           <>

@@ -121,7 +121,6 @@ export default function ChatScreen({ isActive = true }: { isActive?: boolean }) 
     isSending,
     isLoading,
     chatDates,
-    resolvedPendings,
     jumpTarget,
     loadRecentMessages,
     loadMoreMessages,
@@ -138,6 +137,7 @@ export default function ChatScreen({ isActive = true }: { isActive?: boolean }) 
 
   // Reverse chronological (newest first) for inverted FlatList.
   // Index 0 = newest message → rendered at visual bottom.
+  // Card messages carry `payload.resolved` from the backend — no separate map needed.
   const visibleMessages = useMemo(() => {
     let blocked = false;
     let lastDate = '';
@@ -152,14 +152,13 @@ export default function ChatScreen({ isActive = true }: { isActive?: boolean }) 
       }
       if (blocked && PENDING_KINDS.has(m.kind)) return false;
       if (PENDING_KINDS.has(m.kind)) {
-        const pid = (m.payload as any)?.pending_id as string | undefined;
-        if (!pid || !resolvedPendings[pid]) blocked = true;
+        if (!(m.payload as any)?.resolved) blocked = true;
       }
       return true;
     });
     filtered.reverse();
     return filtered;
-  }, [messages, resolvedPendings]);
+  }, [messages]);
 
   // Initial load
   useEffect(() => {

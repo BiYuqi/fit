@@ -417,6 +417,7 @@ async function processFoodItem(item: FoodItem, ctx: ItemCtx): Promise<ItemResult
 
     const chosenPortion = portions.find((p) => p.label === chosen_label) ?? portions[0];
     const weight_g = chosenPortion.grams;
+    const unit = (chosenPortion as any)?.unit ?? "g";
     const nutrition = itemNutrition(food, weight_g);
 
     const record = await prisma.foodRecord.create({
@@ -442,12 +443,13 @@ async function processFoodItem(item: FoodItem, ctx: ItemCtx): Promise<ItemResult
       food_name: food.name, weight_g, calories: Math.round(nutrition.calories),
       protein_g: Math.round(nutrition.protein_g), fat_g: Math.round(nutrition.fat_g),
       carbs_g: Math.round(nutrition.carbs_g), is_estimated: food.is_estimated,
+      unit,
     };
     if (withUndo) payload.undo = { record_id: record.id };
 
     return {
       record,
-      replyPart: `${food.name} ${weight_g}g（约 ${Math.round(nutrition.calories)} kcal）`,
+      replyPart: `${food.name} ${weight_g}${unit}（约 ${Math.round(nutrition.calories)} kcal）`,
       needsRecompute: true,
       confirmedFn: () => prisma.chatMessage.create({
         data: { user_id, date: dateObj, role: "assistant", kind: "record_card", payload, record_id: record.id as string },
@@ -999,10 +1001,11 @@ export async function chatRoutes(app: FastifyInstance) {
     let food_id: string;
     let weight_g: number;
     let portion_label: PortionLabel;
+    let resolved_unit = "g";
 
     if (pr.type === "portion_choice") {
       food_id = candidates.food_id as string;
-      const portions: Array<{ label: string; grams: number }> = candidates.portions ?? [];
+      const portions: Array<{ label: string; grams: number; unit?: string }> = candidates.portions ?? [];
 
       if (typeof choice === "object" && "grams" in choice) {
         weight_g = choice.grams;
@@ -1011,6 +1014,7 @@ export async function chatRoutes(app: FastifyInstance) {
         const chosen = portions.find((p) => p.label === choice) ?? portions.find((p) => p.label === "medium") ?? portions[0];
         weight_g = chosen?.grams ?? 150;
         portion_label = (chosen?.label ?? "medium") as PortionLabel;
+        resolved_unit = chosen?.unit ?? "g";
       }
     } else {
       // food_choice：choice 是食物名（string），用 matchFood 查找/估算
@@ -1083,7 +1087,17 @@ export async function chatRoutes(app: FastifyInstance) {
       },
     });
 
-    await prisma.pendingRecord.update({ where: { id }, data: { status: "resolved" } });
+    // Store resolution in candidates so read endpoints can enrich card payloads
+    const resolvedCandidates = {
+      ...(candidates as object),
+      resolved_portion: portion_label,
+      resolved_grams: weight_g,
+      resolved_unit,
+    };
+    await prisma.pendingRecord.update({
+      where: { id },
+      data: { status: "resolved", candidates: resolvedCandidates as object },
+    });
 
     // Trace: correction event（用户从 portion_card / candidate_card 选择了具体份量或食物）
     recordResolveCorrection({
@@ -1106,10 +1120,11 @@ export async function chatRoutes(app: FastifyInstance) {
         date: dateObj,
         role: "assistant",
         kind: "record_card",
-        content: `已确认：${food.name} ${weight_g}g（约 ${Math.round(nutrition.calories)} kcal）`,
+        content: `已确认：${food.name} ${weight_g}${resolved_unit}（约 ${Math.round(nutrition.calories)} kcal）`,
         payload: {
           food_name: food.name,
           weight_g,
+          unit: resolved_unit,
           calories: Math.round(nutrition.calories),
           protein_g: Math.round(nutrition.protein_g),
           fat_g: Math.round(nutrition.fat_g),
@@ -1216,22 +1231,40 @@ export async function chatRoutes(app: FastifyInstance) {
       orderBy: { created_at: "asc" },
     });
 
-    // 收集所有 pending_id，查哪些已 resolved，前端据此渲染卡片状态
+    // Enrich card messages with resolved status + resolution details from pendingRecord
     const pendingIds = messages
       .filter((m) => ["portion_card", "candidate_card", "clarify_card", "delete_confirm_card"].includes(m.kind))
       .map((m) => (m.payload as any)?.pending_id as string | undefined)
       .filter(Boolean) as string[];
 
-    let resolved_pending_ids: string[] = [];
+    const resolutionMap = new Map<string, Record<string, unknown>>();
     if (pendingIds.length > 0) {
       const resolved = await prisma.pendingRecord.findMany({
         where: { id: { in: pendingIds }, status: "resolved" },
-        select: { id: true },
+        select: { id: true, candidates: true },
       });
-      resolved_pending_ids = resolved.map((r) => r.id);
+      for (const p of resolved) {
+        const c = p.candidates as any;
+        const enrichment: Record<string, unknown> = { resolved: true };
+        if (c.resolved_portion) {
+          enrichment.resolved_portion = c.resolved_portion;
+          enrichment.resolved_grams = c.resolved_grams;
+          enrichment.resolved_unit = c.resolved_unit ?? "g";
+        }
+        resolutionMap.set(p.id, enrichment);
+      }
     }
 
-    return { date, messages, resolved_pending_ids };
+    const enriched = messages.map((m) => {
+      const pid = (m.payload as any)?.pending_id;
+      const enrichment = pid ? resolutionMap.get(pid) : undefined;
+      if (enrichment) {
+        return { ...m, payload: { ...(m.payload as any), ...enrichment } };
+      }
+      return m;
+    });
+
+    return { date, messages: enriched };
   });
 
   // ─────────────────────────────────────────────
@@ -1284,20 +1317,39 @@ export async function chatRoutes(app: FastifyInstance) {
       orderBy: { created_at: "asc" },
     });
 
+    // Enrich card messages with resolved status + resolution details from pendingRecord
     const pendingIds = messages
       .filter((m) => ["portion_card", "candidate_card", "clarify_card", "delete_confirm_card"].includes(m.kind))
       .map((m) => (m.payload as any)?.pending_id as string | undefined)
       .filter(Boolean) as string[];
 
-    let resolved_pending_ids: string[] = [];
+    const resolutionMap = new Map<string, Record<string, unknown>>();
     if (pendingIds.length > 0) {
       const resolved = await prisma.pendingRecord.findMany({
         where: { id: { in: pendingIds }, status: "resolved" },
-        select: { id: true },
+        select: { id: true, candidates: true },
       });
-      resolved_pending_ids = resolved.map((r) => r.id);
+      for (const p of resolved) {
+        const c = p.candidates as any;
+        const enrichment: Record<string, unknown> = { resolved: true };
+        if (c.resolved_portion) {
+          enrichment.resolved_portion = c.resolved_portion;
+          enrichment.resolved_grams = c.resolved_grams;
+          enrichment.resolved_unit = c.resolved_unit ?? "g";
+        }
+        resolutionMap.set(p.id, enrichment);
+      }
     }
 
-    return { messages, resolved_pending_ids };
+    const enriched = messages.map((m) => {
+      const pid = (m.payload as any)?.pending_id;
+      const enrichment = pid ? resolutionMap.get(pid) : undefined;
+      if (enrichment) {
+        return { ...m, payload: { ...(m.payload as any), ...enrichment } };
+      }
+      return m;
+    });
+
+    return { messages: enriched };
   });
 }

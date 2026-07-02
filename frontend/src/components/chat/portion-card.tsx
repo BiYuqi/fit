@@ -61,14 +61,29 @@ export function PortionCard({
   };
 
   const resolvedLabel = (() => {
-    if (isStale) return '已过期';
-    const portion = selected ? payload.portions.find(p => p.label === selected) : null;
-    if (selected === 'custom') {
-      const g = parseFloat(customGrams);
-      if (!isNaN(g) && g > 0) return `已选 ${g}g`;
+    if (isResolved) {
+      // Immediate session: `selected` from local state (preserved across re-renders)
+      // Reload/remount: resolution details from backend-enriched payload
+      if (selected === 'custom') {
+        const g = parseFloat(customGrams);
+        const u = payload.portions.find(p => p.label === 'custom')?.unit ?? payload.resolved_unit ?? 'g';
+        if (!isNaN(g) && g > 0) return `已选 ${g}${u}`;
+        return '已选择';
+      }
+      if (selected) {
+        const portion = payload.portions.find(p => p.label === selected);
+        const u = portion?.unit ?? 'g';
+        if (portion && portion.grams > 0) return `已选中份 ≈ ${portion.grams}${u}`;
+      }
+      // Remount: read from backend-enriched payload
+      if (payload.resolved_grams) {
+        const u = payload.resolved_unit ?? 'g';
+        if (payload.resolved_portion) return `已选中份 ≈ ${payload.resolved_grams}${u}`;
+        return `已选 ${payload.resolved_grams}${u}`;
+      }
       return '已选择';
     }
-    if (portion && portion.grams > 0) return `已选中份 ≈ ${portion.grams}g`;
+    if (isStale) return '已过期';
     return '已选择';
   })();
 
@@ -76,6 +91,7 @@ export function PortionCard({
   const allPortions = hasCustom
     ? payload.portions
     : [...payload.portions, { label: 'custom', grams: 0 }];
+  const customUnit = payload.portions.find(p => p.label === 'custom')?.unit ?? 'g';
 
   return (
     <View style={styles.wrapper}>
@@ -123,7 +139,7 @@ export function PortionCard({
                     </View>
                     {!isCustom && p.grams > 0 && (
                       <ThemedText style={[styles.optionHint, { color: isSelected ? 'rgba(255,255,255,0.70)' : colors.textSecondary }]}>
-                        ≈ {p.grams}g{p.calories ? `  ·  ${p.calories} kcal` : ''}
+                        ≈ {p.grams}{p.unit ?? 'g'}{p.calories ? `  ·  ${p.calories} kcal` : ''}
                       </ThemedText>
                     )}
                   </TouchableOpacity>
@@ -135,7 +151,7 @@ export function PortionCard({
               <View style={styles.customRow}>
                 <TextInput
                   style={[styles.customInput, { color: colors.text, borderColor: tint + '60', backgroundColor: isDark ? 'rgba(118,118,128,0.12)' : 'rgba(118,118,128,0.06)' }]}
-                  placeholder="克数"
+                  placeholder={customUnit === 'ml' ? '毫升数' : '克数'}
                   placeholderTextColor={colors.textSecondary}
                   keyboardType="numeric"
                   value={customGrams}

@@ -41,6 +41,7 @@ export type RecordCardPayload = {
   fat_g: number;
   carbs_g: number;
   is_estimated?: boolean;
+  unit?: string;
   undo?: RecordUndo; // modify 的 update/append 直执行时带，支持撤销
 };
 
@@ -50,14 +51,19 @@ export type DeleteConfirmCardPayload = {
   name: string;
   meal_type?: string;
   calories?: number;
+  resolved?: boolean;
 };
 
-export type PortionOption = { label: string; grams: number; calories?: number };
+export type PortionOption = { label: string; grams: number; calories?: number; unit?: 'g' | 'ml' };
 
 export type PortionCardPayload = {
   pending_id: string;
   food_name: string;
   portions: PortionOption[];
+  resolved?: boolean;
+  resolved_portion?: string;
+  resolved_grams?: number;
+  resolved_unit?: string;
 };
 
 export type CandidateFood = {
@@ -69,12 +75,14 @@ export type CandidateCardPayload = {
   pending_id: string;
   query: string;
   foods: CandidateFood[];
+  resolved?: boolean;
 };
 
 export type ClarifyCardPayload = {
   pending_id: string;
   query: string;
   portions?: PortionOption[];
+  resolved?: boolean;
 };
 
 export type ContextCard = {

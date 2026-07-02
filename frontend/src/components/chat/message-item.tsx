@@ -3,7 +3,6 @@ import { Animated, StyleSheet, View } from 'react-native';
 import { ThemedText } from '@/components/themed-text';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { FontSize, Glass, Radius, Spacing } from '@/constants/theme';
-import { useChatStore } from '@/stores/chat-store';
 import { UserBubble } from './user-bubble';
 import { RecordCard } from './record-card';
 import { PortionCard } from './portion-card';
@@ -84,7 +83,6 @@ function AiTextBubble({ content }: { content?: string | null }) {
 }
 
 export const MessageItem = memo(function MessageItem({ message, isLast }: { message: ChatMessage; isLast?: boolean }) {
-  const resolvedPendings = useChatStore(s => s.resolvedPendings);
 
   if (message.role === 'user') {
     return <UserBubble content={message.content} />;
@@ -97,14 +95,12 @@ export const MessageItem = memo(function MessageItem({ message, isLast }: { mess
       return <RecordCard payload={p as RecordCardPayload} messageId={message.id} />;
 
     case 'portion_card': {
-      const pid = (p as PortionCardPayload)?.pending_id;
-      const resolved = !!(pid && resolvedPendings[pid]);
+      const resolved = !!(p as PortionCardPayload)?.resolved;
       return <PortionCard payload={p as PortionCardPayload} isResolved={resolved} createdAt={message.created_at} />;
     }
 
     case 'candidate_card': {
-      const pid = (p as CandidateCardPayload)?.pending_id;
-      const resolved = !!(pid && resolvedPendings[pid]);
+      const resolved = !!(p as CandidateCardPayload)?.resolved;
       return <CandidateCard payload={p as CandidateCardPayload} isResolved={resolved} createdAt={message.created_at} />;
     }
 
@@ -122,8 +118,7 @@ export const MessageItem = memo(function MessageItem({ message, isLast }: { mess
       return p ? <ExerciseCard payload={p as unknown as ExerciseCardPayload} messageId={message.id} /> : null;
 
     case 'delete_confirm_card': {
-      const pid = (p as DeleteConfirmCardPayload)?.pending_id;
-      const resolved = !!(pid && resolvedPendings[pid]);
+      const resolved = !!(p as DeleteConfirmCardPayload)?.resolved;
       return <DeleteConfirmCard payload={p as DeleteConfirmCardPayload} isResolved={resolved} />;
     }
 
