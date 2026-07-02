@@ -211,8 +211,7 @@ export default function AppTabs() {
           pointerEvents="box-none"
           style={[
             styles.pillOuter,
-            // bottom:26 matches design (PhoneFrame: bottom:26px from device edge)
-            { bottom: Math.max(26, insets.bottom + 6) },
+            { bottom: Math.max(20, insets.bottom - 10) },
           ]}
         >
           {/* Shadow wrapper */}
