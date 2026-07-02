@@ -27,6 +27,8 @@ export function ChatInput({ onSend, isSending }: Props) {
   const [resetKey, setResetKey] = useState(0);
   const [isListening, setIsListening] = useState(false);
   const inputRef = useRef<TextInput>(null);
+  const voiceSetRef = useRef(false);
+  const initialTextRef = useRef('');
   const scheme = useColorScheme();
   const isDark = scheme === 'dark';
   const colors = Colors[isDark ? 'dark' : 'light'];
@@ -34,6 +36,14 @@ export function ChatInput({ onSend, isSending }: Props) {
   const blurTint = isDark ? 'systemChromeMaterialDark' : 'systemChromeMaterialLight';
 
   const handleSend = () => {
+    // 录音中点击发送 → 停止录音，清空识别文本，不发送
+    if (isListening) {
+      ExpoSpeechRecognitionModule.stop();
+      initialTextRef.current = '';
+      setText('');
+      setResetKey(k => k + 1);
+      return;
+    }
     const trimmed = text.trim();
     if (!trimmed || isSending) return;
     onSend(trimmed);
@@ -55,12 +65,22 @@ export function ChatInput({ onSend, isSending }: Props) {
     }
   };
 
+  const handleChangeText = (t: string) => {
+    // 录音中手动编辑文字 → 退出录音，保留编辑结果
+    if (isListening && !voiceSetRef.current) {
+      ExpoSpeechRecognitionModule.stop();
+    }
+    voiceSetRef.current = false;
+    setText(t);
+  };
+
   // ── Voice input ──────────────────────────────────────────────
   useSpeechRecognitionEvent('start', () => setIsListening(true));
   useSpeechRecognitionEvent('end', () => setIsListening(false));
   useSpeechRecognitionEvent('result', (event) => {
     if (event.results[0]?.transcript) {
-      setText(event.results[0].transcript);
+      voiceSetRef.current = true;
+      setText(initialTextRef.current + event.results[0].transcript);
     }
   });
   useSpeechRecognitionEvent('error', (event) => {
@@ -91,13 +111,14 @@ export function ChatInput({ onSend, isSending }: Props) {
             placeholder="记录你吃了 / 运动了什么..."
             placeholderTextColor={colors.textTertiary}
             value={text}
-            onChangeText={setText}
+            onChangeText={handleChangeText}
             multiline
             maxLength={2000}
             returnKeyType="default"
             blurOnSubmit={false}
           />
           <TouchableOpacity
+            testID="mic-btn"
             activeOpacity={0.6}
             onPress={async () => {
               if (isListening) {
@@ -105,6 +126,7 @@ export function ChatInput({ onSend, isSending }: Props) {
               } else {
                 const perm = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
                 if (!perm.granted) return;
+                initialTextRef.current = text;
                 ExpoSpeechRecognitionModule.start({
                   lang: 'zh-CN',
                   interimResults: true,
@@ -128,6 +150,7 @@ export function ChatInput({ onSend, isSending }: Props) {
         canSend && { shadowColor: glass.tint, shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.45, shadowRadius: 20, elevation: 8 },
       ]}>
         <TouchableOpacity
+          testID="send-btn"
           onPress={handleSend}
           disabled={!canSend}
           activeOpacity={0.7}
