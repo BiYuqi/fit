@@ -3,6 +3,26 @@ import type { ChatMessage } from '@/types/chat';
 
 let _db: SQLite.SQLiteDatabase | null = null;
 
+type MessageRow = {
+  id: string;
+  date: string;
+  role: string;
+  kind: string;
+  content: string | null;
+  payload: string | null;
+  record_id: string | null;
+  created_at: string;
+};
+
+function parseRow(r: MessageRow): ChatMessage {
+  return {
+    ...r,
+    role: r.role as 'user' | 'assistant',
+    kind: (r.kind ?? 'text') as ChatMessage['kind'],
+    payload: r.payload ? JSON.parse(r.payload) : null,
+  };
+}
+
 export async function getDb(): Promise<SQLite.SQLiteDatabase> {
   if (_db) return _db;
   _db = await SQLite.openDatabaseAsync('fit_cache.db');
@@ -27,22 +47,11 @@ export async function getDb(): Promise<SQLite.SQLiteDatabase> {
 
 export async function getCachedMessages(date: string): Promise<ChatMessage[]> {
   const db = await getDb();
-  const rows = await db.getAllAsync<{
-    id: string;
-    date: string;
-    role: string;
-    kind: string;
-    content: string | null;
-    payload: string | null;
-    record_id: string | null;
-    created_at: string;
-  }>('SELECT * FROM chat_messages WHERE date = ? ORDER BY created_at ASC', [date]);
-  return rows.map(r => ({
-    ...r,
-    role: r.role as 'user' | 'assistant',
-    kind: (r.kind ?? 'text') as ChatMessage['kind'],
-    payload: r.payload ? JSON.parse(r.payload) : null,
-  }));
+  const rows = await db.getAllAsync<MessageRow>(
+    'SELECT * FROM chat_messages WHERE date = ? ORDER BY created_at ASC',
+    [date],
+  );
+  return rows.map(parseRow);
 }
 
 export async function upsertMessages(date: string, messages: ChatMessage[]): Promise<void> {
@@ -74,4 +83,12 @@ export async function pruneOldMessages(): Promise<void> {
 export async function clearCache(): Promise<void> {
   const db = await getDb();
   await db.runAsync('DELETE FROM chat_messages');
+}
+
+export async function getAllMessages(): Promise<ChatMessage[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<MessageRow>(
+    'SELECT * FROM chat_messages ORDER BY date ASC, created_at ASC',
+  );
+  return rows.map(parseRow);
 }

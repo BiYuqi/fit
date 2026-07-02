@@ -23,5 +23,25 @@ export function formatChatTime(isoStr: string): string {
   return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`;
 }
 
+/** Parse "YYYY-MM-DD" → Date at local noon (avoids DST/UTC edge cases) */
+function parseDateStr(s: string): Date {
+  const [y, m, d] = s.split('-').map(Number);
+  return new Date(y, m - 1, d, 12, 0, 0);
+}
+
+export function formatDateLabel(date: string): string {
+  const dateOnly = date.slice(0, 10); // handles both "YYYY-MM-DD" and "YYYY-MM-DDTHH:MM:SS.mmmZ"
+  const today = localDateStr();
+  if (dateOnly === today) return '今天';
+
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  if (dateOnly === localDateStr(yesterday)) return '昨天';
+
+  const d = parseDateStr(dateOnly);
+  const weekdays = ['日', '一', '二', '三', '四', '五', '六'];
+  return `${d.getMonth() + 1}月${d.getDate()}日 周${weekdays[d.getDay()]}`;
+}
+
 // Show timestamp when gap between messages > 5 minutes
 export const CHAT_TIME_GAP_MS = 5 * 60 * 1000;

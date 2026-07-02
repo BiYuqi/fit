@@ -1,22 +1,57 @@
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
+  Platform,
   StyleSheet,
+  TouchableOpacity,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { BlurView } from 'expo-blur';
+import { LinearGradient } from 'expo-linear-gradient';
+import { SymbolView } from 'expo-symbols';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { formatChatTime, localDateStr, CHAT_TIME_GAP_MS } from '@/lib/format';
+import { formatChatTime, formatDateLabel, CHAT_TIME_GAP_MS } from '@/lib/format';
 import { ChatInput } from '@/components/chat/chat-input';
-import { DateSelector } from '@/components/chat/date-selector';
 import { MessageItem, ThinkingBubble } from '@/components/chat/message-item';
+import { SearchModal } from '@/components/chat/search-modal';
+import { Glass } from '@/constants/theme';
+import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useTheme } from '@/hooks/use-theme';
 import { useAuthStore } from '@/stores/auth-store';
 import { useChatStore } from '@/stores/chat-store';
 import type { ChatMessage } from '@/types/chat';
+
+// Glass button tokens (matching app-tabs.tsx back button)
+const GLASS = {
+  light: {
+    gradColors: ['rgba(255,255,255,0.82)', 'rgba(255,255,255,0.65)', 'rgba(255,255,255,0.75)'] as const,
+    gradLocs: [0, 0.55, 1] as const,
+    stroke: 'rgba(255,255,255,0.80)',
+    topHighlight: 'rgba(255,255,255,0.95)',
+    shadowColor: 'rgba(31,33,46,1)',
+    shadowOpacity: 0.20,
+    shadowOffset: { width: 0, height: 14 } as { width: number; height: number },
+    shadowRadius: 36,
+    elevation: 14,
+  },
+  dark: {
+    gradColors: ['rgba(94,94,102,0.42)', 'rgba(38,38,44,0.22)', 'rgba(58,58,66,0.34)'] as const,
+    gradLocs: [0, 0.55, 1] as const,
+    stroke: 'rgba(255,255,255,0.22)',
+    topHighlight: 'rgba(255,255,255,0.35)',
+    shadowColor: 'rgba(0,0,0,1)',
+    shadowOpacity: 0.50,
+    shadowOffset: { width: 0, height: 16 } as { width: number; height: number },
+    shadowRadius: 44,
+    elevation: 20,
+  },
+};
+
+const SEARCH_BTN = 38;
 
 function TimeLabel({ time }: { time: string }) {
   const theme = useTheme();
@@ -29,11 +64,21 @@ function TimeLabel({ time }: { time: string }) {
   );
 }
 
+function DateSeparatorView({ date }: { date: string }) {
+  const theme = useTheme();
+  return (
+    <View style={styles.dateSeparator}>
+      <ThemedText style={[styles.dateSeparatorText, { color: theme.textSecondary }]}>
+        {formatDateLabel(date)}
+      </ThemedText>
+    </View>
+  );
+}
+
 function EmptyState() {
   const theme = useTheme();
   const hour = new Date().getHours();
-  const greeting =
-    hour < 12 ? '早上好' : hour < 18 ? '下午好' : '晚上好';
+  const greeting = hour < 12 ? '早上好' : hour < 18 ? '下午好' : '晚上好';
   return (
     <View style={styles.empty}>
       <ThemedText style={styles.emptyGreeting}>{greeting} 👋</ThemedText>
@@ -47,33 +92,42 @@ function EmptyState() {
 export default function ChatScreen() {
   const insets = useSafeAreaInsets();
   const flatListRef = useRef<FlatList<ChatMessage>>(null);
-  // Scroll-intent refs — written by effects, consumed by onContentSizeChange
-  // Using refs (not state) avoids stale-closure in the FlatList callback
-  const shouldScrollRef    = useRef(true);
-  const scrollAnimatedRef  = useRef(false);
-  const lastScrolledDateRef = useRef('');
-  const prevLenRef          = useRef(0);
+
+  const scheme = useColorScheme();
+  const isDark = scheme === 'dark';
+  const theme = useTheme();
+  const glass = Glass[isDark ? 'dark' : 'light'];
+  const g = GLASS[isDark ? 'dark' : 'light'];
+  const blurTint = isDark ? 'systemChromeMaterialDark' : 'systemChromeMaterialLight';
 
   const { token } = useAuthStore();
   const {
     messages,
-    selectedDate,
     isSending,
     isLoading,
     chatDates,
-    summaryCard,
     resolvedPendings,
-    loadForDate,
+    loadAllMessages,
     loadDates,
     send,
-    setDate,
   } = useChatStore();
+
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [pendingJumpId, setPendingJumpId] = useState<string | null>(null);
+  const [pendingJumpDate, setPendingJumpDate] = useState<string | null>(null);
 
   const PENDING_KINDS = new Set(['portion_card', 'candidate_card', 'clarify_card']);
 
+  // Reverse chronological (newest first) for inverted FlatList.
+  // Index 0 = newest message → rendered at visual bottom.
   const visibleMessages = useMemo(() => {
     let blocked = false;
-    return messages.filter(m => {
+    let lastDate = '';
+    const filtered = messages.filter(m => {
+      if (m.date !== lastDate) {
+        blocked = false;
+        lastDate = m.date;
+      }
       if (m.role === 'user') {
         blocked = false;
         return true;
@@ -85,51 +139,16 @@ export default function ChatScreen() {
       }
       return true;
     });
+    filtered.reverse();
+    return filtered;
   }, [messages, resolvedPendings]);
 
+  // Initial load
   useEffect(() => {
     if (!token) return;
-    // 如果 store 残留的是其他日期的消息，先清掉，避免渲染旧日期内容再闪到新日期
-    const s = useChatStore.getState();
-    if (s.selectedDate !== localDateStr() && s.messages.length > 0) {
-      useChatStore.setState({ messages: [] });
-    }
-    loadForDate(localDateStr(), token);
+    loadAllMessages(token);
     loadDates(token);
   }, [token]);
-
-  // Scroll intent: two paths
-  // ─ Date change (incl. initial mount): set flag for onContentSizeChange
-  //   AND direct scroll via rAF — whichever fires later wins, both are
-  //   safe because the other is a no-op if we're already at the bottom.
-  // ─ New message appended: set flag only, onContentSizeChange reliably
-  //   fires for content-size changes.
-
-  useEffect(() => {
-    if (visibleMessages.length === 0) { prevLenRef.current = 0; return; }
-    const dateChanged = lastScrolledDateRef.current !== selectedDate;
-    const prevLen = prevLenRef.current;
-    prevLenRef.current = visibleMessages.length;
-    if (dateChanged) {
-      lastScrolledDateRef.current = selectedDate;
-      shouldScrollRef.current   = true;
-      scrollAnimatedRef.current = false;
-      requestAnimationFrame(() => {
-        flatListRef.current?.scrollToEnd({ animated: false });
-      });
-    } else if (visibleMessages.length > prevLen) {
-      shouldScrollRef.current   = true;
-      scrollAnimatedRef.current = true;
-    }
-  }, [selectedDate, visibleMessages.length]);
-
-  useEffect(() => {
-    if (isSending) {
-      shouldScrollRef.current   = true;
-      scrollAnimatedRef.current = true;
-    }
-  }, [isSending]);
-
 
   const handleSend = useCallback(
     (text: string) => {
@@ -139,25 +158,56 @@ export default function ChatScreen() {
     [token, send],
   );
 
-  const handleSelectDate = useCallback(
-    (date: string) => {
-      if (!token) return;
-      lastScrolledDateRef.current = ''; // force scroll on next message load
-      setDate(date, token);
-    },
-    [token, setDate],
-  );
+  // ── Jump handlers (pending → consumed on modal closed) ──
+  const handleJumpToMessage = useCallback((messageId: string) => {
+    setPendingJumpId(messageId);
+    setSearchOpen(false);
+  }, []);
+
+  const handleJumpToDate = useCallback((date: string) => {
+    setPendingJumpDate(date);
+    setSearchOpen(false);
+  }, []);
+
+  const handleModalClosed = useCallback(() => {
+    if (pendingJumpId) {
+      const idx = visibleMessages.findIndex(m => m.id === pendingJumpId);
+      if (idx >= 0) {
+        flatListRef.current?.scrollToIndex({ index: idx, animated: true, viewPosition: 0.5 });
+      }
+      setPendingJumpId(null);
+    }
+    if (pendingJumpDate) {
+      const idx = visibleMessages.findIndex(m => m.date === pendingJumpDate);
+      if (idx >= 0) {
+        flatListRef.current?.scrollToIndex({ index: idx, animated: true, viewPosition: 0.5 });
+      }
+      setPendingJumpDate(null);
+    }
+  }, [visibleMessages, pendingJumpId, pendingJumpDate]);
 
   const renderItem = useCallback(
     ({ item, index }: { item: ChatMessage; index: number }) => {
-      const prev = index > 0 ? visibleMessages[index - 1] : null;
+      // Reversed data: index+1 is OLDER, index-1 is NEWER.
+      const next = index + 1 < visibleMessages.length ? visibleMessages[index + 1] : null;
+      // Date separator at the oldest message of each day, but never on the
+      // very newest message (index 0) — it would flicker when sending a new
+      // message temporarily becomes the date boundary, then loses it after
+      // the AI response adds more messages of the same date.
+      const showDate = index > 0 && (!next || next.date !== item.date);
+      // Time label when gap to OLDER message > 5 min — matches old behavior
+      // (old code compared to prev in chronological order = older message).
+      // Using "next" (older) means sending a new message doesn't erase
+      // the time label on the previously-newest message.
       const showTime =
-        !prev ||
-        new Date(item.created_at).getTime() - new Date(prev.created_at).getTime() > CHAT_TIME_GAP_MS;
+        !next ||
+        new Date(item.created_at).getTime() - new Date(next.created_at).getTime() > CHAT_TIME_GAP_MS;
+
       return (
         <>
+          <MessageItem message={item} isLast={index === 0} />
           {showTime && <TimeLabel time={item.created_at} />}
-          <MessageItem message={item} isLast={index === visibleMessages.length - 1} />
+          {showDate && <DateSeparatorView date={item.date} />}
         </>
       );
     },
@@ -166,21 +216,21 @@ export default function ChatScreen() {
 
   const keyExtractor = useCallback((item: ChatMessage) => item.id, []);
 
-  // Top padding: status bar + date pill height (≈54px from design)
-  const topPad = insets.top + 54;
+  // In inverted FlatList, paddingBottom on contentContainer = visual top.
+  const topPad = insets.top + 16;
 
   return (
     <ThemedView style={[styles.root, { backgroundColor: 'transparent' }]}>
-      {/* FlatList stays mounted at all times so flatListRef is never null */}
       <FlatList
         ref={flatListRef}
+        inverted
         data={visibleMessages}
         renderItem={renderItem}
         keyExtractor={keyExtractor}
         style={styles.flatList}
         contentContainerStyle={[
           styles.list,
-          { paddingTop: topPad },
+          { paddingBottom: topPad },
           visibleMessages.length === 0 && styles.listEmpty,
         ]}
         ListEmptyComponent={
@@ -192,15 +242,13 @@ export default function ChatScreen() {
             <EmptyState />
           )
         }
-        ListFooterComponent={isSending ? <ThinkingBubble /> : null}
+        ListHeaderComponent={isSending ? <ThinkingBubble /> : null}
         initialNumToRender={200}
         maxToRenderPerBatch={200}
         windowSize={99}
-        onContentSizeChange={() => {
-          if (shouldScrollRef.current) {
-            shouldScrollRef.current = false;
-            flatListRef.current?.scrollToEnd({ animated: scrollAnimatedRef.current });
-          }
+        onScrollToIndexFailed={(info) => {
+          const estimatedOffset = info.index * 80;
+          flatListRef.current?.scrollToOffset({ offset: estimatedOffset, animated: true });
         }}
         showsVerticalScrollIndicator={false}
         keyboardDismissMode="on-drag"
@@ -208,14 +256,66 @@ export default function ChatScreen() {
         automaticallyAdjustKeyboardInsets
       />
 
-      {/* Floating date pill — centered at top, absolute over messages */}
-      <View style={[styles.datePillWrapper, { top: insets.top + 10 }]} pointerEvents="box-none">
-        <DateSelector
-          selectedDate={selectedDate}
-          dates={chatDates}
-          onSelect={handleSelectDate}
-        />
+      {/* Search button — top-right, glass styling matching back button */}
+      <View
+        style={[
+          styles.searchBtnWrapper,
+          {
+            top: insets.top + 10,
+            shadowColor: g.shadowColor,
+            shadowOpacity: g.shadowOpacity,
+            shadowOffset: g.shadowOffset,
+            shadowRadius: g.shadowRadius,
+            elevation: g.elevation,
+          },
+        ]}
+      >
+        <TouchableOpacity
+          style={styles.searchBtn}
+          onPress={() => setSearchOpen(true)}
+          activeOpacity={0.8}
+        >
+          <BlurView intensity={40} tint={blurTint} style={StyleSheet.absoluteFill} />
+          <LinearGradient
+            colors={g.gradColors}
+            locations={g.gradLocs}
+            start={{ x: 0.85, y: 0 }}
+            end={{ x: 0.15, y: 1 }}
+            style={StyleSheet.absoluteFill}
+            pointerEvents="none"
+          />
+          <View
+            style={[styles.searchBtnTopHL, { backgroundColor: g.topHighlight }]}
+            pointerEvents="none"
+          />
+          <View
+            style={[styles.searchBtnBorder, { borderColor: g.stroke }]}
+            pointerEvents="none"
+          />
+          {Platform.OS === 'ios' ? (
+            <SymbolView
+              name="magnifyingglass"
+              size={17}
+              tintColor={glass.tabInactive}
+              weight="semibold"
+            />
+          ) : (
+            <ThemedText style={[styles.searchBtnEmoji, { color: glass.tabInactive }]}>
+              🔍
+            </ThemedText>
+          )}
+        </TouchableOpacity>
       </View>
+
+      <SearchModal
+        visible={searchOpen}
+        onClose={() => setSearchOpen(false)}
+        onClosed={handleModalClosed}
+        allMessages={messages}
+        chatDates={chatDates}
+        onJumpToMessage={handleJumpToMessage}
+        onJumpToDate={handleJumpToDate}
+      />
 
       <ChatInput onSend={handleSend} isSending={isSending} />
       <View style={{ height: insets.bottom }} />
@@ -224,15 +324,13 @@ export default function ChatScreen() {
 }
 
 const styles = StyleSheet.create({
-  root: {
-    flex: 1,
-  },
-  flatList: {
-    flex: 1,
-  },
+  root: { flex: 1 },
+  flatList: { flex: 1 },
   list: {
     paddingHorizontal: 16,
-    paddingBottom: 16,
+    // paddingBottom for visual TOP in inverted FlatList
+    paddingTop: 16,
+    flexGrow: 1,
   },
   listEmpty: {
     flex: 1,
@@ -243,20 +341,56 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingTop: 60,
   },
-  datePillWrapper: {
+
+  // Search button
+  searchBtnWrapper: {
     position: 'absolute',
-    left: 0,
-    right: 0,
-    alignItems: 'center',
-    zIndex: 20,
+    right: 14,
+    zIndex: 30,
+    width: SEARCH_BTN,
+    height: SEARCH_BTN,
+    borderRadius: SEARCH_BTN / 2,
   },
+  searchBtn: {
+    width: SEARCH_BTN,
+    height: SEARCH_BTN,
+    borderRadius: SEARCH_BTN / 2,
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  searchBtnTopHL: {
+    position: 'absolute',
+    top: 0, left: 0, right: 0,
+    height: 1.2,
+    borderTopLeftRadius: SEARCH_BTN / 2,
+    borderTopRightRadius: SEARCH_BTN / 2,
+  },
+  searchBtnBorder: {
+    position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+    borderRadius: SEARCH_BTN / 2,
+    borderWidth: 0.5,
+  },
+  searchBtnEmoji: { fontSize: 17 },
+
+  // Date separator
+  dateSeparator: {
+    alignItems: 'center',
+    paddingVertical: 10,
+  },
+  dateSeparatorText: {
+    fontSize: 12,
+    fontWeight: '500',
+  },
+
+  // Time label
   timeLabel: {
     alignItems: 'center',
     paddingVertical: 8,
   },
-  timeLabelText: {
-    fontSize: 12,
-  },
+  timeLabelText: { fontSize: 12 },
+
+  // Empty state
   empty: {
     flex: 1,
     alignItems: 'center',
@@ -264,13 +398,6 @@ const styles = StyleSheet.create({
     gap: 8,
     paddingHorizontal: 32,
   },
-  emptyGreeting: {
-    fontSize: 22,
-    fontWeight: '600',
-  },
-  emptyHint: {
-    fontSize: 15,
-    textAlign: 'center',
-    lineHeight: 22,
-  },
+  emptyGreeting: { fontSize: 22, fontWeight: '600' },
+  emptyHint: { fontSize: 15, textAlign: 'center', lineHeight: 22 },
 });

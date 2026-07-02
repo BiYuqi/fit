@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { apiFetch } from '@/lib/api';
-import { getCachedMessages, upsertMessages } from '@/lib/db';
+import { getAllMessages, upsertMessages } from '@/lib/db';
 import { localDateStr } from '@/lib/format';
 import type { ChatMessage, ContextCard, SendMessageResponse, ResolveResponse, UndoPrevState } from '@/types/chat';
 
@@ -10,25 +10,22 @@ function todayStr() {
 
 type ChatStore = {
   messages: ChatMessage[];
-  selectedDate: string;
   isSending: boolean;
   isLoading: boolean;
   chatDates: string[];
   summaryCard: ContextCard | null;
   resolvedPendings: Record<string, true>;
-  undoneCards: Record<string, true>; // 按"卡片(消息 id)"标记已撤销，非 record_id（同一记录可有多张卡）
+  undoneCards: Record<string, true>;
 
-  loadForDate: (date: string, token: string) => Promise<void>;
+  loadAllMessages: (token: string) => Promise<void>;
   loadDates: (token: string) => Promise<void>;
   send: (text: string, token: string) => Promise<void>;
   resolve: (pendingId: string, choice: string | { grams: number }, token: string) => Promise<void>;
   undo: (messageId: string, recordId: string, prevState: UndoPrevState | undefined, token: string) => Promise<void>;
-  setDate: (date: string, token: string) => void;
 };
 
 export const useChatStore = create<ChatStore>((set, get) => ({
   messages: [],
-  selectedDate: todayStr(),
   isSending: false,
   isLoading: false,
   chatDates: [],
@@ -46,7 +43,6 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         `/api/chat/dates?from=${fromStr}&to=${to}`,
         { token },
       );
-      // Ensure today is always in the list
       const dates = data.dates.includes(to) ? data.dates : [...data.dates, to];
       set({ chatDates: dates });
     } catch {
@@ -54,27 +50,45 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }
   },
 
-  loadForDate: async (date: string, token: string) => {
-    set({ isLoading: true, selectedDate: date });
+  loadAllMessages: async (token: string) => {
+    set({ isLoading: true });
     // 1. Show cached immediately
     try {
-      const cached = await getCachedMessages(date);
-      set({ messages: cached });
+      const cached = await getAllMessages();
+      if (cached.length > 0) {
+        set({ messages: cached });
+      }
     } catch {
       // ignore
     }
-    // 2. Sync from server
+    // 2. Sync from server (90-day range)
     try {
-      const data = await apiFetch<{ date: string; messages: ChatMessage[]; resolved_pending_ids?: string[] }>(
-        `/api/chat/messages?date=${date}`,
+      const to = todayStr();
+      const from = new Date();
+      from.setDate(from.getDate() - 89);
+      const fromStr = localDateStr(from);
+      const data = await apiFetch<{ messages: ChatMessage[]; resolved_pending_ids?: string[] }>(
+        `/api/chat/messages/range?from=${fromStr}&to=${to}`,
         { token },
       );
-      await upsertMessages(date, data.messages);
+      // Group by date and upsert into SQLite
+      const byDate = new Map<string, ChatMessage[]>();
+      for (const m of data.messages) {
+        const list = byDate.get(m.date);
+        if (list) list.push(m);
+        else byDate.set(m.date, [m]);
+      }
+      for (const [date, msgs] of byDate) {
+        await upsertMessages(date, msgs);
+      }
       const resolvedFromServer: Record<string, true> = {};
       for (const id of data.resolved_pending_ids ?? []) {
         resolvedFromServer[id] = true;
       }
-      set(s => ({ messages: data.messages, resolvedPendings: { ...s.resolvedPendings, ...resolvedFromServer } }));
+      set(s => ({
+        messages: data.messages,
+        resolvedPendings: { ...s.resolvedPendings, ...resolvedFromServer },
+      }));
     } catch {
       // keep cache on error
     }
@@ -82,11 +96,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   },
 
   send: async (text: string, token: string) => {
-    const date = get().selectedDate;
     const tempId = `temp-${Date.now()}`;
     const optimistic: ChatMessage = {
       id: tempId,
-      date,
+      date: todayStr(),
       role: 'user',
       kind: 'text',
       content: text,
@@ -101,6 +114,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         token,
       });
       const newMsgs = res.messages as ChatMessage[];
+      const date = newMsgs[0]?.date ?? todayStr();
       await upsertMessages(date, newMsgs);
       set(s => {
         const without = s.messages.filter(m => m.id !== tempId);
@@ -111,7 +125,6 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           summaryCard: res.summary_card ?? s.summaryCard,
         };
       });
-      // Refresh date list (today now has messages)
       get().loadDates(token);
     } catch (e) {
       set(s => ({ messages: s.messages.filter(m => m.id !== tempId) }));
@@ -122,7 +135,6 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   },
 
   resolve: async (pendingId: string, choice: string | { grams: number }, token: string) => {
-    const date = get().selectedDate;
     try {
       const res = await apiFetch<ResolveResponse>(`/api/pending/${pendingId}/resolve`, {
         method: 'POST',
@@ -130,11 +142,11 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         token,
       });
       const newMsgs = res.messages as ChatMessage[];
+      const date = newMsgs[0]?.date ?? todayStr();
       await upsertMessages(date, newMsgs);
       set(s => {
         const existingIds = new Set(s.messages.map(m => m.id));
         const toAdd = newMsgs.filter(m => !existingIds.has(m.id));
-        // 将 record_card 插到被解决的 pending 卡正后方，而不是追加到末尾
         const resolvedIdx = s.messages.findIndex(
           m => (m.payload as any)?.pending_id === pendingId,
         );
@@ -152,7 +164,6 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         };
       });
     } catch {
-      // Already resolved or other error — mark resolved so buttons go away
       set(s => ({
         resolvedPendings: { ...s.resolvedPendings, [pendingId]: true },
       }));
@@ -160,7 +171,6 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   },
 
   undo: async (messageId: string, recordId: string, prevState: UndoPrevState | undefined, token: string) => {
-    // 乐观置灰这张卡（按消息 id，不影响同一记录的其它卡），避免重复点击
     set(s => ({ undoneCards: { ...s.undoneCards, [messageId]: true } }));
     try {
       const res = await apiFetch<{ ok: boolean; summary_card: ContextCard }>(
@@ -173,16 +183,11 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       );
       set(s => ({ summaryCard: res.summary_card ?? s.summaryCard }));
     } catch {
-      // 撤销失败 → 回滚置灰，让用户可重试
       set(s => {
         const next = { ...s.undoneCards };
         delete next[messageId];
         return { undoneCards: next };
       });
     }
-  },
-
-  setDate: (date: string, token: string) => {
-    get().loadForDate(date, token);
   },
 }));

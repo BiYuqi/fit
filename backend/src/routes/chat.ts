@@ -1194,4 +1194,42 @@ export async function chatRoutes(app: FastifyInstance) {
     const dates = rows.map((r) => r.date.toISOString().slice(0, 10));
     return { dates };
   });
+
+  // ─────────────────────────────────────────────
+  // GET /api/chat/messages/range?from=&to=
+  // ─────────────────────────────────────────────
+  const RangeQuerySchema = z.object({
+    from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    to:   z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  });
+
+  app.get("/api/chat/messages/range", { preHandler: [auth] }, async (req, reply) => {
+    const { sub: user_id } = req.user as { sub: string };
+    const qParsed = RangeQuerySchema.safeParse(req.query);
+    if (!qParsed.success) {
+      return reply.status(400).send({ error: { code: "invalid_params", message: qParsed.error.message } });
+    }
+    const { from, to } = qParsed.data;
+
+    const messages = await prisma.chatMessage.findMany({
+      where: { user_id, date: { gte: toDateOnly(from), lte: toDateOnly(to) } },
+      orderBy: { created_at: "asc" },
+    });
+
+    const pendingIds = messages
+      .filter((m) => ["portion_card", "candidate_card", "clarify_card", "delete_confirm_card"].includes(m.kind))
+      .map((m) => (m.payload as any)?.pending_id as string | undefined)
+      .filter(Boolean) as string[];
+
+    let resolved_pending_ids: string[] = [];
+    if (pendingIds.length > 0) {
+      const resolved = await prisma.pendingRecord.findMany({
+        where: { id: { in: pendingIds }, status: "resolved" },
+        select: { id: true },
+      });
+      resolved_pending_ids = resolved.map((r) => r.id);
+    }
+
+    return { messages, resolved_pending_ids };
+  });
 }

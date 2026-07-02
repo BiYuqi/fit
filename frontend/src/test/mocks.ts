@@ -35,8 +35,7 @@ export interface ChatStoreState {
   undo: ReturnType<typeof jest.fn>;
   send: ReturnType<typeof jest.fn>;
   resolve: ReturnType<typeof jest.fn>;
-  setDate: ReturnType<typeof jest.fn>;
-  loadForDate: ReturnType<typeof jest.fn>;
+  loadAllMessages: ReturnType<typeof jest.fn>;
 }
 
 export function createMockChatStore(overrides: Partial<ChatStoreState> = {}): ChatStoreState {
@@ -49,8 +48,7 @@ export function createMockChatStore(overrides: Partial<ChatStoreState> = {}): Ch
     undo: jest.fn(),
     send: jest.fn(),
     resolve: jest.fn(),
-    setDate: jest.fn(),
-    loadForDate: jest.fn(),
+    loadAllMessages: jest.fn(),
     ...overrides,
   };
 }
