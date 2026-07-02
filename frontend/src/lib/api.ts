@@ -1,4 +1,4 @@
-const BASE = (process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3000').replace(/\/$/, '');
+const BASE = (process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:9300').replace(/\/$/, '');
 
 export class ApiError extends Error {
   constructor(

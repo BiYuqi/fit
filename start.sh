@@ -102,7 +102,7 @@ run_all() {
   start_db
   prepare_backend
   seed_if_empty
-  kill_port 3000
+  kill_port 9300
   echo "🚀 启动后端 (后台)"
   (cd "$BACKEND" && npm run dev) & BACKEND_PID=$!
   sleep 2
@@ -121,7 +121,7 @@ run_ios() {
   start_db
   prepare_backend
   seed_if_empty
-  kill_port 3000
+  kill_port 9300
   echo "🚀 启动后端 (后台)"
   (cd "$BACKEND" && npm run dev) & BACKEND_PID=$!
   sleep 2
