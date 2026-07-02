@@ -108,13 +108,13 @@ export async function parseUserInput(
   pack: MemoryPack,
   model = "deepseek-v4-flash",
   userId: string,
-): Promise<{ result: ParseResult; usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number } }> {
+): Promise<{ result: ParseResult; usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number }; messages?: Array<{ role: string; content: string }> }> {
   const messages: Array<{ role: "system" | "user"; content: string }> = [
     { role: "system", content: SYSTEM_PROMPT },
     { role: "user", content: text },
   ];
 
-  const res = await callDeepSeekCtx(
+  const { res, messages: sent } = await callDeepSeekCtx(
     pack,
     messages,
     {
@@ -163,5 +163,5 @@ export async function parseUserInput(
   }
 
   const result = ParseResultSchema.parse(raw);
-  return { result, usage };
+  return { result, usage, messages: sent };
 }

@@ -149,7 +149,7 @@ export class ChatTrace {
   }
 
   /** 正常结束 trace，写入 intent + status="ok" + 聚合字段 */
-  ok(intent: string, extra?: { mealType?: string; tokenUsage?: object }): void {
+  ok(intent: string, extra?: { mealType?: string; tokenUsage?: object; promptMessages?: object }): void {
     const lat = Date.now() - this.tStart;
     finalizeTrace(this.traceId, {
       intent,
@@ -159,7 +159,7 @@ export class ChatTrace {
       latencyMs: lat,
       tokenUsage: extra?.tokenUsage,
       promptHash: this.promptHash,
-      promptMessages: [{ user: this.inputText }] as object,
+      promptMessages: extra?.promptMessages ?? [{ user: this.inputText }] as object,
       mealId: extra?.mealType
         ? `${new Date().toISOString().slice(0, 10)}_${extra.mealType}`
         : undefined,
@@ -167,7 +167,7 @@ export class ChatTrace {
   }
 
   /** 异常结束 trace */
-  fail(intent: string, errorInfo?: object): void {
+  fail(intent: string, errorInfo?: object, extra?: { promptMessages?: object }): void {
     finalizeTrace(this.traceId, {
       intent,
       status: "failed",
@@ -176,12 +176,12 @@ export class ChatTrace {
       latencyMs: Date.now() - this.tStart,
       errorInfo,
       promptHash: this.promptHash,
-      promptMessages: [{ user: this.inputText }] as object,
+      promptMessages: extra?.promptMessages ?? [{ user: this.inputText }] as object,
     });
   }
 
   /** 部分成功（如 modify 找不到 target） */
-  partial(intent: string, extra?: { tokenUsage?: object }): void {
+  partial(intent: string, extra?: { tokenUsage?: object; promptMessages?: object }): void {
     finalizeTrace(this.traceId, {
       intent,
       status: "partial",
@@ -190,7 +190,7 @@ export class ChatTrace {
       latencyMs: Date.now() - this.tStart,
       tokenUsage: extra?.tokenUsage,
       promptHash: this.promptHash,
-      promptMessages: [{ user: this.inputText }] as object,
+      promptMessages: extra?.promptMessages ?? [{ user: this.inputText }] as object,
     });
   }
 }

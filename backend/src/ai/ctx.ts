@@ -86,11 +86,11 @@ export function compressContext(pack: MemoryPack): string {
 // 统一 AI 调用入口：强制在第一条 user message 之前注入压缩上下文。
 // 所有需要用户上下文的 AI 调用（parser/answerChat/answerQuery/discuss 等）必须走这里。
 // 纯食物知识类调用（estimateByAI/adjudicateByAI）不涉及用户状态，继续用 callDeepSeek。
-export function callDeepSeekCtx(
+export async function callDeepSeekCtx(
   pack: MemoryPack,
   messages: ChatMessage[],
   opts: CallOptions = {},
-): ReturnType<typeof callDeepSeek> {
+): Promise<{ res: Awaited<ReturnType<typeof callDeepSeek>>; messages: ChatMessage[] }> {
   const ctx = compressContext(pack);
   const ctxMsg: ChatMessage = { role: "system", content: `以下是当前对话上下文：\n${ctx}` };
 
@@ -100,5 +100,6 @@ export function callDeepSeekCtx(
       ? [...messages, ctxMsg]
       : [...messages.slice(0, insertIdx), ctxMsg, ...messages.slice(insertIdx)];
 
-  return callDeepSeek(fullMessages, opts);
+  const res = await callDeepSeek(fullMessages, opts);
+  return { res, messages: fullMessages };
 }

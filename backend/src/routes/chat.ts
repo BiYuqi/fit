@@ -133,7 +133,7 @@ async function answerQuery(question: string, pack: MemoryPack, userId: string, e
   text: string;
   usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
 }> {
-  const res = await callDeepSeekCtx(
+  const { res } = await callDeepSeekCtx(
     pack,
     [
       {
@@ -163,7 +163,7 @@ async function answerChat(text: string, pack: MemoryPack, userId: string): Promi
   text: string;
   usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
 }> {
-  const res = await callDeepSeekCtx(
+  const { res } = await callDeepSeekCtx(
     pack,
     [
       {
@@ -222,7 +222,7 @@ async function answerDiscuss(
     systemPrompt = `你是减脂助手。用户对某条饮食记录提出了疑问，请结合以下记录详情，简洁中文解释这条记录是如何产生的（份量估算依据、克数来源、热量算法）。若用户觉得克数不准，告知可以说"改成X克"来调整。\n\n${detail}`;
   }
 
-  const res = await callDeepSeekCtx(
+  const { res } = await callDeepSeekCtx(
     pack,
     [
       {
@@ -574,6 +574,7 @@ export async function chatRoutes(app: FastifyInstance) {
     const tctx = await ChatTrace.begin(user_id, text, pack, { sessionId: session_id, promptText: SYSTEM_PROMPT });
 
     let resolvedIntent: string | undefined;
+    let parseMessages: object | undefined;
     try {
     // 解析意图（flash → pro 若 zod 校验失败或低置信）
     let parsed: ParseResult;
@@ -584,6 +585,7 @@ export async function chatRoutes(app: FastifyInstance) {
       const pr = await parseUserInput(text, pack, "deepseek-v4-flash", user_id);
       parsed = pr.result;
       parseUsage = pr.usage;
+      parseMessages = pr.messages as object;
     } catch {
       // flash 解析失败（zod 校验 / tool call JSON 解析失败），升 pro 重试
       modelUsed = "deepseek-v4-pro";
@@ -591,6 +593,7 @@ export async function chatRoutes(app: FastifyInstance) {
         const pr = await parseUserInput(text, pack, "deepseek-v4-pro", user_id);
         parsed = pr.result;
         parseUsage = pr.usage;
+        parseMessages = pr.messages as object;
         upgraded = true;
       } catch {
         // pro 也失败，兜底为 chat
@@ -606,6 +609,7 @@ export async function chatRoutes(app: FastifyInstance) {
           const pr = await parseUserInput(text, pack, "deepseek-v4-pro", user_id);
           parsed = pr.result;
           parseUsage = pr.usage;
+          parseMessages = pr.messages as object;
         } catch {
           /* 保留 flash 结果（含 flash 的 usage） */
         }
@@ -653,7 +657,7 @@ export async function chatRoutes(app: FastifyInstance) {
         },
       });
       messages.push(aiMsg);
-      tctx.ok("query", { tokenUsage: queryUsage }); // trace 结束：status=ok
+      tctx.ok("query", { tokenUsage: queryUsage, promptMessages: parseMessages }); // trace 结束：status=ok
       return { intent: "query", reply: aiText, summary_card: pack.card, messages };
     }
 
@@ -664,7 +668,7 @@ export async function chatRoutes(app: FastifyInstance) {
         data: { user_id, date: dateObj, role: "assistant", kind: "text", content: aiText },
       });
       messages.push(aiMsg);
-      tctx.ok("chat", { tokenUsage: chatUsage });
+      tctx.ok("chat", { tokenUsage: chatUsage, promptMessages: parseMessages });
       return { intent: "chat", reply: aiText, summary_card: pack.card, messages };
     }
 
@@ -693,7 +697,7 @@ export async function chatRoutes(app: FastifyInstance) {
         data: { user_id, date: dateObj, role: "assistant", kind: "text", content: aiText },
       });
       messages.push(aiMsg);
-      tctx.ok("discuss", { tokenUsage: discussUsage });
+      tctx.ok("discuss", { tokenUsage: discussUsage, promptMessages: parseMessages });
       return { intent: "discuss", reply: aiText, summary_card: pack.card, messages };
     }
 
@@ -706,7 +710,7 @@ export async function chatRoutes(app: FastifyInstance) {
         });
         messages.push(aiMsg);
         const card = await buildContextCard(user_id);
-        tctx.partial("modify", { tokenUsage: parseUsage }); // trace 结束：status=partial（找不到 target）
+        tctx.partial("modify", { tokenUsage: parseUsage, promptMessages: parseMessages }); // trace 结束：status=partial（找不到 target）
         return { intent: "modify", reply: aiMsg.content, summary_card: card, messages };
       }
 
@@ -726,7 +730,7 @@ export async function chatRoutes(app: FastifyInstance) {
         });
         messages.push(aiMsg);
         const card = await buildContextCard(user_id);
-        tctx.ok("modify", { tokenUsage: parseUsage }); // trace 结束（correction 在用户确认时由 resolve 写）
+        tctx.ok("modify", { tokenUsage: parseUsage, promptMessages: parseMessages }); // trace 结束（correction 在用户确认时由 resolve 写）
         return { intent: "modify", reply: `确认删除「${target.name}」吗？`, pending: pr, summary_card: card, messages };
       }
 
@@ -757,7 +761,7 @@ export async function chatRoutes(app: FastifyInstance) {
         const reply = records.length > 0
           ? `已追加：${replyParts.join("，")}。`
           : pending ? "请帮我确认追加内容。" : "好的。";
-        tctx.ok("modify", { mealType: meal_type, tokenUsage: parseUsage });
+        tctx.ok("modify", { mealType: meal_type, tokenUsage: parseUsage, promptMessages: parseMessages });
         return { intent: "modify", reply, records: records.length ? records : undefined, pending: pending ?? undefined, summary_card: card, messages };
       }
 
@@ -805,7 +809,7 @@ export async function chatRoutes(app: FastifyInstance) {
           },
         });
         messages.push(aiMsg);
-        tctx.ok("modify", { tokenUsage: parseUsage });
+        tctx.ok("modify", { tokenUsage: parseUsage, promptMessages: parseMessages });
         return { intent: "modify", reply: content, summary_card: card, messages };
       }
 
@@ -960,7 +964,7 @@ export async function chatRoutes(app: FastifyInstance) {
     }
 
     // Trace 结束：status=ok，所有 item 的 event 已在 processFoodItem 内写入
-    tctx.ok("record", { mealType: meal_type, tokenUsage: parseUsage });
+    tctx.ok("record", { mealType: meal_type, tokenUsage: parseUsage, promptMessages: parseMessages });
     return {
       intent: "record",
       reply: replyText,
@@ -972,7 +976,7 @@ export async function chatRoutes(app: FastifyInstance) {
     };
   } catch (err: any) {
     // 异常路径也要关闭 trace，避免留下 status="started" 的僵尸记录
-    tctx.fail(resolvedIntent ?? "unknown", { message: err?.message });
+    tctx.fail(resolvedIntent ?? "unknown", { message: err?.message }, { promptMessages: parseMessages });
     throw err;
   }
   });
