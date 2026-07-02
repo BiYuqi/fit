@@ -1,5 +1,5 @@
 import { prisma } from "../lib/prisma";
-import { bmr as calcBmr, tdee as calcTdee, dailyTargets } from "./calc";
+import { bmr as calcBmr, tdee as calcTdee } from "./calc";
 import type { UserProfile, Sex, ActivityLevel } from "./calc";
 
 export interface ContextCard {
@@ -52,10 +52,11 @@ export async function recompute(user_id: string, date: Date | string): Promise<v
       daily_deficit: user.daily_deficit,
     };
     bmrVal = calcBmr(profile);
-    tdeeVal = calcTdee(profile);
-    const t = dailyTargets(profile);
-    target_calories = t.target_calories;
-    target_protein = t.target_protein_g;
+    const td = user.custom_tdee != null ? user.custom_tdee : calcTdee(profile);
+    tdeeVal = td;
+    const deficit = user.daily_deficit ?? 500;
+    target_calories = Math.round(td - deficit);
+    target_protein = Math.round(Number(user.weight_kg) * 1.8);
   }
 
   const calories_in  = foodAgg._sum.calories ?? 0;
