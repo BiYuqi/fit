@@ -709,8 +709,9 @@ const styles = StyleSheet.create({
   metBadge:   { fontSize: 13, fontWeight: '600' },
   deficitRow: {
     flexDirection: 'row', alignItems: 'baseline', gap: 5, marginTop: 2,
+    overflow: 'visible',
   },
-  deficitVal:  { fontSize: 26, fontWeight: '700' },
+  deficitVal:  { fontSize: 26, fontWeight: '700', lineHeight: 32 },
   deficitUnit: { fontSize: 13 },
   chartWrap:   { marginTop: 8 },
   chartLabels: {
