@@ -738,7 +738,7 @@ export default function HistoryScreen({ isActive = true }: { isActive?: boolean 
   const colors = Colors[isDark ? 'dark' : 'light'];
   const glass  = Glass[isDark ? 'dark' : 'light'];
 
-  const [granularity, setGranularity] = useState<Granularity>('week');
+  const [granularity, setGranularity] = useState<Granularity>('day');
   const [rangeData,   setRangeData]   = useState<RangeItem[]>([]);
   const [foodRecords, setFoodRecords] = useState<FoodRec[]>([]);
   const [exRecords,   setExRecords]   = useState<ExRec[]>([]);
@@ -857,7 +857,7 @@ export default function HistoryScreen({ isActive = true }: { isActive?: boolean 
         isDark={isDark}
         colors={colors}
         granularity={granularity}
-        defaultExpanded={index === 0}
+        defaultExpanded={false}
       />
     ),
     [rangeItemMap, isDark, colors, granularity],
