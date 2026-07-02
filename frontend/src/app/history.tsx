@@ -74,7 +74,6 @@ const MEAL_EMOJI: Record<string, string> = {
   breakfast: '🥣', lunch: '🍱', dinner: '🍽️', snack: '🍪',
 };
 
-const WEEKDAYS_SHORT = ['一', '二', '三', '四', '五', '六', '日'];
 const WEEKDAYS_FULL  = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
 const CHART_H = 92;
 
@@ -97,25 +96,56 @@ function getDateRange(g: Granularity): { from: string; to: string } {
       return { from: d.toISOString().slice(0, 10), to: todayStr() };
     }
     case 'week': {
-      const day = now.getDay();
-      const mon = new Date(now);
-      mon.setDate(now.getDate() - (day === 0 ? 6 : day - 1));
-      const sun = new Date(mon);
-      sun.setDate(mon.getDate() + 6);
-      return {
-        from: mon.toISOString().slice(0, 10),
-        to: sun.toISOString().slice(0, 10),
-      };
+      // Last 7 weeks for a meaningful chart (~7 data points)
+      const d = new Date(now);
+      d.setDate(d.getDate() - 48);
+      return { from: d.toISOString().slice(0, 10), to: todayStr() };
     }
     case 'month': {
-      const first = new Date(now.getFullYear(), now.getMonth(), 1);
-      const last = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-      return {
-        from: first.toISOString().slice(0, 10),
-        to: last.toISOString().slice(0, 10),
-      };
+      // Last 12 months for a meaningful chart (~12 data points)
+      const d = new Date(now);
+      d.setMonth(d.getMonth() - 11);
+      d.setDate(1);
+      return { from: d.toISOString().slice(0, 10), to: todayStr() };
     }
   }
+}
+
+/** ISO 8601 week number. Week starts Monday, first week contains Jan 4. */
+function getISOWeek(dateStr: string): string {
+  const d = new Date(dateStr + 'T00:00:00');
+  const dayNum = d.getDay() || 7; // Sun=7
+  d.setDate(d.getDate() + 4 - dayNum); // Thu of same ISO week
+  const yearStart = new Date(d.getFullYear(), 0, 1);
+  const weekNum = Math.ceil(((d.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
+  return `${d.getFullYear()}-W${String(weekNum).padStart(2, '0')}`;
+}
+
+/** Map a date string to the period key matching the backend's aggregation. */
+function getPeriodKey(dateStr: string, g: Granularity): string {
+  switch (g) {
+    case 'day': return dateStr;
+    case 'week': return getISOWeek(dateStr);
+    case 'month': return dateStr.slice(0, 7); // YYYY-MM
+  }
+}
+
+/** Get the Monday-Sunday date range of an ISO week like "2026-W27". */
+function isoWeekDateRange(period: string): { mon: string; sun: string } {
+  const [y, w] = period.split('-W').map(Number);
+  // Jan 4 is always in ISO week 1
+  const jan4 = new Date(y, 0, 4);
+  const jan4Day = jan4.getDay() || 7;
+  // Monday of week 1
+  const week1Mon = new Date(jan4);
+  week1Mon.setDate(jan4.getDate() - (jan4Day - 1));
+  // Monday of target week
+  const mon = new Date(week1Mon);
+  mon.setDate(week1Mon.getDate() + (w - 1) * 7);
+  const sun = new Date(mon);
+  sun.setDate(mon.getDate() + 6);
+  const fmt = (d: Date) => d.toISOString().slice(0, 10);
+  return { mon: fmt(mon), sun: fmt(sun) };
 }
 
 function formatTime(iso: string): string {
@@ -350,56 +380,275 @@ function RecordRow({
   );
 }
 
-// ─── Date card (one per day, rendered as FlatList item) ───────────────────────
-function DateCard({
+// ─── Week day row (daily summary inside a week card) ─────────────────────────
+const MEAL_ORDER = ['breakfast', 'lunch', 'dinner', 'snack'] as const;
+const MEAL_DOT: Record<string, string> = {
+  breakfast: '早', lunch: '午', dinner: '晚', snack: '加',
+};
+
+function WeekDayRow({
   dateStr,
   foods,
-  exercises,
-  dayDeficit,
-  isDark,
+  hasExercise,
+  isFirst,
   colors,
 }: {
   dateStr: string;
   foods: FoodRec[];
-  exercises: ExRec[];
-  dayDeficit: number;
-  isDark: boolean;
+  hasExercise: boolean;
+  isFirst: boolean;
   colors: typeof Colors.light | typeof Colors.dark;
 }) {
-  const dateObj = new Date(dateStr + 'T00:00:00');
-  const dateLabel = `${dateObj.getMonth() + 1}月${dateObj.getDate()}日 ${WEEKDAYS_FULL[dateObj.getDay()]}`;
+  const d = new Date(dateStr + 'T00:00:00');
+  const dayLabel = `${WEEKDAYS_FULL[d.getDay()]} ${d.getMonth() + 1}/${d.getDate()}`;
+  const mealTypes = new Set(foods.map((f) => f.meal_type));
+  const mealDots = MEAL_ORDER.filter((m) => mealTypes.has(m)).map((m) => MEAL_DOT[m]);
+  const kcal = foods.reduce((s, f) => s + f.calories, 0);
+
+  return (
+    <View
+      style={[
+        styles.weekRow,
+        !isFirst && { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.hairline },
+      ]}
+    >
+      <ThemedText style={styles.weekDayLabel} numberOfLines={1}>
+        {dayLabel}
+      </ThemedText>
+      <View style={styles.weekMealDots}>
+        {mealDots.map((dot, i) => (
+          <ThemedText key={i} style={styles.weekMealDot} themeColor="textSecondary">
+            {dot}
+          </ThemedText>
+        ))}
+        {hasExercise && (
+          <>
+            <View style={{ width: 6 }} />
+            {Platform.OS === 'ios' ? (
+              <SymbolView name="figure.run" size={14} tintColor={colors.ok} />
+            ) : (
+              <Text style={{ fontSize: 13 }}>🏃</Text>
+            )}
+          </>
+        )}
+      </View>
+      <ThemedText style={styles.weekKcal}>{fmt(kcal)}</ThemedText>
+    </View>
+  );
+}
+
+// ─── Month stat row ─────────────────────────────────────────────────────────
+function MonthStatRow({
+  label,
+  value,
+  unit,
+  color,
+}: {
+  label: string;
+  value: string;
+  unit: string;
+  color?: string;
+}) {
+  return (
+    <View style={styles.monthStatRow}>
+      <ThemedText themeColor="textSecondary" style={styles.monthStatLabel}>
+        {label}
+      </ThemedText>
+      <View style={styles.monthStatRight}>
+        <ThemedText style={[styles.monthStatVal, color ? { color } : undefined]}>
+          {value}
+        </ThemedText>
+        <ThemedText themeColor="textTertiary" style={styles.monthStatUnit}>
+          {unit}
+        </ThemedText>
+      </View>
+    </View>
+  );
+}
+
+// ─── Date card (one per period, rendered as FlatList item) ───────────────────
+function DateCard({
+  dateStr,
+  foods,
+  exercises,
+  rangeItem,
+  isDark,
+  colors,
+  granularity,
+  defaultExpanded,
+}: {
+  dateStr: string;
+  foods: FoodRec[];
+  exercises: ExRec[];
+  rangeItem: RangeItem | undefined;
+  isDark: boolean;
+  colors: typeof Colors.light | typeof Colors.dark;
+  granularity: Granularity;
+  defaultExpanded: boolean;
+}) {
+  const deficit = rangeItem?.deficit ?? 0;
+  const [expanded, setExpanded] = useState(defaultExpanded);
+  const chevron = expanded ? '▾' : '▸';
+
+  // ── Day mode: collapsible record list ────────────────────────────────────
+  if (granularity === 'day') {
+    const dateLabel = () => {
+      const d = new Date(dateStr + 'T00:00:00');
+      return `${d.getMonth() + 1}月${d.getDate()}日 ${WEEKDAYS_FULL[d.getDay()]}`;
+    };
+    const totalItems = foods.length + exercises.length;
+    const collapsedHint = () =>
+      totalItems > 0 ? (
+        <ThemedText themeColor="textTertiary" style={styles.dateSummary}>
+          {totalItems} 条记录
+        </ThemedText>
+      ) : null;
+
+    return (
+      <GlassCard style={styles.listCard}>
+        <Pressable
+          style={[styles.dateHeader, { borderBottomColor: expanded ? colors.hairline : 'transparent' }]}
+          onPress={() => setExpanded(!expanded)}
+        >
+          <View style={styles.dateHeaderLeft}>
+            <ThemedText style={styles.dateChevron} themeColor="textTertiary">
+              {chevron}
+            </ThemedText>
+            <ThemedText style={styles.dateLabel}>{dateLabel()}</ThemedText>
+            {!expanded && totalItems > 0 && (
+              <ThemedText themeColor="textTertiary" style={styles.dateSummary}>
+                {totalItems} 条记录
+              </ThemedText>
+            )}
+          </View>
+          <ThemedText style={[styles.dateDeficit, { color: deficit >= 0 ? colors.ok : colors.warn }]}>
+            缺口 {deficit >= 0 ? '−' : '+'}{fmt(Math.abs(deficit))}
+          </ThemedText>
+        </Pressable>
+
+        {expanded && (
+          <>
+            {foods.map((f, idx) => (
+              <RecordRow key={f.id} item={f} isFirst={idx === 0} isDark={isDark} colors={colors} />
+            ))}
+            {exercises.map((e, idx) => (
+              <RecordRow key={e.id} item={e} isFirst={foods.length === 0 && idx === 0} isDark={isDark} colors={colors} />
+            ))}
+          </>
+        )}
+      </GlassCard>
+    );
+  }
+
+  // ── Week mode: collapsible daily summary rows ────────────────────────────
+  if (granularity === 'week') {
+    const { mon, sun } = isoWeekDateRange(dateStr);
+    const [y, w] = dateStr.split('-W');
+    const dateLabel = () => `${y}年第${parseInt(w, 10)}周 ${mon.slice(5)}-${sun.slice(5)}`;
+
+    // Group foods & exercises by day within this week
+    const dayMap = new Map<string, { foods: FoodRec[]; hasExercise: boolean }>();
+    for (const f of foods) {
+      const d = toDateOnly(f.date);
+      if (!dayMap.has(d)) dayMap.set(d, { foods: [], hasExercise: false });
+      dayMap.get(d)!.foods.push(f);
+    }
+    for (const e of exercises) {
+      const d = toDateOnly(e.date);
+      if (!dayMap.has(d)) dayMap.set(d, { foods: [], hasExercise: true });
+      else dayMap.get(d)!.hasExercise = true;
+    }
+    const days = Array.from(dayMap.entries()).sort(([a], [b]) => a.localeCompare(b));
+    const activeDays = days.length;
+    const collapsedHint = () =>
+      activeDays > 0 ? (
+        <ThemedText themeColor="textTertiary" style={styles.dateSummary}>
+          {activeDays} 天
+        </ThemedText>
+      ) : null;
+
+    return (
+      <GlassCard style={styles.listCard}>
+        <Pressable
+          style={[styles.dateHeader, { borderBottomColor: expanded ? colors.hairline : 'transparent' }]}
+          onPress={() => setExpanded(!expanded)}
+        >
+          <View style={styles.dateHeaderLeft}>
+            <ThemedText style={styles.dateChevron} themeColor="textTertiary">
+              {chevron}
+            </ThemedText>
+            <ThemedText style={styles.dateLabel}>{dateLabel()}</ThemedText>
+            {!expanded && collapsedHint()}
+          </View>
+          <ThemedText style={[styles.dateDeficit, { color: deficit >= 0 ? colors.ok : colors.warn }]}>
+            缺口 {deficit >= 0 ? '−' : '+'}{fmt(Math.abs(deficit))}
+          </ThemedText>
+        </Pressable>
+
+        {expanded && days.map(([d, group], idx) => (
+          <WeekDayRow
+            key={d}
+            dateStr={d}
+            foods={group.foods}
+            hasExercise={group.hasExercise}
+            isFirst={idx === 0}
+            colors={colors}
+          />
+        ))}
+      </GlassCard>
+    );
+  }
+
+  // ── Month mode: collapsible stats panel ──────────────────────────────────
+  const [y, m] = dateStr.split('-');
+  const dateLabel = () => `${y}年${parseInt(m, 10)}月`;
+  const collapsedHint = () =>
+    rangeItem ? (
+      <ThemedText themeColor="textTertiary" style={styles.dateSummary}>
+        摄入 {fmt(rangeItem.calories_in)}
+      </ThemedText>
+    ) : null;
 
   return (
     <GlassCard style={styles.listCard}>
-      {/* Date header */}
-      <View style={[styles.dateHeader, { borderBottomColor: colors.hairline }]}>
-        <ThemedText style={styles.dateLabel}>{dateLabel}</ThemedText>
-        <ThemedText
-          style={[styles.dateDeficit, { color: dayDeficit >= 0 ? colors.ok : colors.warn }]}
-        >
-          缺口 {dayDeficit >= 0 ? '−' : '+'}{fmt(Math.abs(dayDeficit))}
+      <Pressable
+        style={[styles.dateHeader, { borderBottomColor: expanded ? colors.hairline : 'transparent' }]}
+        onPress={() => setExpanded(!expanded)}
+      >
+        <View style={styles.dateHeaderLeft}>
+          <ThemedText style={styles.dateChevron} themeColor="textTertiary">
+            {chevron}
+          </ThemedText>
+          <ThemedText style={styles.dateLabel}>{dateLabel()}</ThemedText>
+          {!expanded && collapsedHint()}
+        </View>
+        <ThemedText style={[styles.dateDeficit, { color: deficit >= 0 ? colors.ok : colors.warn }]}>
+          缺口 {deficit >= 0 ? '−' : '+'}{fmt(Math.abs(deficit))}
         </ThemedText>
-      </View>
+      </Pressable>
 
-      {foods.map((f, idx) => (
-        <RecordRow
-          key={f.id}
-          item={f}
-          isFirst={idx === 0}
-          isDark={isDark}
-          colors={colors}
-        />
-      ))}
+      {expanded && rangeItem && (
+        <View style={styles.monthStats}>
+          <MonthStatRow label="总摄入" value={fmt(rangeItem.calories_in)} unit="kcal" />
+          <MonthStatRow label="总消耗" value={fmt(rangeItem.total_out)} unit="kcal" />
+          <MonthStatRow
+            label="热量缺口"
+            value={`${deficit >= 0 ? '−' : '+'}${fmt(Math.abs(deficit))}`}
+            unit="kcal"
+            color={deficit >= 0 ? colors.ok : colors.warn}
+          />
+          <View style={[styles.monthDivider, { backgroundColor: colors.hairline }]} />
+          <MonthStatRow label="蛋白质" value={fmt(rangeItem.protein)} unit="g" />
+          <MonthStatRow label="脂肪" value={fmt(rangeItem.fat)} unit="g" />
+          <MonthStatRow label="碳水" value={fmt(rangeItem.carbs)} unit="g" />
+        </View>
+      )}
 
-      {exercises.map((e, idx) => (
-        <RecordRow
-          key={e.id}
-          item={e}
-          isFirst={foods.length === 0 && idx === 0}
-          isDark={isDark}
-          colors={colors}
-        />
-      ))}
+      {expanded && !rangeItem && (
+        <ThemedText themeColor="textSecondary" style={styles.noData}>
+          暂无数据
+        </ThemedText>
+      )}
     </GlassCard>
   );
 }
@@ -416,6 +665,8 @@ function TrendHeader({
   onChartLayout,
   isDark,
   colors,
+  unitText,
+  periodUnit,
 }: {
   titleText: string;
   totalDays: number;
@@ -427,6 +678,8 @@ function TrendHeader({
   onChartLayout: (w: number) => void;
   isDark: boolean;
   colors: typeof Colors.light | typeof Colors.dark;
+  unitText: string;
+  periodUnit: string;
 }) {
   return (
     <GlassCard style={styles.trendCard}>
@@ -436,7 +689,7 @@ function TrendHeader({
         </ThemedText>
         {totalDays > 0 && (
           <ThemedText style={[styles.metBadge, { color: colors.ok }]}>
-            达标 {metDays} / {totalDays} 天
+            达标 {metDays} / {totalDays} {periodUnit}
           </ThemedText>
         )}
       </View>
@@ -450,7 +703,7 @@ function TrendHeader({
               {avgDeficit >= 0 ? '−' : '+'}{fmt(Math.abs(avgDeficit))}
             </ThemedText>
             <ThemedText themeColor="textSecondary" style={styles.deficitUnit}>
-              kcal / 天
+              {unitText}
             </ThemedText>
           </View>
 
@@ -501,7 +754,7 @@ export default function HistoryScreen({ isActive = true }: { isActive?: boolean 
     try {
       const [rangeRes, recRes] = await Promise.all([
         apiFetch<RangeItem[]>(
-          `/api/daily/range?from=${from}&to=${to}&granularity=day`,
+          `/api/daily/range?from=${from}&to=${to}&granularity=${granularity}`,
           { token },
         ),
         apiFetch<{ records: FoodRec[]; exercises: ExRec[] }>(
@@ -540,11 +793,18 @@ export default function HistoryScreen({ isActive = true }: { isActive?: boolean 
     if (rangeData.length === 0) return [];
     if (granularity === 'week') {
       return rangeData.map((r) => {
-        const d = new Date(r.period + 'T00:00:00');
-        return WEEKDAYS_SHORT[d.getDay() === 0 ? 6 : d.getDay() - 1];
+        const w = r.period.split('-W')[1];
+        return w ? `${parseInt(w, 10)}周` : r.period;
       });
     }
-    const step = granularity === 'month' && rangeData.length > 14 ? 7 : 1;
+    if (granularity === 'month') {
+      return rangeData.map((r) => {
+        const m = r.period.split('-')[1];
+        return m ? `${parseInt(m, 10)}月` : r.period;
+      });
+    }
+    // day — show M/D labels, spaced out if too many
+    const step = rangeData.length > 14 ? 7 : 1;
     return rangeData.map((r, i) => {
       if (i % step !== 0) return '';
       const d = new Date(r.period + 'T00:00:00');
@@ -552,47 +812,55 @@ export default function HistoryScreen({ isActive = true }: { isActive?: boolean 
     });
   }, [granularity, rangeData]);
 
-  // ── Group records by date (descending) ─────────────────────────────────────
+  // ── Group records by period (day/week/month) ────────────────────────────────
   const groupedRecords: DateGroup[] = useMemo(() => {
     const map = new Map<string, { foods: FoodRec[]; exercises: ExRec[] }>();
     for (const f of foodRecords) {
-      const d = toDateOnly(f.date);
-      if (!map.has(d)) map.set(d, { foods: [], exercises: [] });
-      map.get(d)!.foods.push(f);
+      const k = getPeriodKey(toDateOnly(f.date), granularity);
+      if (!map.has(k)) map.set(k, { foods: [], exercises: [] });
+      map.get(k)!.foods.push(f);
     }
     for (const e of exRecords) {
-      const d = toDateOnly(e.date);
-      if (!map.has(d)) map.set(d, { foods: [], exercises: [] });
-      map.get(d)!.exercises.push(e);
+      const k = getPeriodKey(toDateOnly(e.date), granularity);
+      if (!map.has(k)) map.set(k, { foods: [], exercises: [] });
+      map.get(k)!.exercises.push(e);
     }
     return Array.from(map.entries())
       .sort(([a], [b]) => b.localeCompare(a))
       .map(([dateStr, group]) => ({ dateStr, ...group }));
-  }, [foodRecords, exRecords]);
+  }, [foodRecords, exRecords, granularity]);
 
-  // Build a deficit lookup map so DateCard doesn't scan the array
-  const deficitMap = useMemo(() => {
-    const m = new Map<string, number>();
-    for (const r of rangeData) m.set(r.period, r.deficit);
+  // Build a RangeItem lookup map for DateCard
+  const rangeItemMap = useMemo(() => {
+    const m = new Map<string, RangeItem>();
+    for (const r of rangeData) m.set(r.period, r);
     return m;
   }, [rangeData]);
 
   const titleText =
-    granularity === 'day' ? '近7天平均缺口' : granularity === 'week' ? '本周平均缺口' : '本月平均缺口';
+    granularity === 'day' ? '近7天平均缺口' : granularity === 'week' ? '近7周平均缺口' : '近12月平均缺口';
+
+  const unitText =
+    granularity === 'day' ? 'kcal / 天' : granularity === 'week' ? 'kcal / 周' : 'kcal / 月';
+
+  const periodUnit =
+    granularity === 'day' ? '天' : granularity === 'week' ? '周' : '月';
 
   // ── FlatList helpers ────────────────────────────────────────────────────────
   const renderItem = useCallback(
-    ({ item }: { item: DateGroup }) => (
+    ({ item, index }: { item: DateGroup; index: number }) => (
       <DateCard
         dateStr={item.dateStr}
         foods={item.foods}
         exercises={item.exercises}
-        dayDeficit={deficitMap.get(item.dateStr) ?? 0}
+        rangeItem={rangeItemMap.get(item.dateStr)}
         isDark={isDark}
         colors={colors}
+        granularity={granularity}
+        defaultExpanded={index === 0}
       />
     ),
-    [deficitMap, isDark, colors],
+    [rangeItemMap, isDark, colors, granularity],
   );
 
   const renderHeader = useCallback(
@@ -608,9 +876,11 @@ export default function HistoryScreen({ isActive = true }: { isActive?: boolean 
         onChartLayout={setChartWidth}
         isDark={isDark}
         colors={colors}
+        unitText={unitText}
+        periodUnit={periodUnit}
       />
     ),
-    [titleText, totalDays, metDays, avgDeficit, chartData, chartLabels, chartWidth, isDark, colors],
+    [titleText, totalDays, metDays, avgDeficit, chartData, chartLabels, chartWidth, isDark, colors, unitText, periodUnit],
   );
 
   const renderEmpty = useCallback(
@@ -727,8 +997,13 @@ const styles = StyleSheet.create({
     paddingBottom: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
-  dateLabel:   { fontSize: 14, fontWeight: '600' },
-  dateDeficit: { fontSize: 13, fontWeight: '600' },
+  dateHeaderLeft: {
+    flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1, minWidth: 0,
+  },
+  dateChevron:  { fontSize: 10, width: 12 },
+  dateSummary:  { fontSize: 12, flexShrink: 1 },
+  dateLabel:    { fontSize: 14, fontWeight: '600' },
+  dateDeficit:  { fontSize: 13, fontWeight: '600' },
 
   // ── Record row ─────────────────────────────────────────────────
   recRow:  {
@@ -744,6 +1019,28 @@ const styles = StyleSheet.create({
   recTitle: { fontSize: 14, fontWeight: '600' },
   recTime:  { fontSize: 12 },
   recKcal:  { fontSize: 14, fontWeight: '600' },
+
+  // ── Week day row ───────────────────────────────────────────────
+  weekRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    paddingVertical: 9,
+  },
+  weekDayLabel: { fontSize: 13, fontWeight: '500', width: 80 },
+  weekMealDots: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 3 },
+  weekMealDot:  { fontSize: 11.5, fontWeight: '500' },
+  weekKcal:     { fontSize: 13, fontWeight: '600', minWidth: 48, textAlign: 'right' },
+
+  // ── Month stats ───────────────────────────────────────────────
+  monthStats:    { marginTop: 4 },
+  monthStatRow:  {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingVertical: 7,
+  },
+  monthStatLabel: { fontSize: 14 },
+  monthStatRight: { flexDirection: 'row', alignItems: 'baseline', gap: 4 },
+  monthStatVal:   { fontSize: 14, fontWeight: '600' },
+  monthStatUnit:  { fontSize: 12 },
+  monthDivider:   { height: StyleSheet.hairlineWidth, marginVertical: 2 },
 
   // ── Empty state ────────────────────────────────────────────────
   empty:     { marginTop: 24, alignItems: 'center', paddingHorizontal: 16 },
