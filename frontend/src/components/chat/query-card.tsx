@@ -1,15 +1,20 @@
 import { StyleSheet, View } from 'react-native';
 import { GlassCard } from '@/components/glass-card';
 import { ThemedText } from '@/components/themed-text';
-import { Colors, FontSize, Glass, Spacing } from '@/constants/theme';
+import { Colors, FontSize, Glass } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import type { ContextCard } from '@/types/chat';
 
-function ProgressBar({ ratio, tint }: { ratio: number; tint: string }) {
+function MiniProgress({ ratio, tint }: { ratio: number; tint: string }) {
   const clamped = Math.max(0, Math.min(1, ratio));
   return (
-    <View style={styles.trackOuter}>
-      <View style={[styles.trackFill, { width: `${clamped * 100}%` as any, backgroundColor: tint }]} />
+    <View style={styles.track}>
+      <View
+        style={[
+          styles.trackFill,
+          { width: `${clamped * 100}%` as any, backgroundColor: tint },
+        ]}
+      />
     </View>
   );
 }
@@ -27,37 +32,38 @@ export function QueryCard({
   const glass = Glass[isDark ? 'dark' : 'light'];
   const tint = glass.tint;
   const { today, targets } = payload;
-  const ratio = targets.calories > 0 ? today.in / targets.calories : 0;
   const remaining = Math.max(0, today.remaining);
+  const ratio = targets.calories > 0 ? today.in / targets.calories : 0;
+  const pct = Math.round(ratio * 100);
 
   return (
     <View style={styles.wrapper}>
-      <GlassCard padding={12} gap={8} style={styles.card}>
-        {/* Title */}
-        <ThemedText style={[styles.title, { color: colors.textSecondary }]}>今天还可以吃</ThemedText>
-
-        {/* Big remaining number */}
-        <View style={styles.bigRow}>
-          <ThemedText style={[styles.bigNum, { color: tint }]}>{remaining}</ThemedText>
-          <ThemedText style={[styles.bigUnit, { color: tint }]}> kcal</ThemedText>
-        </View>
-
-        {/* Progress bar */}
-        <ProgressBar ratio={ratio} tint={tint} />
-
-        {/* Stats row */}
-        <View style={styles.statsRow}>
-          <ThemedText style={[styles.statText, { color: colors.textSecondary }]}>
-            已摄入 {today.in.toLocaleString()}
+      <GlassCard padding={10} gap={4} style={styles.card}>
+        {/* Row 1: label + kcal + pct */}
+        <View style={styles.row}>
+          <ThemedText style={[styles.label, { color: colors.textSecondary }]}>
+            今天还可以吃
           </ThemedText>
-          <ThemedText style={[styles.statText, { color: colors.textSecondary }]}>
-            目标 {targets.calories.toLocaleString()} kcal
+          <ThemedText style={[styles.kcal, { color: tint }]}>
+            {remaining.toLocaleString()}
+          </ThemedText>
+          <ThemedText style={[styles.unit, { color: tint }]}>kcal</ThemedText>
+          <ThemedText style={[styles.pct, { color: colors.textSecondary }]}>
+            {pct}%
           </ThemedText>
         </View>
 
-        {/* AI content / advice */}
+        {/* Row 2: progress bar */}
+        <MiniProgress ratio={ratio} tint={tint} />
+
+        {/* Row 3: AI advice */}
         {content ? (
-          <ThemedText style={[styles.advice, { color: colors.textSecondary }]}>{content}</ThemedText>
+          <ThemedText
+            style={[styles.advice, { color: colors.textSecondary }]}
+            numberOfLines={2}
+          >
+            {content}
+          </ThemedText>
         ) : null}
       </GlassCard>
     </View>
@@ -72,43 +78,40 @@ const styles = StyleSheet.create({
   card: {
     width: '90%' as any,
   },
-  title: {
-    fontSize: FontSize.sm,
-    fontWeight: '500',
-  },
-  bigRow: {
+  row: {
     flexDirection: 'row',
     alignItems: 'baseline',
+    gap: 4,
   },
-  bigNum: {
-    fontSize: FontSize['3xl'],
-    fontWeight: '700',
-    lineHeight: 32,
-  },
-  bigUnit: {
-    fontSize: FontSize.sm,
+  label: {
+    fontSize: FontSize.xs,
     fontWeight: '500',
   },
-  trackOuter: {
-    height: 6,
+  kcal: {
+    fontSize: FontSize.base,
+    fontWeight: '700',
+  },
+  unit: {
+    fontSize: FontSize.xs,
+    fontWeight: '500',
+  },
+  pct: {
+    fontSize: FontSize.xs,
+    fontWeight: '500',
+    marginLeft: 'auto',
+  },
+  track: {
+    height: 3,
     backgroundColor: 'rgba(128,128,128,0.18)',
-    borderRadius: 3,
+    borderRadius: 2,
     overflow: 'hidden',
   },
   trackFill: {
     height: '100%',
-    borderRadius: 3,
-  },
-  statsRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  statText: {
-    fontSize: 12,
+    borderRadius: 2,
   },
   advice: {
-    fontSize: FontSize.sm,
-    lineHeight: 19,
-    marginTop: Spacing.half,
+    fontSize: FontSize.xs,
+    lineHeight: 16,
   },
 });
