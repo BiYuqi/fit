@@ -352,11 +352,19 @@ export async function recordModifyCorrection(opts: {
  * 在 pending resolve 中，用户确认删除后记录。
  */
 export async function recordDeleteCorrection(opts: {
+  userId: string;
   recordId: string;
   kind: string;
   name: string;
   pendingId: string;
 }): Promise<void> {
+  // 独立 trace——delete 确认是用户操作，不在 chat request 的 trace 生命周期内
+  const traceId = await createTrace({
+    userId: opts.userId,
+    inputText: `[correction] delete ${opts.name}`,
+  });
+  if (!traceId) return; // tracing 关闭
+
   const corrSb = createEmptyState();
   corrSb.entity_type = opts.kind === "food" ? "food_standard" : "exercise";
   corrSb.matched_food_name = opts.name;
@@ -374,7 +382,7 @@ export async function recordDeleteCorrection(opts: {
   }
 
   await recordEvent({
-    traceId: "",
+    traceId,
     itemIndex: 0,
     seq: 1,
     eventType: "correction",
@@ -389,6 +397,8 @@ export async function recordDeleteCorrection(opts: {
     outputState: { result: "deleted" },
     meta: { correction_type: "delete" },
   });
+
+  finalizeTrace(traceId, { intent: "correction", status: "ok" });
 }
 
 /**
@@ -396,6 +406,7 @@ export async function recordDeleteCorrection(opts: {
  * 在用户选择了份量或食物后，food_record 创建前记录。
  */
 export async function recordResolveCorrection(opts: {
+  userId: string;
   foodName: string;
   foodId: string;
   portionLabel: string;
@@ -404,6 +415,13 @@ export async function recordResolveCorrection(opts: {
   pendingType: string;
   candidates: Record<string, unknown>;
 }): Promise<void> {
+  // 独立 trace——resolve 确认是用户操作，不在 chat request 的 trace 生命周期内
+  const traceId = await createTrace({
+    userId: opts.userId,
+    inputText: `[correction] resolve ${opts.foodName}`,
+  });
+  if (!traceId) return; // tracing 关闭
+
   const corrSb = createEmptyState();
   corrSb.matched_food_name = (opts.candidates.food_name ?? opts.candidates.query) as string ?? null;
   corrSb.entity_type = "food_standard";
@@ -415,7 +433,7 @@ export async function recordResolveCorrection(opts: {
   };
 
   await recordEvent({
-    traceId: "",
+    traceId,
     itemIndex: 0,
     seq: 1,
     eventType: "correction",
@@ -444,4 +462,6 @@ export async function recordResolveCorrection(opts: {
       calories_delta: 0,
     },
   });
+
+  finalizeTrace(traceId, { intent: "correction", status: "ok" });
 }

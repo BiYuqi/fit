@@ -919,6 +919,7 @@ export async function chatRoutes(app: FastifyInstance) {
       const summary_card = await buildContextCard(user_id);
       // Trace: correction event（用户确认删除）
       recordDeleteCorrection({
+        userId: user_id,
         recordId: candidates.record_id,
         kind: candidates.kind,
         name: candidates.name,
@@ -1018,6 +1019,7 @@ export async function chatRoutes(app: FastifyInstance) {
 
     // Trace: correction event（用户从 portion_card / candidate_card 选择了具体份量或食物）
     recordResolveCorrection({
+      userId: user_id,
       foodName: food.name,
       foodId: food.id,
       portionLabel: portion_label,
