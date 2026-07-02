@@ -33,7 +33,7 @@ function RingProgress({ progress, isDark }: { progress: number; isDark: boolean 
       <Svg
         width={RING_SIZE}
         height={RING_SIZE}
-        style={{ position: 'absolute', transform: [{ rotate: '-90deg' }] }}
+        style={styles.ringSvg}
       >
         {/* Gray track (full circle) */}
         <Circle
@@ -57,8 +57,8 @@ function RingProgress({ progress, isDark }: { progress: number; isDark: boolean 
           strokeLinecap="round"
         />
       </Svg>
-      {/* Center label */}
-      <View style={styles.ringCenter}>
+      {/* Center label — absoluteFill covers entire ring, flex centers both texts as a group */}
+      <View style={styles.ringCenter} pointerEvents="none">
         <ThemedText style={styles.ringPct}>{Math.round(capped * 100)}%</ThemedText>
         <ThemedText themeColor="textSecondary" style={styles.ringLabel}>已达目标</ThemedText>
       </View>
@@ -328,13 +328,13 @@ const styles = StyleSheet.create({
 
   // Ring
   ringWrap:   { width: RING_SIZE, height: RING_SIZE, flexShrink: 0 },
+  ringSvg:    { position: 'absolute', top: 0, left: 0, transform: [{ rotate: '-90deg' }] },
   ringCenter: {
-    position: 'absolute',
-    top: RING_STROKE, left: RING_STROKE, right: RING_STROKE, bottom: RING_STROKE,
+    position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
     alignItems: 'center', justifyContent: 'center',
   },
-  ringPct:   { fontSize: 22, fontWeight: '700', lineHeight: 26 },
-  ringLabel: { fontSize: 10, marginTop: 3 },
+  ringPct:   { fontSize: 22,  textAlign: 'center', fontWeight: '700', lineHeight: 26, width: '100%' },
+  ringLabel: { fontSize: 10,  textAlign: 'center', width: '100%' },
 
   // Deficit block
   deficitBlock: { flex: 1, minWidth: 0 },
