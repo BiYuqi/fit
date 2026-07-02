@@ -4,7 +4,7 @@
 > 用法：一次只做一个任务，按下方顺序，自测验收通过再下一个。
 > 状态：⬜待办 / 🔄进行中 / ✅完成。**任务验收通过后更新两处**：本表该行 + `tasks/Txx.md` 顶部状态行。
 
-**进度：24 / 26**　里程碑：✅ M1 命令行心跳(T07)　✅ M2 后端全通(T12)　✅ 前端可用(T19)　⬜ 可出包(T21)　✅ E 对话上下文(T23)
+**进度：25 / 26**　里程碑：✅ M1 命令行心跳(T07)　✅ M2 后端全通(T12)　✅ 前端可用(T19)　⬜ 可出包(T21)　✅ E 对话上下文(T23)
 
 ## 分轨
 - **基建 S**：T01
@@ -70,7 +70,7 @@ T01 → T02 → T03 → T04 → T05 → T06 → T07(✅M1)
 | ✅ | T17 | tasks/T17-today-ui.md | Today 页 |
 | ✅ | T18 | tasks/T18-history-ui.md | History 页 |
 | ✅ | T19 | tasks/T19-settings-ui.md | Settings 页（含清除缓存） |
-| ⬜ | T20 | tasks/T20-voice-input.md | 语音输入 |
+| ✅ | T20 | tasks/T20-voice-input.md | 语音输入 |
 | ⬜ | T21 | tasks/T21-polish.md | 状态/边界/保留任务/EAS 收尾 |
 | ✅ | T22 | tasks/T22-context-memory.md | 对话记忆包 L0/L1/L2 注入 prompt（不丢上下文）|
 | ✅ | T23 | tasks/T23-modify-record.md | modify 指代修改 update/delete/append + 确认卡/撤销 |

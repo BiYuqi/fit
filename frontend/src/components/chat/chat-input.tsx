@@ -10,6 +10,10 @@ import {
 } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { SymbolView } from 'expo-symbols';
+import {
+  ExpoSpeechRecognitionModule,
+  useSpeechRecognitionEvent,
+} from 'expo-speech-recognition';
 import { Colors, Glass } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 
@@ -21,6 +25,7 @@ type Props = {
 export function ChatInput({ onSend, isSending }: Props) {
   const [text, setText] = useState('');
   const [resetKey, setResetKey] = useState(0);
+  const [isListening, setIsListening] = useState(false);
   const inputRef = useRef<TextInput>(null);
   const scheme = useColorScheme();
   const isDark = scheme === 'dark';
@@ -49,6 +54,19 @@ export function ChatInput({ onSend, isSending }: Props) {
       Alert.alert('上传', '', options.slice(0, 3).map(label => ({ text: label, onPress: () => {} })));
     }
   };
+
+  // ── Voice input ──────────────────────────────────────────────
+  useSpeechRecognitionEvent('start', () => setIsListening(true));
+  useSpeechRecognitionEvent('end', () => setIsListening(false));
+  useSpeechRecognitionEvent('result', (event) => {
+    if (event.results[0]?.transcript) {
+      setText(event.results[0].transcript);
+    }
+  });
+  useSpeechRecognitionEvent('error', (event) => {
+    setIsListening(false);
+    console.warn('Speech error:', event.error, event.message);
+  });
 
   return (
     <View style={styles.row}>
@@ -79,8 +97,27 @@ export function ChatInput({ onSend, isSending }: Props) {
             returnKeyType="default"
             blurOnSubmit={false}
           />
-          <TouchableOpacity activeOpacity={0.6} onPress={() => {}}>
-            <SymbolView name="mic" size={21} tintColor={colors.textSecondary} />
+          <TouchableOpacity
+            activeOpacity={0.6}
+            onPress={async () => {
+              if (isListening) {
+                ExpoSpeechRecognitionModule.stop();
+              } else {
+                const perm = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
+                if (!perm.granted) return;
+                ExpoSpeechRecognitionModule.start({
+                  lang: 'zh-CN',
+                  interimResults: true,
+                  continuous: true,
+                });
+              }
+            }}
+          >
+            <SymbolView
+              name={isListening ? 'mic.fill' : 'mic'}
+              size={21}
+              tintColor={isListening ? '#0A84FF' : colors.textSecondary}
+            />
           </TouchableOpacity>
         </View>
       </View>
