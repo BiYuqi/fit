@@ -96,6 +96,9 @@ function TabIcon({ name, isActive, color }: { name: string; isActive: boolean; c
 
 export default function AppTabs() {
   const [active, setActive] = useState<TabName>('chat');
+  // Lazy mount: only mount screens that have been visited at least once.
+  // Once mounted, they stay resident so tab switches are instant.
+  const [mounted, setMounted] = useState<Set<TabName>>(new Set(['chat', 'today']));
   const scheme   = useColorScheme() ?? 'light';
   const isDark   = scheme === 'dark';
   const glass    = Glass[isDark ? 'dark' : 'light'];
@@ -162,12 +165,24 @@ export default function AppTabs() {
     })
   ).current;
 
-  const Screen = SCREENS[active];
   const isChat = active === 'chat';
 
   return (
     <GradientBackground style={styles.root}>
-      <Screen />
+      {/* Keep screens mounted after first visit — toggle visibility instead of destroy/recreate.
+          Only mount a screen when first visited (lazy) to avoid 4× API/SQLite at startup. */}
+      {TABS.map(tab => {
+        if (!mounted.has(tab.name)) return null;
+        const Screen = SCREENS[tab.name];
+        return (
+          <View
+            key={tab.name}
+            style={tab.name === active ? styles.screenOn : styles.screenOff}
+          >
+            <Screen />
+          </View>
+        );
+      })}
 
       {isChat && <View style={styles.swipeEdge} {...panResponder.panHandlers} />}
 
@@ -181,7 +196,10 @@ export default function AppTabs() {
             shadowOffset: g.shadowOffset, shadowRadius: g.shadowRadius,
             elevation: g.elevation },
         ]}>
-          <Pressable style={styles.backClip} onPress={() => setActive('today')} hitSlop={8}>
+          <Pressable style={styles.backClip} onPress={() => {
+            setMounted(prev => prev.has('today') ? prev : new Set([...prev, 'today']));
+            setActive('today');
+          }} hitSlop={8}>
             {/* Blur */}
             <BlurView intensity={40} tint={blurTint} style={StyleSheet.absoluteFill} />
             {/* Glass gradient */}
@@ -277,7 +295,10 @@ export default function AppTabs() {
                     key={tab.name}
                     style={styles.tabItem}
                     onLayout={e => handleTabLayout(index, e)}
-                    onPress={() => setActive(tab.name)}
+                    onPress={() => {
+                      setMounted(prev => prev.has(tab.name) ? prev : new Set([...prev, tab.name]));
+                      setActive(tab.name);
+                    }}
                     hitSlop={4}
                   >
                     <TabIcon name={tab.name} isActive={isActive} color={color} />
@@ -296,6 +317,8 @@ export default function AppTabs() {
 
 const styles = StyleSheet.create({
   root:      { flex: 1 },
+  screenOn:  { flex: 1 },
+  screenOff: { display: 'none' },
   swipeEdge: { position: 'absolute', left: 0, top: 0, bottom: 0, width: 30 },
 
   // ── Back button ──

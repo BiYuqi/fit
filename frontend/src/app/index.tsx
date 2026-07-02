@@ -243,9 +243,9 @@ export default function ChatScreen() {
           )
         }
         ListHeaderComponent={isSending ? <ThinkingBubble /> : null}
-        initialNumToRender={200}
-        maxToRenderPerBatch={200}
-        windowSize={99}
+        initialNumToRender={12}
+        maxToRenderPerBatch={10}
+        windowSize={7}
         onScrollToIndexFailed={(info) => {
           const estimatedOffset = info.index * 80;
           flatListRef.current?.scrollToOffset({ offset: estimatedOffset, animated: true });
