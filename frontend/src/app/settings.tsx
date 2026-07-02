@@ -708,9 +708,17 @@ export default function SettingsScreen() {
                     </View>
                     <View style={{ flex: 1 }} />
                     <TouchableOpacity style={styles.summaryMetaItem} onPress={() => openModal('tdee')} activeOpacity={0.6}>
-                      <ThemedText themeColor="textSecondary" style={styles.summaryMetaLabel}>
-                        每日消耗
-                      </ThemedText>
+                      <View style={styles.summaryMetaLabelRow}>
+                        <ThemedText themeColor="textSecondary" style={styles.summaryMetaLabel}>
+                          每日消耗
+                        </ThemedText>
+                        <SymbolView
+                          name={{ ios: 'pencil' as const, android: 'edit' as const, web: 'edit' as const }}
+                          size={12}
+                          tintColor={accent}
+                          style={{ width: 12, height: 12 }}
+                        />
+                      </View>
                       <ThemedText style={styles.summaryMetaVal}>{fmt(tdee)}</ThemedText>
                     </TouchableOpacity>
                     <View style={styles.summaryMetaItem}>
@@ -767,9 +775,17 @@ export default function SettingsScreen() {
                     </View>
                     <View style={{ flex: 1 }} />
                     <TouchableOpacity style={styles.summaryMetaItem} onPress={() => openModal('tdee')} activeOpacity={0.6}>
-                      <ThemedText themeColor="textSecondary" style={styles.summaryMetaLabel}>
-                        每日消耗
-                      </ThemedText>
+                      <View style={styles.summaryMetaLabelRow}>
+                        <ThemedText themeColor="textSecondary" style={styles.summaryMetaLabel}>
+                          每日消耗
+                        </ThemedText>
+                        <SymbolView
+                          name={{ ios: 'pencil' as const, android: 'edit' as const, web: 'edit' as const }}
+                          size={12}
+                          tintColor={accent}
+                          style={{ width: 12, height: 12 }}
+                        />
+                      </View>
                       <ThemedText style={styles.summaryMetaVal}>{fmt(tdee)}</ThemedText>
                     </TouchableOpacity>
                     <View style={styles.summaryMetaItem}>
@@ -1090,7 +1106,8 @@ const styles = StyleSheet.create({
   summaryBigVal: { fontSize: 28, fontWeight: '800', letterSpacing: -0.5, lineHeight: 34 },
   summaryBigUnit: { fontSize: 12 },
   summaryMetaItem: { alignItems: 'flex-end' },
-  summaryMetaLabel: { fontSize: 11, marginBottom: 2 },
+  summaryMetaLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 3, marginBottom: 2 },
+  summaryMetaLabel: { fontSize: 11 },
   summaryMetaVal: { fontSize: 15, fontWeight: '700' },
 
   // ── Section Cards ─────────────────────────────────────────────────────
