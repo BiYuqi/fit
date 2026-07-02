@@ -174,7 +174,7 @@ export default function AppTabs() {
           style={active === 'chat' ? styles.screenOn : styles.screenOff}
           pointerEvents={active === 'chat' ? 'auto' : 'none'}
         >
-          <ChatScreen />
+          <ChatScreen isActive={active === 'chat'} />
         </View>
       )}
 

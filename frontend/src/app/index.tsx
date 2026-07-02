@@ -90,7 +90,7 @@ function EmptyState() {
   );
 }
 
-export default function ChatScreen() {
+export default function ChatScreen({ isActive = true }: { isActive?: boolean }) {
   const insets = useSafeAreaInsets();
   const flatListRef = useRef<FlatList<ChatMessage>>(null);
 
@@ -150,6 +150,17 @@ export default function ChatScreen() {
     loadAllMessages(token);
     loadDates(token);
   }, [token]);
+
+  // When tab becomes active, scroll to newest messages so the user always
+  // sees the latest conversation.  Trade-off: loses previous scroll position —
+  // if the user was reading history, switching to another tab and back resets
+  // to the bottom instead of restoring where they left off.
+  useEffect(() => {
+    if (isActive && visibleMessages.length > 0) {
+      // In inverted FlatList, index 0 = newest message = visual bottom.
+      flatListRef.current?.scrollToIndex({ index: 0, animated: false });
+    }
+  }, [isActive]);
 
   const handleSend = useCallback(
     (text: string) => {
