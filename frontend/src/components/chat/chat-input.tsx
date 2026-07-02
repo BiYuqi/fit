@@ -20,6 +20,7 @@ type Props = {
 
 export function ChatInput({ onSend, isSending }: Props) {
   const [text, setText] = useState('');
+  const [resetKey, setResetKey] = useState(0);
   const inputRef = useRef<TextInput>(null);
   const scheme = useColorScheme();
   const isDark = scheme === 'dark';
@@ -32,6 +33,7 @@ export function ChatInput({ onSend, isSending }: Props) {
     if (!trimmed || isSending) return;
     onSend(trimmed);
     setText('');
+    setResetKey(k => k + 1);
   };
 
   const canSend = text.trim().length > 0 && !isSending;
@@ -66,6 +68,7 @@ export function ChatInput({ onSend, isSending }: Props) {
           <View style={[StyleSheet.absoluteFill, styles.pillBorderOverlay, { borderColor: glass.cardStroke }]} />
           <TextInput
             ref={inputRef}
+            key={resetKey}
             style={[styles.input, { color: colors.text }]}
             placeholder="记录你吃了 / 运动了什么..."
             placeholderTextColor={colors.textTertiary}
