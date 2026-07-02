@@ -188,21 +188,33 @@ async function answerDiscuss(
   text: string;
   usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
 }> {
-  const PORTION_ZH: Record<string, string> = { small: "小份", medium: "中份", large: "大份", custom: "自定" };
-  let detail = `【被询问的记录】\n- 食物：${target.name}\n- 克数：${target.weight_g}g（${PORTION_ZH[target.portion ?? ""] ?? target.portion ?? "?"}份）\n- 热量：${target.calories}kcal`;
-  if (fullRecord) {
-    if (fullRecord.raw_input) detail += `\n- 用户原话："${fullRecord.raw_input}"`;
-    detail += `\n- AI置信度：食物 ${fullRecord.food_confidence?.toFixed(2)}，份量 ${fullRecord.portion_confidence?.toFixed(2)}`;
-    if (fullRecord.food) {
-      detail += `\n- 食物库：${fullRecord.food.name} 每100g ${Math.round(Number(fullRecord.food.calories_100g))}kcal`;
+  const isExercise = target.kind === "exercise";
+
+  let detail: string;
+  let systemPrompt: string;
+
+  if (isExercise) {
+    detail = `【被询问的记录】\n- 运动类型：${target.name}\n- 时长：${target.duration_min ?? "?"}分钟\n- 消耗热量：${target.calories}kcal`;
+    systemPrompt = `你是减脂助手。用户对某条运动记录提出了疑问，请结合以下记录详情，简洁中文解释这条运动记录是如何产生的（基于 MET 值 × 体重 × 时长的热量估算）。若用户觉得时长或消耗不准确，告知可以说"改成X分钟"或"改成X卡"来调整。\n\n${detail}`;
+  } else {
+    const PORTION_ZH: Record<string, string> = { small: "小份", medium: "中份", large: "大份", custom: "自定" };
+    detail = `【被询问的记录】\n- 食物：${target.name}\n- 克数：${target.weight_g}g（${PORTION_ZH[target.portion ?? ""] ?? target.portion ?? "?"}份）\n- 热量：${target.calories}kcal`;
+    if (fullRecord) {
+      if (fullRecord.raw_input) detail += `\n- 用户原话："${fullRecord.raw_input}"`;
+      detail += `\n- AI置信度：食物 ${fullRecord.food_confidence?.toFixed(2)}，份量 ${fullRecord.portion_confidence?.toFixed(2)}`;
+      if (fullRecord.food) {
+        detail += `\n- 食物库：${fullRecord.food.name} 每100g ${Math.round(Number(fullRecord.food.calories_100g))}kcal`;
+      }
     }
+    systemPrompt = `你是减脂助手。用户对某条饮食记录提出了疑问，请结合以下记录详情，简洁中文解释这条记录是如何产生的（份量估算依据、克数来源、热量算法）。若用户觉得克数不准，告知可以说"改成X克"来调整。\n\n${detail}`;
   }
+
   const res = await callDeepSeekCtx(
     pack,
     [
       {
         role: "system",
-        content: `你是减脂助手。用户对某条饮食记录提出了疑问，请结合以下记录详情，简洁中文解释这条记录是如何产生的（份量估算依据、克数来源、热量算法）。若用户觉得克数不准，告知可以说"改成X克"来调整。\n\n${detail}`,
+        content: systemPrompt,
       },
       { role: "user", content: question },
     ],
