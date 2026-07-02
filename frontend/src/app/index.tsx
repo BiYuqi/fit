@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
+  KeyboardAvoidingView,
   Platform,
   StyleSheet,
   TouchableOpacity,
@@ -220,6 +221,11 @@ export default function ChatScreen() {
   const topPad = insets.top + 16;
 
   return (
+    <KeyboardAvoidingView
+      style={styles.kav}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      keyboardVerticalOffset={-insets.bottom}
+    >
     <ThemedView style={[styles.root, { backgroundColor: 'transparent' }]}>
       <FlatList
         ref={flatListRef}
@@ -253,7 +259,6 @@ export default function ChatScreen() {
         showsVerticalScrollIndicator={false}
         keyboardDismissMode="on-drag"
         keyboardShouldPersistTaps="handled"
-        automaticallyAdjustKeyboardInsets
       />
 
       {/* Search button — top-right, glass styling matching back button */}
@@ -320,11 +325,13 @@ export default function ChatScreen() {
       <ChatInput onSend={handleSend} isSending={isSending} />
       <View style={{ height: insets.bottom }} />
     </ThemedView>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
+  kav:  { flex: 1 },
   flatList: { flex: 1 },
   list: {
     paddingHorizontal: 16,

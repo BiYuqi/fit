@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -9,7 +9,6 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useFocusEffect } from 'expo-router';
 import Svg, { Circle, Defs, LinearGradient, Stop, Polyline } from 'react-native-svg';
 import { SymbolView } from 'expo-symbols';
 
@@ -479,7 +478,7 @@ function TrendHeader({
 }
 
 // ─── Screen ───────────────────────────────────────────────────────────────────
-export default function HistoryScreen() {
+export default function HistoryScreen({ isActive = true }: { isActive?: boolean }) {
   const { token } = useAuthStore();
   const scheme = useColorScheme();
   const isDark = scheme === 'dark';
@@ -491,6 +490,7 @@ export default function HistoryScreen() {
   const [foodRecords, setFoodRecords] = useState<FoodRec[]>([]);
   const [exRecords,   setExRecords]   = useState<ExRec[]>([]);
   const [loading,     setLoading]     = useState(true);
+  const [refreshing,  setRefreshing]  = useState(false);
   const [chartWidth,  setChartWidth]  = useState(300);
 
   const { from, to } = useMemo(() => getDateRange(granularity), [granularity]);
@@ -516,10 +516,16 @@ export default function HistoryScreen() {
       /* keep stale data on error */
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }, [token, from, to]);
 
-  useFocusEffect(useCallback(() => { void load(); }, [load]));
+  const handleRefresh = useCallback(() => {
+    setRefreshing(true);
+    void load();
+  }, [load]);
+
+  useEffect(() => { if (isActive) { void load(); } }, [isActive, load]);
 
   // ── Derived stats ───────────────────────────────────────────────────────────
   const avgDeficit = rangeData.length > 0
@@ -642,8 +648,8 @@ export default function HistoryScreen() {
           contentContainerStyle={styles.list}
           showsVerticalScrollIndicator={false}
           ItemSeparatorComponent={Sep}
-          // Performance: tell FlatList each item has a fixed height estimate
-          // so it can compute scroll bar and offset without measuring every item
+          refreshing={refreshing}
+          onRefresh={handleRefresh}
           getItemLayout={getItemLayout}
           windowSize={5}
           removeClippedSubviews
@@ -672,8 +678,8 @@ const styles = StyleSheet.create({
   loader: { flex: 1, alignItems: 'center', justifyContent: 'center' },
 
   // Header — matches Today's pattern
-  header: { paddingHorizontal: 22, paddingTop: 10, paddingBottom: 8 },
-  title:  { fontSize: 26, fontWeight: '700', letterSpacing: -0.6, marginTop: 1 },
+  header: { paddingHorizontal: 22, paddingTop: 10, paddingBottom: 8, overflow: 'visible' },
+  title:  { fontSize: 30, fontWeight: '700', letterSpacing: -0.6, lineHeight: 36 },
 
   // Segmented control
   segWrap: {

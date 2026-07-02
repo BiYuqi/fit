@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   LayoutChangeEvent,
-  PanResponder,
   Platform,
   Pressable,
   StyleSheet,
@@ -30,13 +29,13 @@ import { useColorScheme } from '@/hooks/use-color-scheme';
 type TabName = 'chat' | 'today' | 'history' | 'settings';
 
 const TABS: { name: TabName; label: string; icon: string; iconActive: string; emoji: string }[] = [
-  { name: 'chat',     label: 'Chat',     icon: 'bubble.left',            iconActive: 'bubble.left.fill',       emoji: '💬' },
   { name: 'today',    label: 'Today',    icon: 'chart.pie',              iconActive: 'chart.pie.fill',         emoji: '📊' },
+  { name: 'chat',     label: 'Chat',     icon: 'bubble.left',            iconActive: 'bubble.left.fill',       emoji: '💬' },
   { name: 'history',  label: 'History',  icon: 'clock.arrow.circlepath', iconActive: 'clock.arrow.circlepath', emoji: '🕐' },
   { name: 'settings', label: 'Settings', icon: 'gearshape',              iconActive: 'gearshape.fill',         emoji: '⚙️' },
 ];
 
-const SCREENS: Record<TabName, React.ComponentType> = {
+const SCREENS: Record<TabName, React.ComponentType<{ isActive?: boolean }>> = {
   chat: ChatScreen, today: TodayScreen, history: HistoryScreen, settings: SettingsScreen,
 };
 
@@ -143,48 +142,41 @@ export default function AppTabs() {
     if (initialized.current) syncIndicator(true);
   }, [active, syncIndicator]);
 
-  // Reset when returning to Chat so layouts re-measure on next show
-  useEffect(() => {
-    if (active === 'chat') {
-      initialized.current = false;
-      tabLayouts.current  = new Array(TABS.length).fill(null);
-    }
-  }, [active]);
-
   const indicatorStyle = useAnimatedStyle(() => ({
     left:  indicatorLeft.value,
     width: indicatorWidth.value,
   }));
 
-  // ── Edge-swipe (Chat → Today) ──────────────────────────────────
-  const panResponder = useRef(
-    PanResponder.create({
-      onMoveShouldSetPanResponder: (evt, gs) =>
-        evt.nativeEvent.pageX < 30 && gs.dx > 10 && Math.abs(gs.dy) < gs.dx,
-      onPanResponderRelease: (_, gs) => { if (gs.dx > 60) setActive('today'); },
-    })
-  ).current;
-
   const isChat = active === 'chat';
 
   return (
     <GradientBackground style={styles.root}>
-      {/* Keep screens mounted after first visit — toggle visibility instead of destroy/recreate.
-          Only mount a screen when first visited (lazy) to avoid 4× API/SQLite at startup. */}
-      {TABS.map(tab => {
+      {/* Background screens — rendered first so Chat stacks on top */}
+      {TABS.filter(t => t.name !== 'chat').map(tab => {
         if (!mounted.has(tab.name)) return null;
         const Screen = SCREENS[tab.name];
+        const isActiveTab = tab.name === active;
         return (
           <View
             key={tab.name}
-            style={tab.name === active ? styles.screenOn : styles.screenOff}
+            style={isActiveTab ? styles.screenOn : styles.screenOff}
+            pointerEvents={isActiveTab ? 'auto' : 'none'}
           >
-            <Screen />
+            <Screen isActive={isActiveTab} />
           </View>
         );
       })}
 
-      {isChat && <View style={styles.swipeEdge} {...panResponder.panHandlers} />}
+      {/* Chat — always on top of other screens */}
+      {mounted.has('chat') && (
+        <View
+          key="chat"
+          style={active === 'chat' ? styles.screenOn : styles.screenOff}
+          pointerEvents={active === 'chat' ? 'auto' : 'none'}
+        >
+          <ChatScreen />
+        </View>
+      )}
 
       {/* ── Back button ── */}
       {isChat && (
@@ -317,9 +309,8 @@ export default function AppTabs() {
 
 const styles = StyleSheet.create({
   root:      { flex: 1 },
-  screenOn:  { flex: 1 },
-  screenOff: { display: 'none' },
-  swipeEdge: { position: 'absolute', left: 0, top: 0, bottom: 0, width: 30 },
+  screenOn:   { flex: 1 },
+  screenOff:  { display: 'none' },
 
   // ── Back button ──
   backShadow: {

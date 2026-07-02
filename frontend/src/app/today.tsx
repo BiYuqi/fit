@@ -1,7 +1,6 @@
-import { useCallback, useState } from 'react';
-import { ActivityIndicator, ScrollView, StyleSheet, View } from 'react-native';
+import { useCallback, useEffect, useState } from 'react';
+import { ActivityIndicator, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useFocusEffect } from 'expo-router';
 import Svg, { Circle } from 'react-native-svg';
 
 import { GlassCard } from '@/components/glass-card';
@@ -124,7 +123,7 @@ interface ExerciseRecord {
 }
 
 // ─── Screen ───────────────────────────────────────────────────────────────────
-export default function TodayScreen() {
+export default function TodayScreen({ isActive = true }: { isActive?: boolean }) {
   const { token } = useAuthStore();
   const scheme = useColorScheme();
   const isDark = scheme === 'dark';
@@ -135,16 +134,23 @@ export default function TodayScreen() {
   const [exercises, setExercises] = useState<ExerciseRecord[]>([]);
   const [loading, setLoading] = useState(true);
 
+  const [refreshing, setRefreshing] = useState(false);
+
   const load = useCallback(async () => {
     if (!token) return;
     try {
       const res = await apiFetch<{ summary: DailySummary | null; exercises: ExerciseRecord[] }>('/api/daily/today', { token });
       setSummary(res.summary);
       setExercises(res.exercises ?? []);
-    } catch { /* keep stale */ } finally { setLoading(false); }
+    } catch { /* keep stale */ } finally { setLoading(false); setRefreshing(false); }
   }, [token]);
 
-  useFocusEffect(useCallback(() => { void load(); }, [load]));
+  const handleRefresh = useCallback(() => {
+    setRefreshing(true);
+    void load();
+  }, [load]);
+
+  useEffect(() => { if (isActive) { void load(); } }, [isActive, load]);
 
   const calIn         = summary?.calories_in  ?? 0;
   const calTarget     = summary?.target_calories ?? 0;
@@ -181,6 +187,9 @@ export default function TodayScreen() {
           style={styles.scroll}
           contentContainerStyle={styles.content}
           showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />
+          }
         >
           {/* ── Card 1: ring + deficit ─────────────────────────────── */}
           <GlassCard blurIntensity={30} style={styles.card1}>
@@ -287,9 +296,9 @@ const styles = StyleSheet.create({
   scroll: { flex: 1 },
 
   // Header — matches design: padding 10px 22px 6px
-  header: { paddingHorizontal: 22, paddingTop: 10, paddingBottom: 8 },
+  header: { paddingHorizontal: 22, paddingTop: 10, paddingBottom: 8, overflow: 'visible' },
   dateText: { fontSize: 13, fontWeight: '500' },
-  title:    { fontSize: 26, fontWeight: '700', letterSpacing: -0.6, marginTop: 1 },
+  title:    { fontSize: 30, fontWeight: '700', letterSpacing: -0.6, lineHeight: 36 },
 
   // Content — matches design: padding 8px 16px 100px, gap 13px
   content: {

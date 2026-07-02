@@ -9,10 +9,13 @@
     "userInterfaceStyle": "automatic",
     "ios": {
       "icon": "./assets/expo.icon",
-      "bundleIdentifier": "com.anonymous.frontend",
+      "bundleIdentifier": "com.byte.fit",
       "infoPlist": {
         "NSSpeechRecognitionUsageDescription": "允许 Fit 使用语音识别转文字",
-        "NSMicrophoneUsageDescription": "允许 Fit 使用麦克风进行语音输入"
+        "NSMicrophoneUsageDescription": "允许 Fit 使用麦克风进行语音输入",
+        "NSAppTransportSecurity": {
+          "NSAllowsLocalNetworking": true
+        }
       }
     },
     "android": {
@@ -26,7 +29,7 @@
       "permissions": [
         "android.permission.RECORD_AUDIO"
       ],
-      "package": "com.anonymous.frontend"
+      "package": "com.byte.fit"
     },
     "web": {
       "output": "static",
