@@ -18,6 +18,7 @@ import {
   recordDeleteCorrection,
   recordResolveCorrection,
 } from "../services/trace";
+import { recordTokenUsage } from "../services/token";
 
 // ---------- 运动 MET 简表（中英双语关键词） ----------
 const MET_TABLE: Array<[string[], number]> = [
@@ -115,7 +116,7 @@ async function fetchDayData(user_id: string, dateStr: string) {
   return `${dateStr} 摄入${total}kcal 蛋白${Math.round(agg._sum.protein ?? 0)}g 脂肪${Math.round(agg._sum.fat ?? 0)}g 碳水${Math.round(agg._sum.carbs ?? 0)}g`;
 }
 
-async function answerQuery(question: string, pack: MemoryPack, extraCtx?: string): Promise<{
+async function answerQuery(question: string, pack: MemoryPack, userId: string, extraCtx?: string): Promise<{
   text: string;
   usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
 }> {
@@ -130,13 +131,22 @@ async function answerQuery(question: string, pack: MemoryPack, extraCtx?: string
     ],
     { model: "deepseek-v4-flash" },
   );
+  const usage = res.usage ?? { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+  await recordTokenUsage({
+    userId,
+    model: "deepseek-v4-flash",
+    purpose: "query",
+    promptTokens: usage.prompt_tokens,
+    completionTokens: usage.completion_tokens,
+    totalTokens: usage.total_tokens,
+  });
   return {
     text: res.choices[0]?.message?.content ?? "暂时无法回答",
-    usage: res.usage ?? { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+    usage,
   };
 }
 
-async function answerChat(text: string, pack: MemoryPack): Promise<{
+async function answerChat(text: string, pack: MemoryPack, userId: string): Promise<{
   text: string;
   usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
 }> {
@@ -153,9 +163,18 @@ async function answerChat(text: string, pack: MemoryPack): Promise<{
     ],
     { model: "deepseek-v4-flash" },
   );
+  const usage = res.usage ?? { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+  await recordTokenUsage({
+    userId,
+    model: "deepseek-v4-flash",
+    purpose: "chat",
+    promptTokens: usage.prompt_tokens,
+    completionTokens: usage.completion_tokens,
+    totalTokens: usage.total_tokens,
+  });
   return {
     text: res.choices[0]?.message?.content ?? "好的",
-    usage: res.usage ?? { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+    usage,
   };
 }
 
@@ -164,6 +183,7 @@ async function answerDiscuss(
   target: import("../services/memory").RecordRef,
   fullRecord: { portion_label: string; food_confidence: number; portion_confidence: number; raw_input: string | null; food: { name: string; calories_100g: unknown } | null } | null,
   pack: MemoryPack,
+  userId: string,
 ): Promise<{
   text: string;
   usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
@@ -188,9 +208,18 @@ async function answerDiscuss(
     ],
     { model: "deepseek-v4-flash" },
   );
+  const usage = res.usage ?? { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+  await recordTokenUsage({
+    userId,
+    model: "deepseek-v4-flash",
+    purpose: "discuss",
+    promptTokens: usage.prompt_tokens,
+    completionTokens: usage.completion_tokens,
+    totalTokens: usage.total_tokens,
+  });
   return {
     text: res.choices[0]?.message?.content ?? "我来解释一下这条记录的来由…",
-    usage: res.usage ?? { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+    usage,
   };
 }
 
@@ -327,7 +356,7 @@ async function processFoodItem(item: FoodItem, ctx: ItemCtx): Promise<ItemResult
     };
   }
 
-  const food = await matchFood(query, raw);
+  const food = await matchFood(query, raw, user_id);
 
   // ── normalize：canonical → food_standard 映射 ──
   if (itrace) {
@@ -525,14 +554,14 @@ export async function chatRoutes(app: FastifyInstance) {
     let upgraded = false;
     let modelUsed = "deepseek-v4-flash";
     try {
-      const pr = await parseUserInput(text, pack);
+      const pr = await parseUserInput(text, pack, "deepseek-v4-flash", user_id);
       parsed = pr.result;
       parseUsage = pr.usage;
     } catch {
       // flash 解析失败（zod 校验 / tool call JSON 解析失败），升 pro 重试
       modelUsed = "deepseek-v4-pro";
       try {
-        const pr = await parseUserInput(text, pack, "deepseek-v4-pro");
+        const pr = await parseUserInput(text, pack, "deepseek-v4-pro", user_id);
         parsed = pr.result;
         parseUsage = pr.usage;
         upgraded = true;
@@ -547,7 +576,7 @@ export async function chatRoutes(app: FastifyInstance) {
       if (hasLow) {
         modelUsed = "deepseek-v4-pro";
         try {
-          const pr = await parseUserInput(text, pack, "deepseek-v4-pro");
+          const pr = await parseUserInput(text, pack, "deepseek-v4-pro", user_id);
           parsed = pr.result;
           parseUsage = pr.usage;
         } catch {
@@ -583,7 +612,7 @@ export async function chatRoutes(app: FastifyInstance) {
           if (row) extraCtx = `【实时查询】${row}`;
         }
       }
-      const { text: aiText, usage: queryUsage } = await answerQuery(text, pack, extraCtx);
+      const { text: aiText, usage: queryUsage } = await answerQuery(text, pack, user_id, extraCtx);
       // 只有明确问今天的问题才展示 query_card 卡片；问历史的用纯文本气泡
       const isTodayQuery = /今天|今日|现在|还可以|剩余|还剩/.test(text);
       const aiMsg = await prisma.chatMessage.create({
@@ -603,7 +632,7 @@ export async function chatRoutes(app: FastifyInstance) {
 
     // ── chat ───────────────────────────────────
     if (parsed.intent === "chat") {
-      const { text: aiText, usage: chatUsage } = await answerChat(text, pack);
+      const { text: aiText, usage: chatUsage } = await answerChat(text, pack, user_id);
       const aiMsg = await prisma.chatMessage.create({
         data: { user_id, date: dateObj, role: "assistant", kind: "text", content: aiText },
       });
@@ -619,7 +648,7 @@ export async function chatRoutes(app: FastifyInstance) {
       let aiText: string;
       let discussUsage: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
       if (!target) {
-        const r = await answerChat(text, pack);
+        const r = await answerChat(text, pack, user_id);
         aiText = r.text;
         discussUsage = r.usage;
       } else {
@@ -629,7 +658,7 @@ export async function chatRoutes(app: FastifyInstance) {
               include: { food: true },
             })
           : null;
-        const r = await answerDiscuss(text, target, fullRecord as any, pack);
+        const r = await answerDiscuss(text, target, fullRecord as any, pack, user_id);
         aiText = r.text;
         discussUsage = r.usage;
       }
@@ -771,7 +800,7 @@ export async function chatRoutes(app: FastifyInstance) {
       let portion_label = rec.portion_label as PortionLabel;
 
       if (change.food) {
-        food = await matchFood(change.food);   // 改食物：份量沿用旧的
+        food = await matchFood(change.food, undefined, user_id);   // 改食物：份量沿用旧的
       }
       if (change.portion_label) {
         portion_label = change.portion_label as PortionLabel;
@@ -987,7 +1016,7 @@ export async function chatRoutes(app: FastifyInstance) {
       // food_choice：choice 是食物名（string），用 matchFood 查找/估算
       // 不直接落库，而是生成 portion_choice pending → 返回 PortionCard（两步走）
       const foodName = choice as string;
-      const food = await matchFood(foodName);
+      const food = await matchFood(foodName, undefined, user_id);
 
       const portionsList: Array<{ label: string; grams: number }> = candidates.portions ?? [];
       const portionsWithCal = portionsList.map((p) => ({

@@ -73,6 +73,7 @@ model User {
   pending_records  PendingRecord[]
   chat_messages    ChatMessage[]
   traces           AiTrace[]
+  token_usages     TokenUsage[]
 }
 
 // ---------- 食物标准库（seed 导入的目标表）----------
@@ -273,4 +274,22 @@ model AiTraceEvent {
   trace AiTrace @relation(fields: [trace_id], references: [id], onDelete: Cascade)
 
   @@index([trace_id, item_index, seq])
+}
+
+// ---------- Token 用量（计费数据源，独立于 AiTrace，不受 tracing 开关影响）----------
+model TokenUsage {
+  id                String   @id @default(uuid())
+  user_id           String
+  model             String   // deepseek-v4-flash | deepseek-v4-pro
+  purpose           String   // parse | query | chat | discuss | estimate | adjudicate
+  prompt_tokens     Int
+  completion_tokens Int
+  total_tokens      Int
+  trace_id          String?  // 可选关联 AiTrace，用于排查单次请求成本（非外键，tracing 关闭时仍可写）
+  created_at        DateTime @default(now())
+
+  user User @relation(fields: [user_id], references: [id])
+
+  @@index([user_id, created_at(sort: Desc)])
+  @@index([user_id, model])
 }

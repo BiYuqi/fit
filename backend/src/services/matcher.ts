@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
 import { callDeepSeek } from "../ai/client";
+import { recordTokenUsage } from "./token";
 import type { FoodStandard } from "@prisma/client";
 
 const SIMILARITY_THRESHOLD = 0.4;
@@ -42,7 +43,7 @@ const estimateTool = {
   },
 };
 
-async function estimateByAI(canonical: string, raw: string = canonical): Promise<FoodStandard> {
+async function estimateByAI(canonical: string, raw: string = canonical, userId?: string): Promise<FoodStandard> {
   const res = await callDeepSeek(
     [
       {
@@ -57,6 +58,19 @@ async function estimateByAI(canonical: string, raw: string = canonical): Promise
       tool_choice: { type: "function", function: { name: ESTIMATE_TOOL_NAME } },
     }
   );
+
+  // 记录 token 用量（在 validation 之前——token 已消耗）
+  if (userId) {
+    const u = res.usage ?? { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+    await recordTokenUsage({
+      userId,
+      model: "deepseek-v4-flash",
+      purpose: "estimate",
+      promptTokens: u.prompt_tokens,
+      completionTokens: u.completion_tokens,
+      totalTokens: u.total_tokens,
+    });
+  }
 
   const toolCall = res.choices[0]?.message?.tool_calls?.[0];
   if (!toolCall || toolCall.type !== "function") {
@@ -91,6 +105,7 @@ async function adjudicateByAI(
   raw: string,
   canonical: string,
   candidates: FoodStandard[],
+  userId?: string,
 ): Promise<FoodStandard | null> {
   const opts = candidates.map((f, i) => ({ id: `c${i}`, food: f }));
   const optionsText = opts
@@ -140,6 +155,19 @@ async function adjudicateByAI(
       tool_choice: { type: "function", function: { name: ADJUDICATE_TOOL_NAME } },
     },
   );
+
+  // 记录 token 用量（在 validation 之前——token 已消耗）
+  if (userId) {
+    const u = res.usage ?? { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+    await recordTokenUsage({
+      userId,
+      model: "deepseek-v4-flash",
+      purpose: "adjudicate",
+      promptTokens: u.prompt_tokens,
+      completionTokens: u.completion_tokens,
+      totalTokens: u.total_tokens,
+    });
+  }
 
   const toolCall = res.choices[0]?.message?.tool_calls?.[0];
   if (!toolCall || toolCall.type !== "function") return null;
@@ -211,7 +239,7 @@ export async function matchFoodCandidates(
 // ---------- 主管线 ----------
 // 字面匹配只做"召回"，不做"裁决"：精确/alias 可信任直用；前缀(假前缀)/trgm 属弱匹配，
 // 回灌 AI 把关；AI 否决或无候选 → 估算落库。详见 AI_PARSING_SPEC §5。
-export async function matchFood(canonical: string, raw: string = canonical): Promise<FoodStandard> {
+export async function matchFood(canonical: string, raw: string = canonical, userId?: string): Promise<FoodStandard> {
   // 1. 精确匹配 → 可信
   const exact = await prisma.foodStandard.findFirst({ where: { name: canonical } });
   if (exact) return exact;
@@ -259,12 +287,12 @@ export async function matchFood(canonical: string, raw: string = canonical): Pro
   trgmResults.forEach((r) => { const { _sim, ...food } = r as any; addSuspect(food as FoodStandard); });
 
   // 5. 无任何候选 → AI 估算兜底
-  if (suspects.length === 0) return estimateByAI(canonical, raw);
+  if (suspects.length === 0) return estimateByAI(canonical, raw, userId);
 
   // 6. 有可疑候选 → AI 裁决（带用户原话）
-  const picked = await adjudicateByAI(raw, canonical, suspects.slice(0, 5));
+  const picked = await adjudicateByAI(raw, canonical, suspects.slice(0, 5), userId);
   if (picked) return picked;
 
   // 7. AI 否决（"以上都不是"）→ 估算落库，宁可估算不硬套
-  return estimateByAI(canonical, raw);
+  return estimateByAI(canonical, raw, userId);
 }

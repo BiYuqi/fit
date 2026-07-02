@@ -6,6 +6,7 @@ import {
   PARSE_TOOL_NAME,
   parseToolSchema,
 } from "../ai/schema";
+import { recordTokenUsage } from "./token";
 
 export const SYSTEM_PROMPT = `你是一个减脂 App 的饮食助手，帮助用户记录饮食与运动。
 
@@ -92,7 +93,8 @@ portion_confidence 判断依据：
 export async function parseUserInput(
   text: string,
   pack: MemoryPack,
-  model = "deepseek-v4-flash"
+  model = "deepseek-v4-flash",
+  userId: string,
 ): Promise<{ result: ParseResult; usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number } }> {
   const messages: Array<{ role: "system" | "user"; content: string }> = [
     { role: "system", content: SYSTEM_PROMPT },
@@ -108,6 +110,17 @@ export async function parseUserInput(
       tool_choice: { type: "function", function: { name: PARSE_TOOL_NAME } },
     },
   );
+
+  // 记录 token 用量——在 validation 之前，因为 token 已消耗，解析失败也应计费
+  const usage = res.usage ?? { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+  await recordTokenUsage({
+    userId,
+    model,
+    purpose: "parse",
+    promptTokens: usage.prompt_tokens,
+    completionTokens: usage.completion_tokens,
+    totalTokens: usage.total_tokens,
+  });
 
   const toolCall = res.choices[0]?.message?.tool_calls?.[0];
   if (!toolCall || toolCall.type !== "function" || toolCall.function.name !== PARSE_TOOL_NAME) {
@@ -137,6 +150,5 @@ export async function parseUserInput(
   }
 
   const result = ParseResultSchema.parse(raw);
-  const usage = res.usage ?? { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
   return { result, usage };
 }
