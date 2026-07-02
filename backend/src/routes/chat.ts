@@ -34,6 +34,13 @@ const MET_TABLE: Array<[string[], number]> = [
   [["篮球", "basketball", "足球", "soccer", "football"], 7],
   [["乒乓", "table tennis", "羽毛球", "badminton", "网球", "tennis"], 5],
   [["跳绳", "jump rope", "jumping"], 10],
+  [["俯卧撑", "pushup", "push up"], 3.8],
+  [["引体向上", "pullup", "pull up", "chin up", "chinup"], 5],
+  [["深蹲", "squat"], 5],
+  [["仰卧起坐", "卷腹", "situp", "sit up", "crunch"], 3.8],
+  [["波比跳", "burpee", "立卧撑"], 8],
+  [["开合跳", "jumping jack"], 8],
+  [["平板支撑", "plank"], 3],
 ];
 
 function getMET(type: string): number {
@@ -46,6 +53,12 @@ function getMET(type: string): number {
 
 function calcExerciseCalories(type: string, duration_min: number, weight_kg: number): number {
   return Math.round(getMET(type) * weight_kg * (duration_min / 60));
+}
+
+export function resolveDuration(ex: { duration_min?: number; reps?: number }): number {
+  if (ex.duration_min) return ex.duration_min;
+  if (ex.reps) return Math.max(1, Math.round(ex.reps / 15));
+  return 30;
 }
 
 // ---------- 工具函数 ----------
@@ -897,7 +910,8 @@ export async function chatRoutes(app: FastifyInstance) {
 
     // 处理运动条目（运动视为已确认）
     for (const ex of (parsed.exercise ?? [])) {
-      const duration_min = ex.duration_min ?? 30;
+      // 次数型运动按 ~4s/次 估算时长，至少 1min
+      const duration_min = resolveDuration(ex);
       const calories_burned = calcExerciseCalories(ex.type, duration_min, weight_kg);
 
       const exRecord = await prisma.exerciseRecord.create({
@@ -912,7 +926,8 @@ export async function chatRoutes(app: FastifyInstance) {
         },
       });
       needsRecompute = true;
-      replyParts.push(`运动 ${ex.type} ${duration_min}min（消耗约 ${calories_burned} kcal）`);
+      const detail = ex.reps ? `${ex.reps}次 ≈ ${duration_min}min` : `${duration_min}min`;
+      replyParts.push(`运动 ${ex.type} ${detail}（消耗约 ${calories_burned} kcal）`);
 
       const exData = {
         user_id,

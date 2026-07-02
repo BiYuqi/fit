@@ -38,6 +38,7 @@ export type FoodItem = z.infer<typeof FoodItemSchema>;
 export const ExerciseItemSchema = z.object({
   type: z.string(),
   duration_min: z.number().positive().optional(),
+  reps: z.number().positive().optional(),
   intensity: z.string().optional(),
 });
 export type ExerciseItem = z.infer<typeof ExerciseItemSchema>;
@@ -178,7 +179,7 @@ export const parseToolSchema = {
         },
         exercise: {
           type: "array",
-          description: "运动条目，有运动记录时填写",
+          description: "运动条目，有运动记录时填写。持续型运动（跑步/球类）填 duration_min，次数型运动（俯卧撑/引体向上/深蹲）填 reps，两者可同时有",
           items: {
             type: "object",
             required: ["type"],
@@ -186,6 +187,7 @@ export const parseToolSchema = {
             properties: {
               type: { type: "string" },
               duration_min: { type: "number" },
+              reps: { type: "number", description: "次数型运动的总次数（如俯卧撑、引体向上），与 duration_min 二选一或同时有" },
               intensity: { type: "string" },
             },
           },
