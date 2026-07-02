@@ -499,6 +499,8 @@ export async function chatRoutes(app: FastifyInstance) {
     // ─────────────────────────────────────────
     const tctx = await ChatTrace.begin(user_id, text, pack, { sessionId: session_id, promptText: SYSTEM_PROMPT });
 
+    let resolvedIntent: string | undefined;
+    try {
     // 解析意图（flash → pro 若 zod 校验失败或低置信）
     let parsed: ParseResult;
     let upgraded = false;
@@ -541,6 +543,7 @@ export async function chatRoutes(app: FastifyInstance) {
 
     // Trace: 记录 parse event（DeepSeek 返回 → 写入 ai_trace_event）
     await tctx.recordParse(parsed, modelUsed, upgraded);
+    resolvedIntent = parsed.intent;
 
     // ── query ──────────────────────────────────
     if (parsed.intent === "query") {
@@ -878,6 +881,11 @@ export async function chatRoutes(app: FastifyInstance) {
       summary_card,
       messages,
     };
+  } catch (err: any) {
+    // 异常路径也要关闭 trace，避免留下 status="started" 的僵尸记录
+    tctx.fail(resolvedIntent ?? "unknown", { message: err?.message });
+    throw err;
+  }
   });
 
   // ─────────────────────────────────────────────
