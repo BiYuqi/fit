@@ -22,6 +22,7 @@ import { clearCache } from '@/lib/db';
 import { queryClient } from '@/lib/query-client';
 import { useAuthStore } from '@/stores/auth-store';
 import { useOnboardingReviewStore, type OnboardingFormData } from '@/stores/onboarding-review-store';
+import { useThemeStore, type ThemePreference } from '@/stores/theme-store';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { Colors, Glass, BottomTabInset, Spacing, FontSize } from '@/constants/theme';
 
@@ -80,6 +81,18 @@ const GENDER_LABEL: Record<string, string> = Object.fromEntries(
 const GOAL_LABEL: Record<string, string> = Object.fromEntries(
   GOAL_OPTIONS.map((o) => [o.value, o.label]),
 );
+
+const THEME_OPTIONS = [
+  { value: 'system' as const, label: '跟随系统', desc: '自动在浅色与深色之间切换' },
+  { value: 'light' as const, label: '浅色', desc: '始终使用浅色外观' },
+  { value: 'dark' as const, label: '深色', desc: '始终使用深色外观' },
+];
+
+const THEME_LABEL: Record<ThemePreference, string> = {
+  system: '跟随系统',
+  light: '浅色',
+  dark: '深色',
+};
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -528,7 +541,7 @@ export default function SettingsScreen() {
   const [modalType, setModalType] = useState<
     | 'gender' | 'age' | 'height' | 'weight'
     | 'activity' | 'targetWeight' | 'goalType'
-    | 'tdee'
+    | 'tdee' | 'theme'
     | null
   >(null);
 
@@ -612,6 +625,8 @@ export default function SettingsScreen() {
   // ── Revisit onboarding ──────────────────────────────────────────────────
 
   const startReview = useOnboardingReviewStore((s) => s.startReview);
+  const themePreference = useThemeStore((s) => s.preference);
+  const setThemePreference = useThemeStore((s) => s.setPreference);
 
   const handleRevisitOnboarding = () => {
     if (!profile) return;
@@ -894,6 +909,22 @@ export default function SettingsScreen() {
             </View>
           </GlassSectionCard>
 
+          {/* ── Appearance ──────────────────────────────────────────── */}
+          <View>
+            <SectionHeader label="外观" />
+            <GlassSectionCard isDark={isDark} glass={glass}>
+              <View style={styles.sectionCardInner}>
+                <SettingsRow
+                  label="主题"
+                  value={THEME_LABEL[themePreference]}
+                  onPress={() => setModalType('theme')}
+                  colors={colors}
+                  showDivider={false}
+                />
+              </View>
+            </GlassSectionCard>
+          </View>
+
           {/* ── Clear Cache ──────────────────────────────────────────── */}
           <TouchableOpacity
             style={[styles.clearBtn, { borderColor: colors.warn }]}
@@ -1040,6 +1071,19 @@ export default function SettingsScreen() {
         max={6000}
         step={10}
         onValueChange={handleTdeeChange}
+        onClose={closeModal}
+        colors={colors}
+        glass={glass}
+        accent={accent}
+        isDark={isDark}
+      />
+
+      <PickerModal
+        visible={modalType === 'theme'}
+        title="主题"
+        options={THEME_OPTIONS}
+        value={themePreference}
+        onSelect={(v) => { void setThemePreference(v); }}
         onClose={closeModal}
         colors={colors}
         glass={glass}
