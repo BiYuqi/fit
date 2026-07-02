@@ -907,6 +907,7 @@ export async function chatRoutes(app: FastifyInstance) {
     const source: string = candidates.source ?? "text";
 
     // delete_confirm：用户点了确认 → 删记录（AI_PARSING_SPEC §8）
+    // 不额外创建 text 消息——前端的 delete_confirm_card 本身在 resolved 后会显示"已删除「xxx」"
     if (pr.type === "delete_confirm") {
       if (candidates.kind === "exercise") {
         await prisma.exerciseRecord.deleteMany({ where: { id: candidates.record_id, user_id } });
@@ -916,9 +917,6 @@ export async function chatRoutes(app: FastifyInstance) {
       await prisma.pendingRecord.update({ where: { id }, data: { status: "resolved" } });
       await recompute(user_id, today);
       const summary_card = await buildContextCard(user_id);
-      const aiMsg = await prisma.chatMessage.create({
-        data: { user_id, date: dateObj, role: "assistant", kind: "text", content: `已删除：${candidates.name}` },
-      });
       // Trace: correction event（用户确认删除）
       recordDeleteCorrection({
         recordId: candidates.record_id,
@@ -926,7 +924,7 @@ export async function chatRoutes(app: FastifyInstance) {
         name: candidates.name,
         pendingId: id,
       });
-      return { summary_card, messages: [aiMsg] };
+      return { summary_card, messages: [] };
     }
 
     let food_id: string;

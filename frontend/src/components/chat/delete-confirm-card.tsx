@@ -37,7 +37,10 @@ export function DeleteConfirmCard({
     <View style={styles.wrapper}>
       <GlassCard padding={12} gap={8} style={styles.card}>
         <View style={styles.titleRow}>
-          <SymbolView name="trash" size={14} tintColor={done ? colors.textSecondary : DESTRUCTIVE} />
+          {/* icon 仅在等待确认时显示；已处理状态不需要 */}
+          {!done && (
+            <SymbolView name="trash" size={14} tintColor={DESTRUCTIVE} />
+          )}
           <ThemedText style={[styles.title, { color: colors.text }]} numberOfLines={2}>
             {isResolved
               ? `已删除「${payload.name}」`
