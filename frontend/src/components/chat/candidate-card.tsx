@@ -9,12 +9,16 @@ import { useChatStore } from '@/stores/chat-store';
 import { useAuthStore } from '@/stores/auth-store';
 import type { CandidateCardPayload } from '@/types/chat';
 
+const STALE_MS = 5 * 60 * 1000;
+
 export function CandidateCard({
   payload,
   isResolved,
+  createdAt,
 }: {
   payload: CandidateCardPayload;
   isResolved: boolean;
+  createdAt: string;
 }) {
   const [selected, setSelected] = useState<string | null>(null);
   const scheme = useColorScheme();
@@ -25,8 +29,11 @@ export function CandidateCard({
   const { resolve } = useChatStore();
   const { token } = useAuthStore();
 
+  const isStale = Date.now() - new Date(createdAt).getTime() > STALE_MS;
+  const disabled = isResolved || isStale;
+
   const handleChoice = (foodName: string) => {
-    if (isResolved || selected || !token) return;
+    if (disabled || selected || !token) return;
     setSelected(foodName);
     resolve(payload.pending_id, foodName, token);
   };
@@ -34,8 +41,8 @@ export function CandidateCard({
   return (
     <View style={styles.wrapper}>
       <GlassCard
-        padding={isResolved ? 10 : 12}
-        gap={isResolved ? 5 : 8}
+        padding={disabled ? 10 : 12}
+        gap={disabled ? 5 : 8}
         style={styles.card}
       >
         <View style={styles.titleRow}>
@@ -45,8 +52,10 @@ export function CandidateCard({
           </ThemedText>
         </View>
 
-        {isResolved ? (
-          <ThemedText style={[styles.resolved, { color: colors.textSecondary }]}>已选择</ThemedText>
+        {disabled ? (
+          <ThemedText style={[styles.resolved, { color: colors.textSecondary }]}>
+            {isStale ? '已过期' : '已选择'}
+          </ThemedText>
         ) : (
           <>
             <View style={styles.chips}>

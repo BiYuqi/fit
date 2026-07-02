@@ -37,7 +37,7 @@ iOS 26 Liquid Glass / Apple Intelligence：毛玻璃卡片、柔和半透明层�
 **消息/卡片类型**（对应 chat_message.kind）：
 - 用户文本气泡（role=user, text）
 - AI 反馈卡 record_card：食物名+餐次+份数+总kcal，下方蛋白/脂肪/碳水
-- 份量选择卡 portion_card：`小份≈180g·约430kcal / 中份≈250g·约590kcal / 大份≈330g·约780kcal / 自定义克数`
+- 份量选择卡 portion_card：2×2 网格，小份/中份/大份/自定义各占一格，选中后显示 checkmark；点自定义展开克数输入框 + 确认/取消按钮
 - 候选食物卡 candidate_card：`[煎饼果子] [煎饼+油条] [其他]`
 - 追问卡 clarify_card：`是不是：[火锅] [外卖混合] [其他描述]`
 - 查询回答卡 query_card：如"今天还可以吃 720 kcal" + 剩余额度进度条 + 一句建议
@@ -49,6 +49,7 @@ iOS 26 Liquid Glass / Apple Intelligence：毛玻璃卡片、柔和半透明层�
 **关键交互态**：
 - 高置信 → 直接出 record_card。
 - 中/低置信 → 出 portion/candidate/clarify 卡；用户点选后该卡**替换为确认后的 record_card**。
+- **Pending 卡片过期**：portion_card / candidate_card 超过 **5 分钟**未操作即显示"已过期"，不可再交互。防止旧消息的 pending 卡片被误触后在新日期产生记录。
 - modify 修改（见 AI_PARSING_SPEC §8）：
   - 删除 → delete_confirm_card，**必须确认**后才删（破坏性）。
   - 改份量/改食物（update）、追加（append）→ 直接出 record_card，卡上带「撤销」轻按钮（payload.undo 存在时）；点撤销→`/records/:id/undo`（带 prev_state 还原 / 不带删除），卡片转「已撤销」灰态。撤销非破坏性、不弹确认。

@@ -13,19 +13,23 @@ const PORTION_LABEL: Record<string, string> = {
   small: '小份',
   medium: '中份',
   large: '大份',
-  custom: '自定义克数',
+  custom: '自定义',
 };
+
+/** Pending cards older than 5 min are non-interactive */
+const STALE_MS = 5 * 60 * 1000;
 
 export function PortionCard({
   payload,
   isResolved,
+  createdAt,
 }: {
   payload: PortionCardPayload;
   isResolved: boolean;
+  createdAt: string;
 }) {
   const [selected, setSelected] = useState<string | null>(null);
   const [customGrams, setCustomGrams] = useState('');
-  const [showCustom, setShowCustom] = useState(false);
   const scheme = useColorScheme();
   const isDark = scheme === 'dark';
   const colors = Colors[isDark ? 'dark' : 'light'];
@@ -34,15 +38,15 @@ export function PortionCard({
   const { resolve } = useChatStore();
   const { token } = useAuthStore();
 
+  const isStale = Date.now() - new Date(createdAt).getTime() > STALE_MS;
+  const disabled = isResolved || isStale;
+
   const handleChoice = (label: string) => {
-    if (isResolved || !token) return;
-    if (label === 'custom') {
-      setSelected('custom');
-      setShowCustom(true);
-      return;
-    }
+    if (disabled || !token) return;
     setSelected(label);
-    resolve(payload.pending_id, label, token);
+    if (label !== 'custom') {
+      resolve(payload.pending_id, label, token);
+    }
   };
 
   const handleCustomConfirm = () => {
@@ -51,14 +55,19 @@ export function PortionCard({
     resolve(payload.pending_id, { grams }, token);
   };
 
-  /** Derive a descriptive label for the resolved state, e.g. "已选中份 ≈ 250g". */
+  const handleCustomCancel = () => {
+    setSelected(null);
+    setCustomGrams('');
+  };
+
   const resolvedLabel = (() => {
+    if (isStale) return '已过期';
+    const portion = selected ? payload.portions.find(p => p.label === selected) : null;
     if (selected === 'custom') {
       const g = parseFloat(customGrams);
       if (!isNaN(g) && g > 0) return `已选 ${g}g`;
       return '已选择';
     }
-    const portion = selected ? payload.portions.find(p => p.label === selected) : null;
     if (portion && portion.grams > 0) return `已选中份 ≈ ${portion.grams}g`;
     return '已选择';
   })();
@@ -71,53 +80,50 @@ export function PortionCard({
   return (
     <View style={styles.wrapper}>
       <GlassCard
-        padding={isResolved ? 10 : 12}
-        gap={isResolved ? 5 : 8}
+        padding={isResolved || isStale ? 10 : 10}
+        gap={isResolved || isStale ? 5 : 8}
         style={styles.card}
       >
         <ThemedText style={[styles.title, { color: colors.textSecondary }]}>
           {payload.food_name ? `「${payload.food_name}」大概多少？` : '这份大概是多少？'}
         </ThemedText>
 
-        {isResolved ? (
+        {disabled ? (
           <ThemedText style={[styles.resolved, { color: colors.textSecondary }]}>{resolvedLabel}</ThemedText>
         ) : (
           <>
-            {/* 2-column grid */}
+            {/* 2×2 grid */}
             <View style={styles.grid}>
-              {allPortions.map(p => {
+              {allPortions.map((p, i) => {
                 const isSelected = selected === p.label;
                 const isCustom = p.label === 'custom';
+                const isLastOdd = i === allPortions.length - 1 && allPortions.length % 2 !== 0;
                 return (
                   <TouchableOpacity
                     key={p.label}
                     style={[
                       styles.option,
-                      isCustom && styles.optionCustom,
-                      {
-                        borderColor: isSelected ? tint : 'rgba(60,60,67,0.08)',
-                        borderWidth: isSelected ? 1.5 : StyleSheet.hairlineWidth,
-                        backgroundColor: isSelected
-                          ? tint + '14'
-                          : isDark ? 'rgba(118,118,128,0.10)' : 'rgba(118,118,128,0.06)',
-                      },
+                      isLastOdd && styles.optionFull,
+                      isSelected
+                        ? { backgroundColor: tint }
+                        : { backgroundColor: isDark ? 'rgba(118,118,128,0.16)' : 'rgba(118,118,128,0.08)' },
                     ]}
                     onPress={() => handleChoice(p.label)}
-                    activeOpacity={0.7}>
-                    <View style={styles.optionLabelRow}>
-                      {isCustom && (
-                        <SymbolView name="square.and.pencil" size={13} tintColor={isSelected ? tint : colors.textSecondary} />
+                    activeOpacity={0.75}>
+                    <View style={styles.optionRow}>
+                      {isSelected && !isCustom && (
+                        <SymbolView name="checkmark" size={11} weight="bold" tintColor="#fff" />
                       )}
-                      <ThemedText style={[styles.optionName, { color: isSelected ? tint : colors.text }]}>
+                      {isCustom && !isSelected && (
+                        <SymbolView name="square.and.pencil" size={11} tintColor={colors.textSecondary} />
+                      )}
+                      <ThemedText style={[styles.optionLabel, { color: isSelected ? '#fff' : colors.text }]}>
                         {PORTION_LABEL[p.label] ?? p.label}
                       </ThemedText>
-                      {isSelected && !isCustom && (
-                        <SymbolView name="checkmark.circle.fill" size={15} tintColor={tint} style={styles.checkIcon} />
-                      )}
                     </View>
                     {!isCustom && p.grams > 0 && (
-                      <ThemedText style={[styles.optionDetail, { color: colors.textSecondary }]}>
-                        ≈ {p.grams}g{p.calories ? ` · 约 ${p.calories} kcal` : ''}
+                      <ThemedText style={[styles.optionHint, { color: isSelected ? 'rgba(255,255,255,0.70)' : colors.textSecondary }]}>
+                        ≈ {p.grams}g{p.calories ? `  ·  ${p.calories} kcal` : ''}
                       </ThemedText>
                     )}
                   </TouchableOpacity>
@@ -125,10 +131,10 @@ export function PortionCard({
               })}
             </View>
 
-            {showCustom && (
+            {selected === 'custom' && (
               <View style={styles.customRow}>
                 <TextInput
-                  style={[styles.customInput, { color: colors.text, borderColor: tint + '80', backgroundColor: isDark ? 'rgba(118,118,128,0.12)' : 'rgba(118,118,128,0.08)' }]}
+                  style={[styles.customInput, { color: colors.text, borderColor: tint + '60', backgroundColor: isDark ? 'rgba(118,118,128,0.12)' : 'rgba(118,118,128,0.06)' }]}
                   placeholder="克数"
                   placeholderTextColor={colors.textSecondary}
                   keyboardType="numeric"
@@ -137,10 +143,16 @@ export function PortionCard({
                   autoFocus
                 />
                 <TouchableOpacity
-                  style={[styles.confirmBtn, { backgroundColor: tint }]}
+                  style={[styles.customBtn, { backgroundColor: tint }]}
                   onPress={handleCustomConfirm}
                   activeOpacity={0.8}>
-                  <ThemedText style={styles.confirmText}>确认</ThemedText>
+                  <ThemedText style={styles.customBtnText}>确认</ThemedText>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.customBtn, styles.cancelBtn, { backgroundColor: isDark ? 'rgba(118,118,128,0.24)' : 'rgba(118,118,128,0.12)' }]}
+                  onPress={handleCustomCancel}
+                  activeOpacity={0.7}>
+                  <ThemedText style={[styles.customBtnText, { color: colors.text }]}>取消</ThemedText>
                 </TouchableOpacity>
               </View>
             )}
@@ -151,13 +163,15 @@ export function PortionCard({
   );
 }
 
+const CUSTOM_ROW_H = 34;
+
 const styles = StyleSheet.create({
   wrapper: {
     marginVertical: 6,
+    alignItems: 'flex-start',
   },
   card: {
-    alignSelf: 'flex-start',
-    maxWidth: '100%',
+    width: '90%' as any,
   },
   title: {
     fontSize: FontSize.sm,
@@ -167,60 +181,66 @@ const styles = StyleSheet.create({
     fontSize: FontSize.sm,
     fontStyle: 'italic',
   },
+
+  // 2×2 grid
   grid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: Spacing.two,
+    gap: 6,
   },
   option: {
-    width: 130,
-    borderRadius: Radius.md,
-    padding: 12,
-    gap: Spacing.one,
+    flex: 1,
+    minWidth: '45%',
+    borderRadius: Radius.sm,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    gap: 2,
   },
-  optionCustom: {
-    justifyContent: 'center',
-    alignItems: 'center',
-    minHeight: 62,
+  optionFull: {
+    minWidth: '100%',
   },
-  optionLabelRow: {
+  optionRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 5,
+    gap: 4,
   },
-  optionName: {
-    fontSize: FontSize.base,
+  optionLabel: {
+    fontSize: 13,
     fontWeight: '600',
-    flex: 1,
   },
-  checkIcon: {
-    flexShrink: 0,
-  },
-  optionDetail: {
-    fontSize: FontSize.xs,
+  optionHint: {
+    fontSize: 11,
     lineHeight: 15,
   },
+
+  // Custom grams row
   customRow: {
     flexDirection: 'row',
-    gap: Spacing.two,
+    gap: 6,
     alignItems: 'center',
   },
   customInput: {
     flex: 1,
+    height: CUSTOM_ROW_H,
     borderWidth: 1,
     borderRadius: Radius.sm,
-    paddingHorizontal: 12,
-    paddingVertical: Spacing.two,
-    fontSize: FontSize.base,
-  },
-  confirmBtn: {
-    borderRadius: Radius.sm,
-    paddingHorizontal: Spacing.three,
-    paddingVertical: 9,
-  },
-  confirmText: {
-    color: '#fff',
+    paddingHorizontal: 10,
     fontSize: 14,
+    paddingVertical: 0,
+  },
+  customBtn: {
+    height: CUSTOM_ROW_H,
+    borderRadius: Radius.sm,
+    paddingHorizontal: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cancelBtn: {
+    paddingHorizontal: 12,
+  },
+  customBtnText: {
+    color: '#fff',
+    fontSize: 13,
     fontWeight: '600',
   },
 });

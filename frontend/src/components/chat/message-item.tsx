@@ -99,13 +99,13 @@ export function MessageItem({ message, isLast }: { message: ChatMessage; isLast?
     case 'portion_card': {
       const pid = (p as PortionCardPayload)?.pending_id;
       const resolved = !!(pid && resolvedPendings[pid]);
-      return <PortionCard payload={p as PortionCardPayload} isResolved={resolved} />;
+      return <PortionCard payload={p as PortionCardPayload} isResolved={resolved} createdAt={message.created_at} />;
     }
 
     case 'candidate_card': {
       const pid = (p as CandidateCardPayload)?.pending_id;
       const resolved = !!(pid && resolvedPendings[pid]);
-      return <CandidateCard payload={p as CandidateCardPayload} isResolved={resolved} />;
+      return <CandidateCard payload={p as CandidateCardPayload} isResolved={resolved} createdAt={message.created_at} />;
     }
 
     case 'clarify_card':
