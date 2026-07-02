@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Keyboard,
   Modal,
   PanResponder,
   Platform,
@@ -286,62 +287,65 @@ function PickerModal<T extends string>({
 }) {
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <Pressable style={modalStyles.backdrop} onPress={onClose}>
-        <View />
-      </Pressable>
-      <View style={modalStyles.sheet} pointerEvents="box-none">
-        <Pressable
-          style={[
-            modalStyles.card,
-            {
-              backgroundColor: isDark ? 'rgba(44,44,48,0.95)' : 'rgba(255,255,255,0.95)',
-              borderColor: glass.border,
-            },
-          ]}
-        >
-          <ThemedText style={modalStyles.title}>{title}</ThemedText>
-          {options.map((opt, i) => {
-            const selected = opt.value === value;
-            return (
-              <TouchableOpacity
-                key={opt.value}
-                style={[
-                  modalStyles.option,
-                  i > 0 && { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.hairline },
-                ]}
-                onPress={() => {
-                  onSelect(opt.value);
-                  onClose();
-                }}
-                activeOpacity={0.6}
-              >
-                <View style={modalStyles.optionText}>
-                  <ThemedText
-                    style={[
-                      modalStyles.optionLabel,
-                      { color: selected ? accent : colors.text },
-                    ]}
-                  >
-                    {opt.label}
-                  </ThemedText>
-                  {opt.desc && (
-                    <ThemedText themeColor="textSecondary" style={modalStyles.optionDesc}>
-                      {opt.desc}
-                    </ThemedText>
-                  )}
-                </View>
-                {selected && (
-                  <SymbolView
-                    name={{ ios: 'checkmark' as const, android: 'check' as const, web: 'check' as const }}
-                    size={18}
-                    tintColor={accent}
-                    style={{ width: 18, height: 18 }}
-                  />
-                )}
-              </TouchableOpacity>
-            );
-          })}
+      <View style={modalStyles.stepperRoot}>
+        <Pressable style={modalStyles.backdrop} onPress={onClose}>
+          <View />
         </Pressable>
+        <View style={modalStyles.stepperCenterSheet} pointerEvents="box-none">
+          <View style={{ flex: 0.45 }} />
+          <Pressable
+            style={[
+              modalStyles.card,
+              {
+                backgroundColor: isDark ? 'rgba(44,44,48,0.95)' : 'rgba(255,255,255,0.95)',
+                borderColor: glass.border,
+              },
+            ]}
+          >
+            <ThemedText style={modalStyles.title}>{title}</ThemedText>
+            {options.map((opt, i) => {
+              const selected = opt.value === value;
+              return (
+                <TouchableOpacity
+                  key={opt.value}
+                  style={[
+                    modalStyles.option,
+                    i > 0 && { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.hairline },
+                  ]}
+                  onPress={() => {
+                    onSelect(opt.value);
+                    onClose();
+                  }}
+                  activeOpacity={0.6}
+                >
+                  <View style={modalStyles.optionText}>
+                    <ThemedText
+                      style={[
+                        modalStyles.optionLabel,
+                        { color: selected ? accent : colors.text },
+                      ]}
+                    >
+                      {opt.label}
+                    </ThemedText>
+                    {opt.desc && (
+                      <ThemedText themeColor="textSecondary" style={modalStyles.optionDesc}>
+                        {opt.desc}
+                      </ThemedText>
+                    )}
+                  </View>
+                  {selected && (
+                    <SymbolView
+                      name={{ ios: 'checkmark' as const, android: 'check' as const, web: 'check' as const }}
+                      size={18}
+                      tintColor={accent}
+                      style={{ width: 18, height: 18 }}
+                    />
+                  )}
+                </TouchableOpacity>
+              );
+            })}
+          </Pressable>
+        </View>
       </View>
     </Modal>
   );
@@ -404,6 +408,8 @@ function StepperModal({
     onClose();
   };
 
+  const [kbHeight, setKbHeight] = useState(0);
+
   // +/- buttons adjust based on last parsed value
   const adjust = (delta: number) => {
     const base = !isNaN(parseFloat(text)) ? parseFloat(text) : local;
@@ -415,59 +421,76 @@ function StepperModal({
     }
   };
 
+  // Track keyboard height so the bottom sheet moves above it
+  useEffect(() => {
+    if (!visible) return;
+    const showName = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideName = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const onShow = Keyboard.addListener(showName, (e) => {
+      setKbHeight(e.endCoordinates.height);
+    });
+    const onHide = Keyboard.addListener(hideName, () => {
+      setKbHeight(0);
+    });
+    return () => { onShow.remove(); onHide.remove(); };
+  }, [visible]);
+
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <Pressable style={modalStyles.backdrop} onPress={onClose}>
-        <View />
-      </Pressable>
-      <View style={modalStyles.sheet} pointerEvents="box-none">
-        <Pressable
-          style={[
-            modalStyles.card,
-            {
-              backgroundColor: isDark ? 'rgba(44,44,48,0.95)' : 'rgba(255,255,255,0.95)',
-              borderColor: glass.border,
-            },
-          ]}
-        >
-          <View style={modalStyles.stepperHeader}>
-            <ThemedText style={modalStyles.title}>{title}</ThemedText>
-            <TouchableOpacity onPress={handleDone} activeOpacity={0.7}>
-              <ThemedText style={[modalStyles.doneBtn, { color: accent }]}>完成</ThemedText>
-            </TouchableOpacity>
-          </View>
-
-          <View style={modalStyles.stepperBody}>
-            <TouchableOpacity
-              style={[modalStyles.stepperBtn, { backgroundColor: colors.backgroundElement }]}
-              onPress={() => adjust(-step)}
-              activeOpacity={0.7}
-            >
-              <ThemedText style={modalStyles.stepperBtnText}>−</ThemedText>
-            </TouchableOpacity>
-
-            <View style={modalStyles.stepperCenter}>
-              <TextInput
-                style={[modalStyles.stepperVal, { color: colors.text }]}
-                value={text}
-                keyboardType="numeric"
-                selectTextOnFocus
-                onChangeText={setText}
-              />
-              <ThemedText themeColor="textSecondary" style={modalStyles.stepperUnit}>
-                {unit}
-              </ThemedText>
+      <View style={[modalStyles.stepperRoot, { paddingBottom: kbHeight }]}>
+        <Pressable style={modalStyles.backdrop} onPress={onClose}>
+          <View />
+        </Pressable>
+        <View style={modalStyles.stepperCenterSheet} pointerEvents="box-none">
+          <View style={{ flex: 0.45 }} />
+          <Pressable
+            style={[
+              modalStyles.card,
+              {
+                backgroundColor: isDark ? 'rgba(44,44,48,0.95)' : 'rgba(255,255,255,0.95)',
+                borderColor: glass.border,
+              },
+            ]}
+          >
+            <View style={modalStyles.stepperHeader}>
+              <ThemedText style={modalStyles.title}>{title}</ThemedText>
+              <TouchableOpacity onPress={handleDone} activeOpacity={0.7}>
+                <ThemedText style={[modalStyles.doneBtn, { color: accent }]}>完成</ThemedText>
+              </TouchableOpacity>
             </View>
 
-            <TouchableOpacity
-              style={[modalStyles.stepperBtn, { backgroundColor: colors.backgroundElement }]}
-              onPress={() => adjust(step)}
-              activeOpacity={0.7}
-            >
-              <ThemedText style={modalStyles.stepperBtnText}>+</ThemedText>
-            </TouchableOpacity>
-          </View>
-        </Pressable>
+            <View style={modalStyles.stepperBody}>
+              <TouchableOpacity
+                style={[modalStyles.stepperBtn, { backgroundColor: colors.backgroundElement }]}
+                onPress={() => adjust(-step)}
+                activeOpacity={0.7}
+              >
+                <ThemedText style={modalStyles.stepperBtnText}>−</ThemedText>
+              </TouchableOpacity>
+
+              <View style={modalStyles.stepperCenter}>
+                <TextInput
+                  style={[modalStyles.stepperVal, { color: colors.text }]}
+                  value={text}
+                  keyboardType="numeric"
+                  selectTextOnFocus
+                  onChangeText={setText}
+                />
+                <ThemedText themeColor="textSecondary" style={modalStyles.stepperUnit}>
+                  {unit}
+                </ThemedText>
+              </View>
+
+              <TouchableOpacity
+                style={[modalStyles.stepperBtn, { backgroundColor: colors.backgroundElement }]}
+                onPress={() => adjust(step)}
+                activeOpacity={0.7}
+              >
+                <ThemedText style={modalStyles.stepperBtnText}>+</ThemedText>
+              </TouchableOpacity>
+            </View>
+          </Pressable>
+        </View>
       </View>
     </Modal>
   );
@@ -1213,18 +1236,20 @@ const styles = StyleSheet.create({
 
 const modalStyles = StyleSheet.create({
   backdrop: {
-    flex: 1,
+    ...StyleSheet.absoluteFill,
     backgroundColor: 'rgba(0,0,0,0.35)',
   },
-  sheet: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    paddingBottom: 40,
+  // Stepper modal: centered layout (not bottom sheet)
+  stepperRoot: {
+    flex: 1,
+  },
+  stepperCenterSheet: {
+    flex: 1,
+    alignItems: 'center',
+    paddingHorizontal: 16,
   },
   card: {
-    marginHorizontal: 16,
+    alignSelf: 'stretch',
     borderRadius: 20,
     borderWidth: StyleSheet.hairlineWidth,
     paddingVertical: 8,
