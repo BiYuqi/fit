@@ -1,6 +1,6 @@
 # T42 — chosen_label 护栏：用户明示克数被静默改档（数据污染级）
 
-**状态**：⬜待办（T41 评测集首日抓获，优先级高——静默写错数据，危害大于所有"笨"类问题）
+**状态**：✅完成（2026-07-03）
 
 **目标**：parser 返回的 `chosen_label` 在 `portions` 里找不到对应条目时，不再静默回退小份；用户明说的克数必须原样入库。
 **依赖**：无　**关注文档**：AI_PARSING_SPEC §3、eval/cases/chunhuabing.yaml（第 1 轮）
@@ -17,12 +17,12 @@ fallback 命中 `portions[0]`（小份 80g）→ 用户明示的 100g 被静默�
 
 ## 做什么（三层防御，指引不限定细节）
 
-1. **schema 层**：zod `ParseResultSchema` 加 refine——`chosen_label` 必须存在于 `portions` 的 label 集合。校验失败自然触发现有 flash→pro 重试链（chat.ts 已有）。
-2. **代码兜底层**（pro 也犯错时的最后防线）：`processFoodItem` / `modify` 共用路径里，`chosen_label` 找不到条目时：若 `quantity_expr` 可提取明确数字（如 /(\d+(?:\.\d+)?)\s*(克|g|毫升|ml)/），用它构造 custom 条目；提取不出则回退 **medium**（不是 portions[0]，小份是最差默认）。
-3. **prompt 层**：parser 提示词明确——用户给出精确克数/毫升时，portions 必须包含 `label:"custom"` 且 grams 等于该数值的条目，chosen_label 指向它。
+1. **schema 层**：~~zod refine 硬拒绝触发 flash→pro 重试~~ → **实施时改为 transform 归一化**（`ensureChosenPortion`，schema.ts）。原因：硬拒绝在两个模型都返回坏形态时会走完重试链兜底成 chat，**整条记录丢失**，比记错更糟。归一化就地修复：`quantity_expr` 可提取精确数量（/(\d+(?:\.\d+)?)\s*(毫升|克|ml|g)/i）→ 补 custom 条目、chosen 指向它；提不出 → chosen 回退 medium。transform 挂在 `FoodItemSchema` 上，record.items 与 modify.append items 一次全覆盖。
+2. **代码兜底层**：`processFoodItem` 的 `rawChosen`/`biasedChosen` 回退链从 `?? portions[0]` 改为 `?? medium ?? portions[0]`（归一化后理论不触发，纯防御）。
+3. **prompt 层**：parser 提示词明确——chosen_label 指向的档必须真实存在于 portions；用户给精确克数/毫升时 portions 须含等值 custom 条目。
 
-## 验收
+## 验收（已全部通过，2026-07-03）
 
-- `npm run eval -- --case chunhuabing`：第 1 轮转绿（weight_g=100），删除该轮 `known_fail: T42` 标记。
-- 单测：schema refine 拒绝 chosen_label∉portions 的样本；兜底函数对「custom 缺失 + quantity_expr 含 100克」返回 100，对「无数字」返回 medium 档。
-- 回归：全量 eval 无新回归；现有单测全绿。
+- ✅ `npm run eval -- --case chunhuabing`：第 1 轮转绿（weight_g=100 原样入库），连跑两遍一致，known_fail 标记已删。
+- ✅ 单测 8 个（src/ai/schema.test.ts）：补 custom 条目（克/ml/中文单位/小数）、无数量回退 medium、无 medium 回退首档、良构原样返回、record 与 modify.append 两路径均归一化。后端 74/74 全绿。
+- ✅ 全量 eval 回归：新回归 0，已知缺陷 3（均归属 T40）。

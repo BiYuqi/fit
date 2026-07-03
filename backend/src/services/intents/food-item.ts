@@ -189,8 +189,11 @@ export async function processFoodItem(item: FoodItem, ctx: ItemCtx): Promise<Ite
   // rawChosen 是 AI 原估（学习事件的 predicted 基准），biasedChosen 是展示/入库的值。
   const biases = biasEnabled() ? await getBiases(user_id, food.id, food.category, scene) : {};
   const biasedPortions = portions.map((p) => ({ ...p, grams: applyBias(p.grams, biases) }));
-  const rawChosen = portions.find((p) => p.label === chosen_label) ?? portions[0];
-  const biasedChosen = biasedPortions.find((p) => p.label === chosen_label) ?? biasedPortions[0];
+  // chosen_label 缺档已在 schema 层归一化（T42 ensureChosenPortion）；此处兜底回退 medium，绝不回退小份
+  const rawChosen = portions.find((p) => p.label === chosen_label)
+    ?? portions.find((p) => p.label === "medium") ?? portions[0];
+  const biasedChosen = biasedPortions.find((p) => p.label === chosen_label)
+    ?? biasedPortions.find((p) => p.label === "medium") ?? biasedPortions[0];
 
   // ── normalize：canonical → food_standard 映射 ──
   if (itrace) {

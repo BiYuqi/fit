@@ -2,10 +2,9 @@
 # 暴露的缺陷：修正表达无协议可落地（T40）、只读路径谎称已更新（T39）、纠正不沉淀（T37）
 name: 葱花饼修正闭环（outoftoken 真实案例）
 turns:
-  # T41 首日抓获的真 bug：模型返回 chosen_label=custom 但 portions 无 custom 条目，
-  # 代码回退 portions[0]（小份80g），用户明示的 100g 被静默篡改。间歇复现（模型形态随机）
+  # T42 已修：模型偶发返回 chosen_label=custom 但 portions 无 custom 条目，
+  # 曾被回退成小份80g；现由 schema 层 ensureChosenPortion 归一化，明示克数必须原样入库
   - say: "晚上吃了100克葱花饼 煎的"
-    known_fail: T42
     expect:
       intent: record
       db:

@@ -25,7 +25,7 @@ export const PortionSchema = z.object({
 });
 
 // ---------- 单个食物条目 ----------
-export const FoodItemSchema = z.object({
+const FoodItemBaseSchema = z.object({
   raw: z.string(),
   canonical: z.string(),
   quantity_expr: z.string(),
@@ -36,7 +36,31 @@ export const FoodItemSchema = z.object({
   is_ambiguous: z.boolean(),
   ai_candidates: z.array(z.string()).optional(),
 });
-export type FoodItem = z.infer<typeof FoodItemSchema>;
+export type FoodItem = z.infer<typeof FoodItemBaseSchema>;
+
+// T42 护栏：模型偶发返回 chosen_label 在 portions 中不存在的形态（典型：三档小/中/大 + chosen=custom）。
+// 硬拒绝会触发重试链，两个模型都犯错时整条记录兜底成 chat 丢失——比记错更糟，所以就地归一化：
+// 1) quantity_expr 有精确数量（"100克"/"200ml"）→ 补一条 custom 档，chosen 指向它（用户明示数量绝不改档）
+// 2) 提不出数量 → chosen 回退 medium（小份是最差默认，不用 portions[0]）
+export function ensureChosenPortion(item: FoodItem): FoodItem {
+  if (item.portions.some((p) => p.label === item.chosen_label)) return item;
+
+  const m = item.quantity_expr.match(/(\d+(?:\.\d+)?)\s*(毫升|克|ml|g)/i);
+  if (m) {
+    const grams = parseFloat(m[1]);
+    const unit = /毫升|ml/i.test(m[2]) ? ("ml" as const) : ("g" as const);
+    return {
+      ...item,
+      chosen_label: "custom",
+      portions: [...item.portions, { label: "custom", grams, unit }],
+    };
+  }
+
+  const fallback = item.portions.find((p) => p.label === "medium") ?? item.portions[0];
+  return { ...item, chosen_label: fallback.label };
+}
+
+export const FoodItemSchema = FoodItemBaseSchema.transform(ensureChosenPortion);
 
 // ---------- 运动条目 ----------
 export const ExerciseItemSchema = z.object({

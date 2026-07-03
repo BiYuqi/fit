@@ -41,6 +41,7 @@ DeepSeek 输出（strict tool schema，zod 同构校验）：
 - `canonical`：归一后的标准食物名，供匹配。须取**具体、不易撞词**的名，避免泛词被字面前缀误匹配到别的品类（"蛋白/蛋清"→"鸡蛋白"，别用会撞"蛋白粉"的"蛋白"；单字泛词补全成"米粉"/"牛奶"等）。见 §5。
   - **主食取明确熟形**（库里主食多为生/干重，套用热量虚高 2~3 倍）："糙米"→"糙米饭"、"面条/挂面"→"熟面条"、"燕麦"→"燕麦粥"；除非用户明说"生的/干的"。见 FOOD_DB_SPEC 生/熟口径。
 - `portions`：每份量的克数估算（数据库不存克数，全由此估）。
+- `chosen_label` 必须指向 `portions` 中真实存在的档；用户明示精确数量（"100克"/"200ml"）时须含等值 `custom` 条目。后端 schema 层有归一化护栏（`ensureChosenPortion`，T42）：缺档时从 `quantity_expr` 提取数量补 custom，提不出则回退 medium——绝不回退小份，防止明示克数被静默改档。
 - `scene`：进食场景 `takeout | canteen | home | unknown`，**只从原话提取，不靠常识猜**（"点了个外卖麻辣香锅"→takeout；"食堂打的饭"→canteen；"自己煮的"→home；提不出→unknown）。落 `food_record.scene`，scene 层偏差参与份量修正融合（unknown 不参与），见 LEARNING_SPEC §4（T32）。
 - `is_ambiguous`：AI 语义判断食物名是否有歧义（如"煎饼"可指多种，"粥"可指多种）。
 - 运动则输出 `{type, duration_min, intensity?}`，热量后端按 MET 估或简表。
