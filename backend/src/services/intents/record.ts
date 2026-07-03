@@ -7,6 +7,20 @@ import type { MealType } from "@prisma/client";
 import type { ParseResult } from "../../ai/schema";
 import type { IntentCtx } from "./types";
 
+// 续报口吻："还有X"、"另外吃了Y"、"再来一份Z"——是对刚才那餐的补充，不是独立加餐
+const CONTINUATION_RE = /^(还有|还吃|还喝|还来|另外|再|也|顺便|以及|外加|加上)/;
+
+// 续报餐次继承：无时间词、AI 也没给餐次时，若 30 分钟内刚记过一餐则跟随那一餐。
+// 场景："中午吃了疙瘩汤"后接"还有粽子"，粽子应同属午餐，而不是按当前时间猜成加餐。
+async function inheritRecentMealType(user_id: string): Promise<MealType | null> {
+  const recent = await prisma.foodRecord.findFirst({
+    where: { user_id, created_at: { gt: new Date(Date.now() - 30 * 60 * 1000) } },
+    orderBy: { created_at: "desc" },
+    select: { meal_type: true },
+  });
+  return recent?.meal_type ?? null;
+}
+
 export async function handleRecord(
   parsed: Extract<ParseResult, { intent: "record" }>,
   ctx: IntentCtx,
@@ -15,7 +29,11 @@ export async function handleRecord(
 
   const user = await prisma.user.findUniqueOrThrow({ where: { id: user_id } });
   const weight_kg = Number(user.weight_kg) || 70;
-  const meal_type = (extractMealTypeFromText(text) ?? parsed.meal_type ?? guessMealType()) as MealType;
+  let mealResolved = (extractMealTypeFromText(text) ?? parsed.meal_type) as MealType | undefined;
+  if (!mealResolved && CONTINUATION_RE.test(text.trim())) {
+    mealResolved = (await inheritRecentMealType(user_id)) ?? undefined;
+  }
+  const meal_type = (mealResolved ?? guessMealType()) as MealType;
 
   // Trace: 确定 meal_type 后写入 meal_id + state_snapshot
   await tctx.setMeal(meal_type);

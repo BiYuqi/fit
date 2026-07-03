@@ -52,6 +52,7 @@ export const ModifyChangeSchema = z.object({
   portion_label: PortionLabelSchema.optional(),
   grams: z.number().positive().optional(),          // 改份量时 AI 估算的新克数
   food: z.string().optional(),                      // 改食物时的新标准名
+  meal_type: MealTypeSchema.optional(),             // 改餐次（"粽子是中午吃的"），数值不动
   calories_burned: z.number().positive().optional(), // 改运动消耗时的新热量值（用户用穿戴设备数据纠正 AI 估算）
 });
 export type ModifyChange = z.infer<typeof ModifyChangeSchema>;
@@ -121,11 +122,12 @@ export const parseToolSchema = {
         change: {
           type: "object",
           additionalProperties: false,
-          description: "仅 action=update 填。改份量填 portion_label+grams（grams 为该食物该档的估算净重）；改食物填 food（新标准名）；改运动消耗填 calories_burned（用户用穿戴设备数据纠正）",
+          description: "仅 action=update 填。改份量填 portion_label+grams（grams 为该食物该档的估算净重）；改食物填 food（新标准名）；改餐次填 meal_type（如'粽子是中午吃的'→lunch，克数食物都不动、不要顺手填 grams）；改运动消耗填 calories_burned（用户用穿戴设备数据纠正）",
           properties: {
             portion_label: { type: "string", enum: ["small", "medium", "large", "custom"] },
             grams: { type: "number" },
             food: { type: "string" },
+            meal_type: { type: "string", enum: ["breakfast", "lunch", "dinner", "snack"] },
             calories_burned: { type: "number" },
           },
         },

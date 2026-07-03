@@ -128,14 +128,18 @@ export async function handleModify(
     return { intent: "modify", reply: aiMsg.content, summary_card: card, messages };
   }
 
-  const prev_state = { food_id: rec.food_id, portion_label: rec.portion_label, weight_g: rec.weight_g };
+  const prev_state = { food_id: rec.food_id, portion_label: rec.portion_label, weight_g: rec.weight_g, meal_type: rec.meal_type };
   const change = parsed.change ?? {};
   let food = await prisma.foodStandard.findUniqueOrThrow({ where: { id: rec.food_id } });
   let weight_g = rec.weight_g;
   let portion_label = rec.portion_label as PortionLabel;
+  let meal_type = rec.meal_type as MealType;
 
   if (change.food) {
     food = await matchFood(change.food, undefined, user_id);   // 改食物：份量沿用旧的
+  }
+  if (change.meal_type) {
+    meal_type = change.meal_type as MealType;                  // 改餐次（"粽子是中午吃的"）：数值不动
   }
   if (change.portion_label) {
     portion_label = change.portion_label as PortionLabel;
@@ -155,7 +159,7 @@ export async function handleModify(
   const updated = await prisma.foodRecord.update({
     where: { id: rec.id },
     data: {
-      food_id: food.id, portion_label, weight_g,
+      food_id: food.id, portion_label, weight_g, meal_type,
       calories: nutrition.calories, protein: nutrition.protein_g,
       fat: nutrition.fat_g, carbs: nutrition.carbs_g,
       alias_canonical: change.food ? null : undefined,
@@ -171,7 +175,7 @@ export async function handleModify(
         food_name: food.name, weight_g: Math.round(weight_g), calories: Math.round(nutrition.calories),
         protein_g: Math.round(nutrition.protein_g), fat_g: Math.round(nutrition.fat_g),
         carbs_g: Math.round(nutrition.carbs_g), is_estimated: food.is_estimated,
-        meal_type: rec.meal_type,
+        meal_type,
         undo: { record_id: updated.id, prev_state }, // 撤销=还原 prev_state
       } as object,
       record_id: updated.id as string,

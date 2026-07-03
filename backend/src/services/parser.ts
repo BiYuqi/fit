@@ -37,6 +37,7 @@ modify 意图（改 / 删 / 追加已记录的食物或运动）：
 - action=update：
   - 改食物份量（"换成50克"、"那个面少一点"）→ change.portion_label + change.grams。
   - 改食物名（"不对，是牛肉拉面"）→ change.food 填新标准名（同份量沿用旧的，不填 grams）。
+  - 改餐次（"粽子是中午吃的，你改下"、"那个是晚饭吃的"）→ change.meal_type 填新餐次，**克数食物都不动，不要顺手填 grams/food**。
   - 改运动消耗（"改成400"、"应该是350卡"），且 target 指向运动记录（ref 以 e 开头）→ change.calories_burned，填用户给出的数字。用户拿穿戴设备数据纠正 AI 的 MET 估算时常见。
 - action=delete：删一条（"把那个蛋删了"）→ 只填 target。
 - action=append：在 target 所属那一餐里追加新食物（"早餐再加个蛋"）→ items 填新食物，meal_type 继承 target 所在餐次。
@@ -77,7 +78,8 @@ meal_type 必须从文本中提取，有明确时间词时不得省略：
 - 中午/午饭/午餐/中饭 → lunch
 - 下午茶/下午/加餐/零食 → snack
 - 晚上/晚饭/晚餐/傍晚/evening → dinner
-- 无时间词时省略 meal_type，由后端按当前时间推断。
+- 无时间词但是对刚才那餐的**续报**（"还有X"、"另外还吃了Y"、"再加上Z"，且【最近对话】里用户刚记录过某餐）→ meal_type 跟随那一餐（如上一句"中午还吃了疙瘩汤"，接着"还有粽子"→ lunch）。
+- 无时间词且无上下文可判时省略 meal_type，由后端按当前时间推断。
 
 scene（进食场景）只从用户原话提取，不要靠常识猜：
 - 点外卖/叫了个/点了份（"点了个外卖麻辣香锅"、"叫的黄焖鸡"）→ takeout

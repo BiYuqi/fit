@@ -4,7 +4,7 @@ import { prisma } from "../lib/prisma";
 import { itemNutrition } from "../services/calc";
 import { recompute, buildContextCard } from "../services/summary";
 import { resetFoodAliasStreak } from "../services/learning";
-import type { PortionLabel } from "@prisma/client";
+import type { MealType, PortionLabel } from "@prisma/client";
 
 // ─────────────────────────────────────────────
 // POST /api/records/:id/undo  —— 撤销 modify 的 update/append（AI_PARSING_SPEC §8）
@@ -15,6 +15,7 @@ const UndoBodySchema = z.object({
     food_id: z.string(),
     portion_label: z.enum(["small", "medium", "large", "custom"]),
     weight_g: z.number().positive(),
+    meal_type: z.enum(["breakfast", "lunch", "dinner", "snack"]).optional(), // 改餐次的撤销还原
   }).or(z.object({
     calories_burned: z.number().positive(),
     kind: z.literal("exercise"),
@@ -53,6 +54,7 @@ export async function recordsRoutes(app: FastifyInstance) {
           where: { id },
           data: {
             food_id: prev.food_id, portion_label: prev.portion_label as PortionLabel, weight_g: prev.weight_g,
+            meal_type: (prev.meal_type as MealType | undefined) ?? undefined,
             calories: nutrition.calories, protein: nutrition.protein_g, fat: nutrition.fat_g, carbs: nutrition.carbs_g,
           },
         });

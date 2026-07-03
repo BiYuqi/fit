@@ -23,6 +23,7 @@ export type UndoPrevState = {
   food_id: string;
   portion_label: string;
   weight_g: number;
+  meal_type?: string; // 改餐次的撤销还原
 } | {
   calories_burned: number;
   kind: 'exercise';

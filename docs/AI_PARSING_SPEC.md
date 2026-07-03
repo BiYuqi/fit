@@ -157,7 +157,7 @@ callDeepSeekCtx(pack, messages, opts)
 承接 §2。`modify` **不由 AI 算账**——AI 只产出「改哪条 + 怎么改」，`target` 引用 §7 `recent_records.ref`；后端重新匹配 + 重算（calc）。
 
 `action` 三选一：
-- **update**：改已有记录的份量/食物。如「牛肉面换大份」「不对，是牛肉拉面」
+- **update**：改已有记录的份量/食物/餐次。如「牛肉面换大份」「不对，是牛肉拉面」「粽子是中午吃的」（改餐次 `change.meal_type`，数值不动）
 - **delete**：删一条。如「早餐那个蛋删了」
 - **append**：在 `target` 所属**那一餐里新增**记录（继承 `meal_type`/时段），新项走正常匹配 + 份量流程。如「早餐再加个蛋」
 
@@ -166,6 +166,7 @@ callDeepSeekCtx(pack, messages, opts)
 协议（strict tool schema + zod 同构）：
 ```json
 {"intent":"modify","action":"update","target":"r1","change":{"portion_label":"large"}}
+{"intent":"modify","action":"update","target":"r1","change":{"meal_type":"lunch"}}
 {"intent":"modify","action":"append","target":"r1","items":[ /* 蛋,结构同 §3 items */ ]}
 {"intent":"modify","action":"delete","target":"r1"}
 ```
