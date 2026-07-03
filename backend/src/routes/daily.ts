@@ -1,6 +1,7 @@
 import { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
+import { computeUserTargets } from "../services/summary";
 
 function todayStr(): string {
   return new Date().toISOString().slice(0, 10);
@@ -29,6 +30,22 @@ function getPeriodKey(date: Date, granularity: "day" | "week" | "month"): string
   return dateToStr(date);
 }
 
+// 零记录新一天的兜底 summary：daily_summary 无行时（recompute 从未跑过），
+// Today 页仍要看到基于档案实时算出的目标，而不是"目标 0"。
+function buildEmptyDaySummary(user: Parameters<typeof computeUserTargets>[0]) {
+  const targets = computeUserTargets(user);
+  return {
+    ...targets,
+    total_out: targets.tdee,
+    deficit: targets.tdee,
+    calories_in: 0,
+    exercise_out: 0,
+    protein: 0,
+    fat: 0,
+    carbs: 0,
+  };
+}
+
 const RangeQuerySchema = z.object({
   from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "from must be YYYY-MM-DD"),
   to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "to must be YYYY-MM-DD"),
@@ -45,7 +62,7 @@ export async function dailyRoutes(app: FastifyInstance) {
     const { sub: user_id } = req.user as { sub: string };
     const dateObj = toDateOnly(todayStr());
 
-    const [summary, records, exercises] = await Promise.all([
+    const [summaryRow, records, exercises] = await Promise.all([
       prisma.dailySummary.findFirst({ where: { user_id, date: dateObj } }),
       prisma.foodRecord.findMany({
         where: { user_id, date: dateObj },
@@ -56,6 +73,14 @@ export async function dailyRoutes(app: FastifyInstance) {
         orderBy: { created_at: "asc" },
       }),
     ]);
+
+    // 今天还没有任何记录时 recompute 从未跑过，daily_summary 无行——
+    // 兜底从档案实时算目标，不能让 Today 页在新的一天开始时显示"目标 0"（见 summary.ts computeUserTargets）。
+    let summary = summaryRow as typeof summaryRow | ReturnType<typeof buildEmptyDaySummary>;
+    if (!summary) {
+      const user = await prisma.user.findUniqueOrThrow({ where: { id: user_id } });
+      summary = buildEmptyDaySummary(user);
+    }
 
     return { summary, records, exercises };
   });

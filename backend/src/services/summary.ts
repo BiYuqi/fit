@@ -1,6 +1,7 @@
 import { prisma } from "../lib/prisma";
 import { bmr as calcBmr, tdee as calcTdee } from "./calc";
 import type { UserProfile, Sex, ActivityLevel } from "./calc";
+import type { User } from "@prisma/client";
 
 export interface ContextCard {
   today: { in: number; out: number; deficit: number; p: number; f: number; c: number; remaining: number };
@@ -19,6 +20,34 @@ function toDateOnly(date: Date | string): Date {
 function todayStr(): string {
   const local = new Date(Date.now() + 8 * 3600 * 1000);
   return local.toISOString().slice(0, 10);
+}
+
+// ---------- 目标值（bmr/tdee/target_calories/target_protein）----------
+// recompute 落 daily_summary 快照用；buildContextCard 在当天还没有快照（零记录的新的一天）时
+// 拿它兜底实时算，不能让"今天还没有任何记录"变成"今天目标是 0"。
+type TargetUser = Pick<User, "gender" | "age" | "height_cm" | "weight_kg" | "activity_level" | "daily_deficit" | "custom_tdee">;
+
+export function computeUserTargets(user: TargetUser): { bmr: number; tdee: number; target_calories: number; target_protein: number } {
+  if (!(user.gender && user.age != null && user.height_cm && user.weight_kg && user.activity_level)) {
+    return { bmr: 0, tdee: 0, target_calories: 0, target_protein: 0 };
+  }
+  const profile: UserProfile = {
+    sex: user.gender as Sex,
+    age: user.age,
+    height_cm: Number(user.height_cm),
+    weight_kg: Number(user.weight_kg),
+    activity_level: user.activity_level as ActivityLevel,
+    daily_deficit: user.daily_deficit,
+  };
+  const bmr = calcBmr(profile);
+  const tdee = user.custom_tdee != null ? user.custom_tdee : calcTdee(profile);
+  const deficit = user.daily_deficit ?? 500;
+  return {
+    bmr,
+    tdee,
+    target_calories: Math.round(tdee - deficit),
+    target_protein: Math.round(Number(user.weight_kg) * 1.8),
+  };
 }
 
 // ---------- recompute ----------
@@ -40,24 +69,7 @@ export async function recompute(user_id: string, date: Date | string): Promise<v
     _sum: { calories_burned: true },
   });
 
-  // 只有档案完整时才能算 TDEE
-  let bmrVal = 0, tdeeVal = 0, target_calories = 0, target_protein = 0;
-  if (user.gender && user.age != null && user.height_cm && user.weight_kg && user.activity_level) {
-    const profile: UserProfile = {
-      sex: user.gender as Sex,
-      age: user.age,
-      height_cm: Number(user.height_cm),
-      weight_kg: Number(user.weight_kg),
-      activity_level: user.activity_level as ActivityLevel,
-      daily_deficit: user.daily_deficit,
-    };
-    bmrVal = calcBmr(profile);
-    const td = user.custom_tdee != null ? user.custom_tdee : calcTdee(profile);
-    tdeeVal = td;
-    const deficit = user.daily_deficit ?? 500;
-    target_calories = Math.round(td - deficit);
-    target_protein = Math.round(Number(user.weight_kg) * 1.8);
-  }
+  const { bmr: bmrVal, tdee: tdeeVal, target_calories, target_protein } = computeUserTargets(user);
 
   const calories_in  = foodAgg._sum.calories ?? 0;
   const protein      = foodAgg._sum.protein  ?? 0;
@@ -102,11 +114,17 @@ export async function buildContextCard(user_id: string): Promise<ContextCard> {
     prisma.dailySummary.findMany({ where: { user_id, date: { gte: monthAgo, lte: today } } }),
   ]);
 
+  // 今天还没有任何 food/exercise 记录时，recompute 从未跑过，daily_summary 无行——
+  // 兜底直接从档案实时算目标/消耗，不能让"零记录的新一天"显示成"目标 0、还能吃 0"。
+  const todayFallback = todaySummary
+    ? null
+    : computeUserTargets(await prisma.user.findUniqueOrThrow({ where: { id: user_id } }));
+
   const cal_in       = todaySummary?.calories_in   ?? 0;
-  const total_out    = todaySummary?.total_out      ?? 0;
-  const deficit      = todaySummary?.deficit        ?? 0;
-  const target_cal   = todaySummary?.target_calories ?? 0;
-  const target_prot  = todaySummary?.target_protein  ?? 0;
+  const total_out    = todaySummary?.total_out      ?? todayFallback?.tdee ?? 0;
+  const deficit      = todaySummary?.deficit        ?? (todayFallback ? todayFallback.tdee - cal_in : 0);
+  const target_cal   = todaySummary?.target_calories ?? todayFallback?.target_calories ?? 0;
+  const target_prot  = todaySummary?.target_protein  ?? todayFallback?.target_protein ?? 0;
 
   const weekLogged  = weekRows.filter(r => r.calories_in > 0).length;
   const monthLogged = monthRows.filter(r => r.calories_in > 0).length;
