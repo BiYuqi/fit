@@ -20,6 +20,8 @@
 
 匹配如何在三层间流转见 AI_PARSING_SPEC §匹配管线。
 
+**估算条目复核（T33，越吃越准）**：2/3 层条目被 food_record 引用 ≥3 次后，周期 job 用 pro 模型带聚合上下文（原话样本 + 类目均值参照）重估营养，过护栏（能量自检 4/4/9 偏差 ≤25%、与类目标准层均值偏离 ≤3 倍）才更新，`source='ai_reviewed'`（is_estimated 保持 true）。不回改历史 food_record；审计与幂等靠 `food_review_log`（见 DATA_MODEL）。脚本：`backend/scripts/estimated-food-review-job.ts`。
+
 ### 生/熟口径（重要坑）
 成分表的主食多为**生/干重**（糙米≈348、面条/挂面≈300+ kcal/100g），只有少数有熟条目（如米饭（蒸）≈116）。用户记的是**熟食**，直接套生重热量虚高 2~3 倍。处理（方案 A，见 AI_PARSING_SPEC §3/§5）：
 - parse 阶段主食 canonical 默认取**明确熟形**（糙米→糙米饭、面条→熟面条、燕麦→燕麦粥）。

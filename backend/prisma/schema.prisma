@@ -94,12 +94,13 @@ model FoodStandard {
   fiber_100g    Float?
   is_composite  Boolean  @default(false)
   is_estimated  Boolean  @default(false)
-  source        String   @default("composition_table") // composition_table | ai | manual
+  source        String   @default("composition_table") // composition_table | ai | ai_reviewed | manual
   created_at    DateTime @default(now())
 
   food_records    FoodRecord[]
   learning_events LearningEvent[]
   user_aliases    UserFoodAlias[]
+  review_logs     FoodReviewLog[]
 
   @@unique([name, category], name: "name_category") // seed upsert 用
   @@index([name]) // 普通索引；trigram GIN 索引见末尾 SQL
@@ -278,6 +279,24 @@ model BiasUpdateLog {
   event LearningEvent @relation(fields: [event_id], references: [id])
 
   @@index([user_id, scope, scope_key, created_at])
+}
+
+// 估算食物复核日志（T33）：pro 重估的审计记录，兼幂等标记——该 food 有行即视为已复核，
+// job 不再重复调用（updated 已改 source；rejected 留待人工复核，不自动重试）。
+model FoodReviewLog {
+  id            String   @id @default(uuid())
+  food_id       String
+  status        String // updated | rejected_energy_check | rejected_category_outlier
+  old_values    Json // 复核前 {calories_100g, protein_100g, fat_100g, carbs_100g, fiber_100g}
+  new_values    Json // pro 重估值，同上结构；rejected 时也存，供人工复核参考
+  category_mean Float? // 判定时同类目标准层热量均值（无标准层条目时 null，跳过离群校验）
+  ref_count     Int // 触发复核时的 food_record 引用次数
+  model         String   @default("deepseek-v4-pro")
+  created_at    DateTime @default(now())
+
+  food FoodStandard @relation(fields: [food_id], references: [id])
+
+  @@index([food_id])
 }
 
 // 用户食物直连：canonical → 用户惯用的 food_id，streak≥2 时跳过 CandidateCard（T30）

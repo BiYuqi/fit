@@ -41,7 +41,7 @@
 | fiber_100g | float? | |
 | is_composite | bool | 复合菜/外卖 |
 | is_estimated | bool | AI估算/均值，低可信 |
-| source | text | composition_table / ai / manual |
+| source | text | composition_table / ai / ai_reviewed / manual（ai_reviewed=估算条目已被 pro 复核，见 T33） |
 | created_at | timestamptz | |
 
 约束：`unique(name, category)`（供 upsert）。索引：`name` 的 GIN trigram（模糊匹配）。
@@ -198,6 +198,23 @@ modify 的 update/append 高置信直执行：record_card 的 `payload.undo` 带
 | mu_after / sigma2_after / n_eff_after | float | |
 | clamped | bool | 该观测是否触发截断（污染防护） |
 | created_at | timestamptz | |
+
+### food_review_log（估算食物复核日志 · T33）
+> pro 重估的审计记录，兼幂等标记：该 food 有行即视为已复核，job 不再重复调用（rejected 留待人工复核，不自动重试）。机制见 FOOD_DB_SPEC §3。
+
+| 字段 | 类型 | 语义 |
+|---|---|---|
+| id | uuid PK | |
+| food_id | uuid FK → food_standard | |
+| status | text | updated / rejected_energy_check / rejected_category_outlier |
+| old_values | jsonb | 复核前营养值（calories/protein/fat/carbs/fiber _100g） |
+| new_values | jsonb | pro 重估值，同结构；rejected 时也存，供人工复核参考 |
+| category_mean | float? | 判定时同类目标准层热量均值（类目无标准层条目时 null，跳过离群校验） |
+| ref_count | int | 触发复核时的 food_record 引用次数 |
+| model | text | 复核用模型，默认 deepseek-v4-pro |
+| created_at | timestamptz | |
+
+索引：`(food_id)`。
 
 ### weight_log（体重历史 · T29 起采集，T34 消费）
 | 字段 | 类型 | 语义 |
