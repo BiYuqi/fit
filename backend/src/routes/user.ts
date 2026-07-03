@@ -4,6 +4,7 @@ import { prisma } from "../lib/prisma";
 import { bmr, tdee, dailyTargets } from "../services/calc";
 import type { UserProfile, Sex, ActivityLevel } from "../services/calc";
 import type { User } from "@prisma/client";
+import { upsertWeightLog } from "../services/learning";
 
 const PutBodySchema = z.object({
   name: z.string().max(64).optional(),
@@ -87,6 +88,14 @@ export async function userRoutes(app: FastifyInstance) {
     }
 
     const data = parsed.data;
+
+    // 学习信号（LEARNING_SPEC §8）：体重变化时顺手留一条历史点，供 T34 地面真值校准
+    let prevWeightKg: number | null = null;
+    if (data.weight_kg !== undefined) {
+      const prev = await prisma.user.findUnique({ where: { id: sub }, select: { weight_kg: true } });
+      prevWeightKg = prev?.weight_kg != null ? Number(prev.weight_kg) : null;
+    }
+
     const updated = await prisma.user.update({
       where: { id: sub },
       data: {
@@ -95,6 +104,10 @@ export async function userRoutes(app: FastifyInstance) {
         onboarded: true,
       },
     });
+
+    if (data.weight_kg !== undefined && data.weight_kg !== prevWeightKg) {
+      upsertWeightLog(sub, data.weight_kg);
+    }
 
     return formatUser(updated);
   });

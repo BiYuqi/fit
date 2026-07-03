@@ -3,6 +3,7 @@ import { matchFood } from "../matcher";
 import { itemNutrition } from "../calc";
 import { recompute, buildContextCard } from "../summary";
 import { recordModifyCorrection } from "../trace";
+import { recordLearningEvent } from "../learning";
 import { processItems } from "./food-item";
 import { guessMealType } from "../../lib/dates";
 import type { MealType, PortionLabel } from "@prisma/client";
@@ -169,6 +170,21 @@ export async function handleModify(
     },
   });
   messages.push(aiMsg);
+  // 学习信号（LEARNING_SPEC §3）：predicted = 改前克数，final = 用户指定克数。
+  // 只有 change.grams 时才是"克数纠正"——改食物（change.food）份量沿用旧的，不算纠正。
+  if (change.grams != null) {
+    recordLearningEvent({
+      user_id,
+      food_record_id: updated.id,
+      food_id: food.id,
+      category: food.category,
+      predicted_grams: prev_state.weight_g,
+      final_grams: weight_g,
+      predicted_label: prev_state.portion_label,
+      final_label: portion_label,
+      signal_type: "explicit_gram",
+    });
+  }
   // Trace: correction event（modify update——用户主动修改了 AI 的记录）
   await recordModifyCorrection({
     traceId: tctx.traceId,

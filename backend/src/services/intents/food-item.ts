@@ -257,7 +257,7 @@ export async function processFoodItem(item: FoodItem, ctx: ItemCtx): Promise<Ite
   const pr = await prisma.pendingRecord.create({
     data: {
       user_id, type: "portion_choice", raw_input: raw,
-      candidates: { food_id: food.id, food_name: food.name, meal_type, source, portions } as object,
+      candidates: { food_id: food.id, food_name: food.name, meal_type, source, portions, chosen_label } as object,
     },
   });
 

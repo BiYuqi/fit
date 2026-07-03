@@ -6,7 +6,9 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "test": "node --require tsx/cjs --test \"src/**/*.test.ts\""
+    "test": "node --require tsx/cjs --test \"src/**/*.test.ts\"",
+    "job:implicit-accept": "tsx scripts/implicit-accept-job.ts",
+    "learning:metrics": "tsx scripts/learning-metrics.ts"
   },
   "dependencies": {
     "@fastify/cors": "^11.2.0",

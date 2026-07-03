@@ -6,6 +6,7 @@ import { matchFood } from "../services/matcher";
 import { itemNutrition } from "../services/calc";
 import { recompute, buildContextCard } from "../services/summary";
 import { recordDeleteCorrection, recordResolveCorrection } from "../services/trace";
+import { recordLearningEvent } from "../services/learning";
 import type { MealType, PortionLabel } from "@prisma/client";
 
 const ResolveBodySchema = z.object({
@@ -50,6 +51,26 @@ export async function pendingRoutes(app: FastifyInstance) {
       if (candidates.kind === "exercise") {
         await prisma.exerciseRecord.deleteMany({ where: { id: candidates.record_id, user_id } });
       } else {
+        // 学习信号（LEARNING_SPEC §3）：删除只记事件不训练。
+        // 必须在 deleteMany 之前写入——learning_event.food_record_id 有外键约束，
+        // 记录一旦删除就无法再插入指向它的新行（onDelete:SetNull 只对已存在的行生效）。
+        const deletedRec = await prisma.foodRecord.findFirst({
+          where: { id: candidates.record_id, user_id },
+          include: { food: true },
+        });
+        if (deletedRec) {
+          await recordLearningEvent({
+            user_id,
+            food_record_id: deletedRec.id,
+            food_id: deletedRec.food_id,
+            category: deletedRec.food?.category ?? null,
+            predicted_grams: deletedRec.weight_g,
+            final_grams: deletedRec.weight_g,
+            predicted_label: deletedRec.portion_label,
+            final_label: deletedRec.portion_label,
+            signal_type: "delete",
+          });
+        }
         await prisma.foodRecord.deleteMany({ where: { id: candidates.record_id, user_id } });
       }
       await prisma.pendingRecord.update({ where: { id }, data: { status: "resolved" } });
@@ -70,19 +91,30 @@ export async function pendingRoutes(app: FastifyInstance) {
     let weight_g: number;
     let portion_label: PortionLabel;
     let resolved_unit = "g";
+    // 学习信号（LEARNING_SPEC §3）：AI 原估份量 vs 用户最终选择
+    let predictedGrams: number | undefined;
+    let predictedLabel: string | undefined;
+    let learningSignal: "custom_gram" | "card_choice" | undefined;
 
     if (pr.type === "portion_choice") {
       food_id = candidates.food_id as string;
       const portions: Array<{ label: string; grams: number; unit?: string }> = candidates.portions ?? [];
+      const predictedPortion = portions.find((p) => p.label === candidates.chosen_label)
+        ?? portions.find((p) => p.label === "medium")
+        ?? portions[0];
+      predictedGrams = predictedPortion?.grams;
+      predictedLabel = predictedPortion?.label ?? candidates.chosen_label;
 
       if (typeof choice === "object" && "grams" in choice) {
         weight_g = choice.grams;
         portion_label = "custom";
+        learningSignal = "custom_gram";
       } else {
         const chosen = portions.find((p) => p.label === choice) ?? portions.find((p) => p.label === "medium") ?? portions[0];
         weight_g = chosen?.grams ?? 150;
         portion_label = (chosen?.label ?? "medium") as PortionLabel;
         resolved_unit = chosen?.unit ?? "g";
+        learningSignal = "card_choice";
       }
     } else {
       // food_choice：choice 是食物名（string），用 matchFood 查找/估算
@@ -107,6 +139,7 @@ export async function pendingRoutes(app: FastifyInstance) {
             meal_type,
             source,
             portions: portionsWithCal,
+            chosen_label: candidates.chosen_label,
           } as object,
         },
       });
@@ -166,6 +199,21 @@ export async function pendingRoutes(app: FastifyInstance) {
       where: { id },
       data: { status: "resolved", candidates: resolvedCandidates as object },
     });
+
+    // 学习信号（LEARNING_SPEC §3）：predicted = AI chosen_label 档克数，final = 用户实选
+    if (predictedGrams != null && learningSignal) {
+      recordLearningEvent({
+        user_id,
+        food_record_id: record.id,
+        food_id: food.id,
+        category: food.category,
+        predicted_grams: predictedGrams,
+        final_grams: weight_g,
+        predicted_label: predictedLabel ?? null,
+        final_label: portion_label,
+        signal_type: learningSignal,
+      });
+    }
 
     // Trace: correction event（用户从 portion_card / candidate_card 选择了具体份量或食物）
     recordResolveCorrection({

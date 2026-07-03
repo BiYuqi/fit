@@ -74,6 +74,8 @@ model User {
   chat_messages    ChatMessage[]
   traces           AiTrace[]
   token_usages     TokenUsage[]
+  learning_events  LearningEvent[]
+  weight_logs      WeightLog[]
 }
 
 // ---------- 食物标准库（seed 导入的目标表）----------
@@ -93,7 +95,8 @@ model FoodStandard {
   source        String   @default("composition_table") // composition_table | ai | manual
   created_at    DateTime @default(now())
 
-  food_records FoodRecord[]
+  food_records    FoodRecord[]
+  learning_events LearningEvent[]
 
   @@unique([name, category], name: "name_category") // seed upsert 用
   @@index([name]) // 普通索引；trigram GIN 索引见末尾 SQL
@@ -121,6 +124,8 @@ model FoodRecord {
 
   user User         @relation(fields: [user_id], references: [id])
   food FoodStandard @relation(fields: [food_id], references: [id])
+
+  learning_events LearningEvent[]
 
   @@index([user_id, date])
 }
@@ -189,6 +194,46 @@ model PendingRecord {
   created_at DateTime @default(now())
 
   user User @relation(fields: [user_id], references: [id])
+}
+
+// ---------- 学习系统（LEARNING_SPEC）----------
+// 学习事件：预测 vs 实际，append-only。food_record/food_standard 可能被删/改，
+// onDelete: SetNull 保留历史训练数据（不级联删）。
+model LearningEvent {
+  id              String   @id @default(uuid())
+  user_id         String
+  food_record_id  String?
+  food_id         String?
+  category        String? // 冗余存，更新 user_bias 时免 join
+  scene           String? // takeout | canteen | home | unknown，T32 起有值
+  predicted_grams Float // AI 原始估算（applyBias 之前）
+  applied_grams   Float // applyBias 之后展示给用户的；T31 前 = predicted_grams
+  final_grams     Float // 用户最终确定
+  predicted_label String?
+  final_label     String?
+  signal_type     String // explicit_gram | custom_gram | card_choice | implicit_accept | delete
+  signal_weight   Float
+  log_ratio       Float? // ln(final/predicted)，训练用误差
+  parse_log_id    String?
+  created_at      DateTime @default(now())
+
+  user        User           @relation(fields: [user_id], references: [id])
+  food_record FoodRecord?    @relation(fields: [food_record_id], references: [id], onDelete: SetNull)
+  food        FoodStandard?  @relation(fields: [food_id], references: [id], onDelete: SetNull)
+
+  @@index([user_id, food_id, created_at])
+}
+
+// 体重历史：设置页改体重时后端顺手 append，供 T34 地面真值校准用
+model WeightLog {
+  user_id    String
+  date       DateTime @db.Date
+  weight_kg  Decimal
+  created_at DateTime @default(now())
+
+  user User @relation(fields: [user_id], references: [id])
+
+  @@id([user_id, date])
 }
 
 // ============================================================
