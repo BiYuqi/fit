@@ -139,3 +139,69 @@ modify 的 update/append 高置信直执行：record_card 的 `payload.undo` 带
 | candidates | jsonb | 候选（含克数估算） |
 | status | text | pending/resolved/discarded |
 | created_at | timestamptz | |
+
+## 学习系统表（语义与算法见 LEARNING_SPEC；随 T29/T30/T31 建）
+
+### learning_event（学习事件：预测 vs 实际，append-only · T29）
+| 字段 | 类型 | 语义 |
+|---|---|---|
+| id | uuid PK | |
+| user_id | uuid FK | |
+| food_record_id | uuid? FK | 关联记录（discuss 注入偏差说明按此查） |
+| food_id | uuid? FK → food_standard | |
+| category | text? | 冗余存，更新时免 join |
+| scene | text? | takeout/canteen/home/unknown（T32 起有值） |
+| predicted_grams | float | AI 原始估算（applyBias 之前） |
+| applied_grams | float | applyBias 之后展示给用户的 |
+| final_grams | float | 用户最终确定 |
+| predicted_label / final_label | text? | |
+| signal_type | text | explicit_gram / custom_gram / card_choice / implicit_accept / delete |
+| signal_weight | float | 见 LEARNING_SPEC §3 |
+| log_ratio | float? | ln(final/predicted)，训练用误差 |
+| parse_log_id | uuid? FK | |
+| created_at | timestamptz | |
+
+索引：`(user_id, food_id, created_at)`。
+
+### user_bias（三层偏差后验 · T31）
+| 字段 | 类型 | 语义 |
+|---|---|---|
+| user_id | uuid | PK 之一 |
+| scope | text | food / category / scene，PK 之一 |
+| scope_key | text | food_id / 类目名 / 场景名，PK 之一 |
+| mu | float | log-ratio 后验均值，默认 0 |
+| sigma2 | float | 后验方差，默认 0.09 |
+| n_eff | float | 有效样本数（封顶 20），默认 0 |
+| updated_at | timestamptz | |
+
+### user_food_alias（用户食物直连 · T30）
+| 字段 | 类型 | 语义 |
+|---|---|---|
+| user_id | uuid | PK 之一 |
+| canonical | text | parser 归一名，PK 之一 |
+| food_id | uuid FK → food_standard | 用户选定的映射 |
+| hits | int | 累计选择次数 |
+| streak | int | 连续选同一个的次数；选了别的/逃生口/撤销 → 清零 |
+| last_chosen_at | timestamptz | |
+
+### bias_update_log（模型更新审计，可回放回滚 · T31）
+| 字段 | 类型 | 语义 |
+|---|---|---|
+| id | uuid PK | |
+| event_id | uuid FK → learning_event | |
+| user_id | uuid | |
+| scope / scope_key | text | |
+| mu_before / sigma2_before / n_eff_before | float | |
+| mu_after / sigma2_after / n_eff_after | float | |
+| clamped | bool | 该观测是否触发截断（污染防护） |
+| created_at | timestamptz | |
+
+### weight_log（体重历史 · T29 起采集，T34 消费）
+| 字段 | 类型 | 语义 |
+|---|---|---|
+| user_id | uuid | PK 之一 |
+| date | date | PK 之一 |
+| weight_kg | decimal | 设置页改体重时后端顺手 append |
+| created_at | timestamptz | |
+
+> `food_record` 于 T32 加 `scene text?` 列（parser 从原话提取）。

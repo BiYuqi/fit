@@ -4,7 +4,7 @@
 > 用法：一次只做一个任务，按下方顺序，自测验收通过再下一个。
 > 状态：⬜待办 / 🔄进行中 / ✅完成。**任务验收通过后更新两处**：本表该行 + `tasks/Txx.md` 顶部状态行。
 
-**进度：27 / 27**　里程碑：✅ M1 命令行心跳(T07)　✅ M2 后端全通(T12)　✅ 前端可用(T19)　⬜ 可出包(T21)　✅ E 对话上下文(T23)
+**进度：27 / 34**　里程碑：✅ M1 命令行心跳(T07)　✅ M2 后端全通(T12)　✅ 前端可用(T19)　⬜ 可出包(T21)　✅ E 对话上下文(T23)　⬜ L 学习闭环(T31)
 
 ## 分轨
 - **基建 S**：T01
@@ -15,6 +15,7 @@
 - **增强 E（对话上下文）**：T22 T23（后端为主，T23 含前端卡片/撤销，已并入 T16）
 - **匹配质量 Q**：T24（字面误匹配）T25（生/熟热量虚高）
 - **增强 E（聊天体验）**：T26（聊天搜索 + 数据本地化）T27（SQLite 搜索 + 微信式窗口定位）
+- **自学习 L**：T28（chat.ts 拆分·前置）T29（信号采集）T30（食物直连）T31（份量偏差·闭环）T32（场景）T33（估算复核）T34（体重校准）。规范见 `LEARNING_SPEC.md`
 
 ## 依赖图
 ```
@@ -34,6 +35,11 @@ T13 ─ T14 ─┬ T15(需T09)            │
 T21（贯穿，最后收尾）
 
 T22(需T04/T10/T11) ── T23(需T22/T05/T06/T11)   增强 E：对话上下文
+
+T28(需T27) ─ T29 ─┬─ T30            自学习 L（LEARNING_SPEC）
+                  ├─ T31 ── T32
+                  ├─ T33
+                  └─ T34(需数周 weight_log 积累，最后做)
 ```
 说明：T13 前端骨架不依赖接口，可在后端推进时并行起；但真实联调要等对应后端任务（T15↔T09，T16↔T11/T12，T17/T18↔T12，T19↔T09）。
 
@@ -47,6 +53,7 @@ T01 → T02 → T03 → T04 → T05 → T06 → T07(✅M1)
     → T24 → T25   (匹配质量 Q：字面误匹配、生/熟热量虚高；依赖 T05)
     → T26         (增强 E：聊天搜索 + 数据本地化；依赖 T11/T12/T16)
 	    → T27         (增强 E：SQLite 搜索 + 微信式窗口定位；依赖 T26)
+    → T28 → T29 → T30 → T31 → T32 → T33 → T34   (自学习 L；T34 需 weight_log 积累数周，可延后)
 ```
 
 ## 任务清单
@@ -79,3 +86,10 @@ T01 → T02 → T03 → T04 → T05 → T06 → T07(✅M1)
 | ✅ | T25 | tasks/T25-cooked-canonical.md | 主食 canonical 取熟形 + 生/熟匹配护栏（修生重热量虚高）|
 | ✅ | T26 | tasks/T26-chat-search.md | 聊天搜索 + 数据本地化：去日期pill、搜索弹窗、跨日期跳转 |
 | ✅ | T27 | tasks/T27-chat-search-sqlite.md | SQLite 搜索 + 微信式窗口加载定位（替代 T26 内存搜索） |
+| ⬜ | T28 | tasks/T28-chat-split.md | chat.ts 拆分重构（学习系统前置，纯搬家零行为变化） |
+| ⬜ | T29 | tasks/T29-learning-events.md | 学习事件采集：learning_event/weight_log + 四 hook（只采不用） |
+| ⬜ | T30 | tasks/T30-food-alias.md | 食物直连：streak≥2 跳候选卡 + 逃生口 + undo 联动 |
+| ⬜ | T31 | tasks/T31-portion-bias.md | 份量偏差闭环：user_bias + applyBias + discuss 注入（L 里程碑） |
+| ⬜ | T32 | tasks/T32-scene-bias.md | 场景偏差：parser scene 字段 + scene 层融合 |
+| ⬜ | T33 | tasks/T33-estimated-food-review.md | 估算食物复核：高频 is_estimated 条目 pro 重估 |
+| ⬜ | T34 | tasks/T34-weight-calibration.md | 体重地面真值校准：周对账收敛有效 TDEE |

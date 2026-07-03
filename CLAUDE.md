@@ -29,6 +29,7 @@
 | `docs/FOOD_DB_SPEC.md` | 食物库领域规范：数据源、三层结构、版权 |
 | `docs/AI_PARSING_SPEC.md` | DeepSeek 解析、意图路由、置信度、匹配、上下文卡 |
 | `docs/CALORIE_ENGINE.md` | BMR/TDEE/缺口/目标 计算口径（公式的**唯一定义处**） |
+| `docs/LEARNING_SPEC.md` | 自学习机制：学习信号、偏差模型、更新/应用算法（学习公式的**唯一定义处**） |
 | `docs/DESIGN_SPEC.md` | UI 行为规格（视觉稿已由 Claude Design 产出） |
 | `docs/TEST_PLAN.md` | 后端验证计划（curl 流程、一致性） |
 | `docs/TESTING.md` | 前端组件测试规范：怎么写、怎么跑、已知坑 |
