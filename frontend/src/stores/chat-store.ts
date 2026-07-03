@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { apiFetch } from '@/lib/api';
 import { getMessagesInRange, getMessagesAround, getMessageDateById, upsertMessages } from '@/lib/db';
 import { localDateStr, dateOnly } from '@/lib/format';
-import type { ChatMessage, ContextCard, SendMessageResponse, ResolveResponse, UndoPrevState } from '@/types/chat';
+import type { ChatMessage, ContextCard, SendMessageResponse, ResolveResponse, UndoPrevState, FoodAliasEscape } from '@/types/chat';
 
 function todayStr() {
   return localDateStr();
@@ -39,6 +39,7 @@ type ChatStore = {
   send: (text: string, token: string) => Promise<void>;
   resolve: (pendingId: string, choice: string | { grams: number }, token: string) => Promise<void>;
   undo: (messageId: string, recordId: string, prevState: UndoPrevState | undefined, token: string) => Promise<void>;
+  resetAlias: (messageId: string, recordId: string, escape: FoodAliasEscape, token: string) => Promise<void>;
 };
 
 export const useChatStore = create<ChatStore>((set, get) => ({
@@ -326,6 +327,48 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         },
       );
       set(s => ({ summaryCard: res.summary_card ?? s.summaryCard }));
+    } catch {
+      set(s => {
+        const next = { ...s.undoneCards };
+        delete next[messageId];
+        return { undoneCards: next };
+      });
+    }
+  },
+
+  // 「不是它？」逃生口：用户食物直连自动匹配错了，撤销该记录 + 清零 streak + 重发候选卡
+  resetAlias: async (messageId: string, recordId: string, escape: FoodAliasEscape, token: string) => {
+    set(s => ({ undoneCards: { ...s.undoneCards, [messageId]: true } }));
+    try {
+      const res = await apiFetch<ResolveResponse>('/api/learning/alias/reset', {
+        method: 'POST',
+        body: JSON.stringify({
+          canonical: escape.canonical,
+          record_id: recordId,
+          portions: escape.portions,
+          chosen_label: escape.chosen_label,
+          ai_candidates: escape.ai_candidates,
+        }),
+        token,
+      });
+      const newMsgs = res.messages as ChatMessage[];
+      const date = newMsgs[0]?.date ?? todayStr();
+      await upsertMessages(date, newMsgs);
+      set(s => {
+        const existingIds = new Set(s.messages.map(m => m.id));
+        const toAdd = newMsgs.filter(m => !existingIds.has(m.id));
+        const idx = s.messages.findIndex(m => m.id === messageId);
+        const nextMessages = [...s.messages];
+        if (idx >= 0 && toAdd.length > 0) {
+          nextMessages.splice(idx + 1, 0, ...toAdd);
+        } else {
+          nextMessages.push(...toAdd);
+        }
+        return {
+          messages: nextMessages,
+          summaryCard: res.summary_card ?? s.summaryCard,
+        };
+      });
     } catch {
       set(s => {
         const next = { ...s.undoneCards };

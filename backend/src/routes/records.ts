@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "../lib/prisma";
 import { itemNutrition } from "../services/calc";
 import { recompute, buildContextCard } from "../services/summary";
+import { resetFoodAliasStreak } from "../services/learning";
 import type { PortionLabel } from "@prisma/client";
 
 // ─────────────────────────────────────────────
@@ -35,6 +36,11 @@ export async function recordsRoutes(app: FastifyInstance) {
     const foodRec = await prisma.foodRecord.findFirst({ where: { id, user_id } });
     if (foodRec) {
       const recDate = foodRec.date.toISOString().slice(0, 10);
+      // 学习信号（LEARNING_SPEC §7）：撤销一条用户食物直连自动匹配的记录 → 清零该 alias 的 streak
+      // ——UI 撤销了，模型也要撤销，否则下次还是自动记错
+      if (foodRec.alias_canonical) {
+        resetFoodAliasStreak(user_id, foodRec.alias_canonical);
+      }
       const prev = bodyParsed.data.prev_state;
       if (prev && "food_id" in prev) {
         // update 撤销 → 还原食物/份量/克数并重算

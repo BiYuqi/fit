@@ -33,6 +33,13 @@ export type RecordUndo = {
   prev_state?: UndoPrevState; // 有=update 撤销(还原)，无=append 撤销(删除)
 };
 
+export type FoodAliasEscape = {
+  canonical: string;
+  portions: PortionOption[];
+  chosen_label: string;
+  ai_candidates?: string[];
+};
+
 export type RecordCardPayload = {
   food_name: string;
   weight_g: number;
@@ -43,6 +50,8 @@ export type RecordCardPayload = {
   is_estimated?: boolean;
   unit?: string;
   undo?: RecordUndo; // modify 的 update/append 直执行时带，支持撤销
+  matched_by_habit?: boolean; // 用户食物直连（streak≥2）自动匹配，见 LEARNING_SPEC §6 §7
+  escape?: FoodAliasEscape; // 「不是它？」逃生口所需数据
 };
 
 export type DeleteConfirmCardPayload = {

@@ -6,7 +6,7 @@ import { matchFood } from "../services/matcher";
 import { itemNutrition } from "../services/calc";
 import { recompute, buildContextCard } from "../services/summary";
 import { recordDeleteCorrection, recordResolveCorrection } from "../services/trace";
-import { recordLearningEvent } from "../services/learning";
+import { recordLearningEvent, upsertFoodAlias } from "../services/learning";
 import type { MealType, PortionLabel } from "@prisma/client";
 
 const ResolveBodySchema = z.object({
@@ -121,6 +121,12 @@ export async function pendingRoutes(app: FastifyInstance) {
       // 不直接落库，而是生成 portion_choice pending → 返回 PortionCard（两步走）
       const foodName = choice as string;
       const food = await matchFood(foodName, undefined, user_id);
+
+      // 学习信号（LEARNING_SPEC §6）：用户在候选卡选定了食物，记进用户食物直连表
+      const aliasCanonical = candidates.query as string | undefined;
+      if (aliasCanonical) {
+        upsertFoodAlias(user_id, aliasCanonical, food.id);
+      }
 
       const portionsList: Array<{ label: string; grams: number }> = candidates.portions ?? [];
       const portionsWithCal = portionsList.map((p) => ({

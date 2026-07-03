@@ -47,6 +47,12 @@ modify 行为（AI_PARSING_SPEC §8）：
 - `update` → 直接改 food_record + 重算，返回 `record_card`，其 `payload.undo = { record_id, prev_state }`。
 - `append` → 在 target 所属餐新增记录 + 重算，`record_card` 的 `payload.undo = { record_id }`（高置信）；低置信走 portion/candidate 卡。
 
+用户食物直连命中时（LEARNING_SPEC §6 §7，T30），`record_card.payload` 额外带：
+```json
+{ "matched_by_habit": true, "escape": { "canonical", "portions", "chosen_label", "ai_candidates?" } }
+```
+前端据此显示"已按你的习惯记为「X」"+「不是它？」按钮；点击时把 `escape` 的字段连同 `canonical`/`record_id` 传给 `/api/learning/alias/reset`（见下）。
+
 ### POST /api/pending/:id/resolve
 req: `{ choice }`（选中的候选标识，或自定义克数 `{ grams }`；`delete_confirm` 传 `{ choice: "confirm" }`）
 行为：据选择建 food_record / 删记录（delete_confirm）、刷新 daily_summary、补写对应 chat_message。
@@ -55,7 +61,13 @@ resp: `{ record?, summary_card, messages }`。
 ### POST /api/records/:id/undo
 撤销 modify 的 update/append（见 AI_PARSING_SPEC §8），由 `record_card.payload.undo` 驱动。
 req: `{ prev_state? }`——带 `prev_state{food_id,portion_label,weight_g}` → 还原（update 撤销）；不带 → 删该记录（append 撤销）。
-行为：还原/删记录后重算 daily_summary。resp: `{ ok, summary_card }`。
+行为：还原/删记录后重算 daily_summary；若该记录 `alias_canonical` 非空，联动清零对应用户食物直连的 streak（见 LEARNING_SPEC §7）。resp: `{ ok, summary_card }`。
+
+### POST /api/learning/alias/reset
+「不是它？」逃生口（见 LEARNING_SPEC §6 §7）。用户食物直连（streak≥2）自动匹配错了时调用。
+req: `{ canonical, record_id, portions, chosen_label, ai_candidates? }`——`portions`/`chosen_label`/`ai_candidates` 取自触发本次逃生口的 `record_card.payload.escape`（见下）。
+行为：清零该 canonical 的 alias streak → 删除该条误判记录（记一条 `signal_type=delete` 学习事件，只记不训练）→ 用同一份份量估算重新走候选流程，产出新的 `candidate_card`。
+resp: `{ summary_card, messages: [candidate_card 消息] }`。
 
 ## 数据查询（读事实层）
 ### GET /api/daily/today

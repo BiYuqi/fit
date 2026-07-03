@@ -76,6 +76,7 @@ model User {
   token_usages     TokenUsage[]
   learning_events  LearningEvent[]
   weight_logs      WeightLog[]
+  food_aliases     UserFoodAlias[]
 }
 
 // ---------- 食物标准库（seed 导入的目标表）----------
@@ -97,6 +98,7 @@ model FoodStandard {
 
   food_records    FoodRecord[]
   learning_events LearningEvent[]
+  user_aliases    UserFoodAlias[]
 
   @@unique([name, category], name: "name_category") // seed upsert 用
   @@index([name]) // 普通索引；trigram GIN 索引见末尾 SQL
@@ -119,6 +121,7 @@ model FoodRecord {
   source             String       @default("text") // text | voice
   raw_input          String?
   parse_log_id       String?
+  alias_canonical    String? // 若由用户食物直连(streak≥2)自动匹配，存匹配用的 canonical；供撤销/改食物联动清 alias streak（T30）
   date               DateTime     @db.Date
   created_at         DateTime     @default(now())
 
@@ -234,6 +237,21 @@ model WeightLog {
   user User @relation(fields: [user_id], references: [id])
 
   @@id([user_id, date])
+}
+
+// 用户食物直连：canonical → 用户惯用的 food_id，streak≥2 时跳过 CandidateCard（T30）
+model UserFoodAlias {
+  user_id        String
+  canonical      String
+  food_id        String
+  hits           Int      @default(1)
+  streak         Int      @default(1) // 连续选同一个的次数；选了别的/逃生口/撤销 → 清零
+  last_chosen_at DateTime @default(now())
+
+  user User         @relation(fields: [user_id], references: [id])
+  food FoodStandard @relation(fields: [food_id], references: [id])
+
+  @@id([user_id, canonical])
 }
 
 // ============================================================

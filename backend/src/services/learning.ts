@@ -1,5 +1,6 @@
 import { prisma } from "../lib/prisma";
 import { todayStr, toDateOnly } from "../lib/dates";
+import type { UserFoodAlias } from "@prisma/client";
 
 // ---------- 学习信号采集（LEARNING_SPEC §3）----------
 // P1（T29）：只采集不应用。applied_grams 恒等于 predicted_grams，
@@ -102,4 +103,54 @@ export async function runImplicitAcceptJob(hoursThreshold = 24): Promise<number>
   }
 
   return candidates.length;
+}
+
+// ---------- 用户食物直连（LEARNING_SPEC §6 §7，T30）----------
+// canonical → 用户惯用的 food_id。streak≥2 时 food-item.ts 跳过 CandidateCard 直用该食物。
+
+// 读：路由决策用，失败/无记录一律返回 null，调用方回退到正常匹配流程。
+export async function getFoodAlias(user_id: string, canonical: string): Promise<UserFoodAlias | null> {
+  try {
+    return await prisma.userFoodAlias.findUnique({
+      where: { user_id_canonical: { user_id, canonical } },
+    });
+  } catch {
+    return null;
+  }
+}
+
+// 写：用户在 CandidateCard 选定食物时调用。选同一食物 → streak+1；换了别的 → streak 归 1。
+export async function upsertFoodAlias(user_id: string, canonical: string, food_id: string): Promise<void> {
+  try {
+    const existing = await prisma.userFoodAlias.findUnique({
+      where: { user_id_canonical: { user_id, canonical } },
+    });
+    if (existing && existing.food_id === food_id) {
+      await prisma.userFoodAlias.update({
+        where: { user_id_canonical: { user_id, canonical } },
+        data: { hits: { increment: 1 }, streak: { increment: 1 }, last_chosen_at: new Date() },
+      });
+    } else {
+      await prisma.userFoodAlias.upsert({
+        where: { user_id_canonical: { user_id, canonical } },
+        update: { food_id, hits: { increment: 1 }, streak: 1, last_chosen_at: new Date() },
+        create: { user_id, canonical, food_id, hits: 1, streak: 1 },
+      });
+    }
+  } catch {
+    // 静默失败，不影响主流程
+  }
+}
+
+// 清零：逃生口点击 / undo 撤销 / modify 改食物 时调用。不动 food_id/hits，只清 streak，
+// 需要再连续选够 streak 次才会重新触发跳卡——不是删记录，是"重新观察"。
+export async function resetFoodAliasStreak(user_id: string, canonical: string): Promise<void> {
+  try {
+    await prisma.userFoodAlias.updateMany({
+      where: { user_id, canonical },
+      data: { streak: 0 },
+    });
+  } catch {
+    // 静默失败，不影响主流程
+  }
 }

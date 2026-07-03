@@ -25,22 +25,30 @@ export function RecordCard({
   payload,
   mealType,
   messageId,
+  recordId,
 }: {
   payload: RecordCardPayload;
   mealType?: string;
   messageId: string;
+  recordId?: string | null;
 }) {
   const colors = useTheme();
   const meal = MEAL_LABEL[mealType ?? ''] ?? '加餐';
 
-  const { undo, undoneCards } = useChatStore();
+  const { undo, resetAlias, undoneCards } = useChatStore();
   const { token } = useAuthStore();
   const undoInfo = payload.undo;
-  const isUndone = !!(undoInfo && undoneCards[messageId]);
+  // 撤销按钮 / 「不是它？」逃生口共用同一个已处理态：卡片一旦被撤销或替换就不再可操作
+  const isUndone = !!undoneCards[messageId];
 
   const handleUndo = () => {
     if (!undoInfo || isUndone || !token) return;
     undo(messageId, undoInfo.record_id, undoInfo.prev_state, token);
+  };
+
+  const handleEscape = () => {
+    if (!payload.escape || !recordId || isUndone || !token) return;
+    resetAlias(messageId, recordId, payload.escape, token);
   };
 
   return (
@@ -75,7 +83,7 @@ export function RecordCard({
             <MacroInline label="脂肪" value={payload.fat_g} color={MACRO_COLORS.fat} />
             <MacroInline label="碳水" value={payload.carbs_g} color={MACRO_COLORS.carbs} />
           </View>
-          {undoInfo &&
+          {undoInfo && !payload.matched_by_habit &&
             (isUndone ? (
               <ThemedText themeColor="textSecondary" style={styles.undoneLabel}>
                 已撤销
@@ -93,6 +101,30 @@ export function RecordCard({
               </TouchableOpacity>
             ))}
         </View>
+
+        {/* Row 3: 用户食物直连命中时的习惯文案 + 逃生口（LEARNING_SPEC §7） */}
+        {payload.matched_by_habit && (
+          <View style={styles.habitRow}>
+            <SymbolView name="repeat" size={11} tintColor={colors.textSecondary} style={styles.habitIcon} />
+            {isUndone ? (
+              <ThemedText themeColor="textSecondary" style={styles.undoneLabel}>
+                已替换
+              </ThemedText>
+            ) : (
+              <>
+                <ThemedText themeColor="textSecondary" style={styles.habitLabel}>
+                  已按你的习惯记为「{payload.food_name}」
+                </ThemedText>
+                <TouchableOpacity style={styles.escapeBtn} onPress={handleEscape} activeOpacity={0.6}>
+                  <SymbolView name="xmark.circle" size={11} tintColor={colors.textSecondary} />
+                  <ThemedText themeColor="textSecondary" style={styles.undoLabel}>
+                    不是它？
+                  </ThemedText>
+                </TouchableOpacity>
+              </>
+            )}
+          </View>
+        )}
       </GlassCard>
     </View>
   );
@@ -199,5 +231,25 @@ const styles = StyleSheet.create({
   undoneLabel: {
     fontSize: 12,
     fontStyle: 'italic',
+  },
+
+  // ── Row 3: 用户食物直连习惯文案 ──
+  habitRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  habitIcon: {
+    marginTop: 1,
+  },
+  habitLabel: {
+    flex: 1,
+    fontSize: 12,
+  },
+  escapeBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingLeft: Spacing.two,
   },
 });

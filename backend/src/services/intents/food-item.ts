@@ -1,8 +1,9 @@
 import { matchFood, matchFoodCandidates } from "../matcher";
 import { itemNutrition } from "../calc";
 import { prisma } from "../../lib/prisma";
+import { getFoodAlias } from "../learning";
 import type { FoodItem } from "../../ai/schema";
-import type { MealType, PortionLabel } from "@prisma/client";
+import type { FoodStandard, MealType, PortionLabel, PendingRecord } from "@prisma/client";
 import type { ItemTrace } from "../trace";
 
 // ---------- 单条食物处理（record 与 modify.append 共用） ----------
@@ -29,6 +30,47 @@ export function inferMatchPath(
   // 模糊匹配（多个候选，trgm 命中了某个）
   if (dbCandidates.length > 1) return "pg_trgm";
   return "matched";
+}
+
+// ---------- 候选卡数据构建（歧义判定命中 / 用户点「不是它？」重发时共用） ----------
+export interface CandidateCardData {
+  pendingRecord: PendingRecord;
+  foodsPayload: Array<{ name: string; calorie_hint?: number }>;
+}
+
+export async function buildCandidateCardData(params: {
+  user_id: string;
+  query: string;
+  raw: string;
+  meal_type: MealType;
+  source: string;
+  portions: FoodItem["portions"];
+  chosen_label: PortionLabel;
+  ai_candidates?: string[];
+}): Promise<CandidateCardData> {
+  const { user_id, query, raw, meal_type, source, portions, chosen_label, ai_candidates } = params;
+  const { foods: dbCandidates } = await matchFoodCandidates(query);
+
+  const mediumGrams = (portions.find((p) => p.label === "medium") ?? portions[0])?.grams ?? 150;
+  const dbNames = new Set(dbCandidates.map((f) => f.name));
+  const aiNames: string[] = (ai_candidates ?? []).filter((n) => !dbNames.has(n));
+  const allNames = [...dbCandidates.map((f) => f.name), ...aiNames].slice(0, 3);
+  const foodsPayload = allNames.map((name) => {
+    const dbEntry = dbCandidates.find((f) => f.name === name);
+    return {
+      name,
+      calorie_hint: dbEntry ? Math.round(Number(dbEntry.calories_100g) * mediumGrams / 100) : undefined,
+    };
+  });
+
+  const pendingRecord = await prisma.pendingRecord.create({
+    data: {
+      user_id, type: "food_choice", raw_input: raw,
+      candidates: { query, meal_type, source, portions, chosen_label } as object,
+    },
+  });
+
+  return { pendingRecord, foodsPayload };
 }
 
 export interface ItemCtx {
@@ -62,87 +104,87 @@ export async function processFoodItem(item: FoodItem, ctx: ItemCtx): Promise<Ite
     itrace.setState("is_ambiguous", is_ambiguous);
   }
 
-  const { foods: dbCandidates, calorie_spread } = await matchFoodCandidates(query);
-  if (itrace) itrace.setState("calorie_spread", calorie_spread);
-
-  const isAmbiguous =
-    is_ambiguous ||
-    (food_confidence < 0.85 && dbCandidates.length >= 2 && calorie_spread > FOOD_AMBIGUITY_SPREAD);
-
-  if (isAmbiguous) {
-    // normalize → confidence → decision → output（通过 itrace）
-    if (itrace) {
-      const na = { ...itrace.getState(), match_path: "ambiguous_pending", calorie_spread };
-      await itrace.normalize(
-        na,
-        { canonical, raw },
-        { candidates_count: dbCandidates.length, calorie_spread, match_path: "ambiguous_pending" },
-      );
-
-      const ca = { ...itrace.getState(), confidence_verdict: "ambiguous" };
-      await itrace.confidence(
-        ca,
-        { food_confidence, portion_confidence, is_ambiguous, calorie_spread, candidates_count: dbCandidates.length },
-        { food_level: food_confidence >= 0.8 ? "high" : food_confidence >= 0.5 ? "medium" : "low", portion_level: "low", verdict: "ambiguous" },
-        { threshold_food_high: 0.8, threshold_portion_high: 0.8, threshold_food_low: 0.5, calorie_spread_max: FOOD_AMBIGUITY_SPREAD },
-      );
-
-      const da = { ...itrace.getState(), routing_action: "candidate_card" };
-      await itrace.decision(
-        da,
-        { food_level: "medium", portion_level: "low", is_ambiguous, calorie_spread },
-        { action: "candidate_card" },
-        { reason: is_ambiguous ? "AI flagged is_ambiguous=true" : `calorie_spread (${calorie_spread}) > ${FOOD_AMBIGUITY_SPREAD}` },
-      );
-    }
-
-    const mediumGrams = (portions.find((p) => p.label === "medium") ?? portions[0])?.grams ?? 150;
-    const dbNames = new Set(dbCandidates.map((f) => f.name));
-    const aiNames: string[] = (ai_candidates ?? []).filter((n) => !dbNames.has(n));
-    const allNames = [...dbCandidates.map((f) => f.name), ...aiNames].slice(0, 3);
-    const foodsPayload = allNames.map((name) => {
-      const dbEntry = dbCandidates.find((f) => f.name === name);
-      return {
-        name,
-        calorie_hint: dbEntry ? Math.round(Number(dbEntry.calories_100g) * mediumGrams / 100) : undefined,
-      };
-    });
-
-    const pr = await prisma.pendingRecord.create({
-      data: {
-        user_id,
-        type: "food_choice",
-        raw_input: raw,
-        candidates: { query, meal_type, source, portions, chosen_label } as object,
-      },
-    });
-
-    if (itrace) {
-      const oa = { ...itrace.getState(), pending_id: pr.id };
-      await itrace.output(
-        oa,
-        { action: "candidate_card" },
-        { result: "pending_created", pending_record_id: pr.id },
-      );
-    }
-
-    return {
-      needsRecompute: false,
-      pending: pr,
-      pendingFn: () => prisma.chatMessage.create({
-        data: {
-          user_id, date: dateObj, role: "assistant", kind: "candidate_card",
-          payload: { pending_id: pr.id, query, foods: foodsPayload } as object,
-        },
-      }),
-    };
+  // ── 用户食物直连（LEARNING_SPEC §6 §7，T30）──
+  // streak≥2：跳过歧义判定与匹配，直用该食物；份量仍走正常置信度流程（不越权）。
+  let food: FoodStandard | null = null;
+  let matchedByHabit = false;
+  const alias = await getFoodAlias(user_id, query);
+  if (alias && alias.streak >= 2) {
+    food = await prisma.foodStandard.findUnique({ where: { id: alias.food_id } });
+    matchedByHabit = !!food;
   }
 
-  const food = await matchFood(query, raw, user_id);
+  let dbCandidates: FoodStandard[] = [];
+  let calorie_spread = 0;
+
+  if (!food) {
+    const matched = await matchFoodCandidates(query);
+    dbCandidates = matched.foods;
+    calorie_spread = matched.calorie_spread;
+    if (itrace) itrace.setState("calorie_spread", calorie_spread);
+
+    const isAmbiguous =
+      is_ambiguous ||
+      (food_confidence < 0.85 && dbCandidates.length >= 2 && calorie_spread > FOOD_AMBIGUITY_SPREAD);
+
+    if (isAmbiguous) {
+      // normalize → confidence → decision → output（通过 itrace）
+      if (itrace) {
+        const na = { ...itrace.getState(), match_path: "ambiguous_pending", calorie_spread };
+        await itrace.normalize(
+          na,
+          { canonical, raw },
+          { candidates_count: dbCandidates.length, calorie_spread, match_path: "ambiguous_pending" },
+        );
+
+        const ca = { ...itrace.getState(), confidence_verdict: "ambiguous" };
+        await itrace.confidence(
+          ca,
+          { food_confidence, portion_confidence, is_ambiguous, calorie_spread, candidates_count: dbCandidates.length },
+          { food_level: food_confidence >= 0.8 ? "high" : food_confidence >= 0.5 ? "medium" : "low", portion_level: "low", verdict: "ambiguous" },
+          { threshold_food_high: 0.8, threshold_portion_high: 0.8, threshold_food_low: 0.5, calorie_spread_max: FOOD_AMBIGUITY_SPREAD },
+        );
+
+        const da = { ...itrace.getState(), routing_action: "candidate_card" };
+        await itrace.decision(
+          da,
+          { food_level: "medium", portion_level: "low", is_ambiguous, calorie_spread },
+          { action: "candidate_card" },
+          { reason: is_ambiguous ? "AI flagged is_ambiguous=true" : `calorie_spread (${calorie_spread}) > ${FOOD_AMBIGUITY_SPREAD}` },
+        );
+      }
+
+      const { pendingRecord: pr, foodsPayload } = await buildCandidateCardData({
+        user_id, query, raw, meal_type, source, portions, chosen_label, ai_candidates,
+      });
+
+      if (itrace) {
+        const oa = { ...itrace.getState(), pending_id: pr.id };
+        await itrace.output(
+          oa,
+          { action: "candidate_card" },
+          { result: "pending_created", pending_record_id: pr.id },
+        );
+      }
+
+      return {
+        needsRecompute: false,
+        pending: pr,
+        pendingFn: () => prisma.chatMessage.create({
+          data: {
+            user_id, date: dateObj, role: "assistant", kind: "candidate_card",
+            payload: { pending_id: pr.id, query, foods: foodsPayload } as object,
+          },
+        }),
+      };
+    }
+
+    food = await matchFood(query, raw, user_id);
+  }
 
   // ── normalize：canonical → food_standard 映射 ──
   if (itrace) {
-    const matchPath = inferMatchPath(food, query, dbCandidates);
+    const matchPath = matchedByHabit ? "user_alias" : inferMatchPath(food, query, dbCandidates);
     const na: Record<string, unknown> = {
       ...itrace.getState(),
       matched_food_id: food.id,
@@ -209,6 +251,7 @@ export async function processFoodItem(item: FoodItem, ctx: ItemCtx): Promise<Ite
         fat: nutrition.fat_g, carbs: nutrition.carbs_g,
         food_confidence, portion_confidence, source, raw_input: raw, date: dateObj,
         parse_log_id: itrace?.traceId || null,
+        alias_canonical: matchedByHabit ? query : null,
       },
     });
 
@@ -228,6 +271,10 @@ export async function processFoodItem(item: FoodItem, ctx: ItemCtx): Promise<Ite
       unit,
     };
     if (withUndo) payload.undo = { record_id: record.id };
+    if (matchedByHabit) {
+      payload.matched_by_habit = true;
+      payload.escape = { canonical: query, portions, chosen_label, ai_candidates };
+    }
 
     return {
       record,

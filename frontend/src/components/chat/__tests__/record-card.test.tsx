@@ -37,12 +37,16 @@ function basePayload(overrides?: Partial<RecordCardPayload>): RecordCardPayload 
   };
 }
 
-function renderCard(payload: RecordCardPayload, opts?: { mealType?: string; messageId?: string }) {
+function renderCard(
+  payload: RecordCardPayload,
+  opts?: { mealType?: string; messageId?: string; recordId?: string },
+) {
   return render(
     <RecordCard
       payload={payload}
       mealType={opts?.mealType}
       messageId={opts?.messageId ?? 'msg-r1'}
+      recordId={opts?.recordId}
     />,
   );
 }
@@ -178,5 +182,73 @@ describe('RecordCard', () => {
     // "已撤销" is rendered, so there's no "撤销" button to press.
     // Verify the mock was never called.
     expect(mockUndo).not.toHaveBeenCalled();
+  });
+
+  // ── 用户食物直连逃生口（LEARNING_SPEC §7）────────────────────────────
+
+  const escapePayload = {
+    canonical: '煎饼',
+    portions: [{ label: 'medium' as const, grams: 150 }],
+    chosen_label: 'medium',
+    ai_candidates: ['煎饼果子', '鸡蛋煎饼'],
+  };
+
+  it('shows habit text and escape button when matched_by_habit', () => {
+    renderCard(basePayload({ matched_by_habit: true, escape: escapePayload }));
+
+    expect(screen.getByText(/已按你的习惯记为/)).toBeOnTheScreen();
+    expect(screen.getByText('不是它？')).toBeOnTheScreen();
+  });
+
+  it('does NOT show habit row when matched_by_habit is absent', () => {
+    renderCard(basePayload());
+
+    expect(screen.queryByText(/已按你的习惯记为/)).not.toBeOnTheScreen();
+    expect(screen.queryByText('不是它？')).not.toBeOnTheScreen();
+  });
+
+  it('calls resetAlias with correct arguments on press', () => {
+    const mockResetAlias = jest.fn();
+    mockUseChatStore.mockReturnValue(createMockChatStore({ resetAlias: mockResetAlias }));
+    mockUseAuthStore.mockReturnValue(createMockAuthStore({ token: 'tok-abc' }));
+
+    renderCard(
+      basePayload({ matched_by_habit: true, escape: escapePayload }),
+      { recordId: 'rec-42' },
+    );
+
+    fireEvent.press(screen.getByText('不是它？'));
+
+    expect(mockResetAlias).toHaveBeenCalledTimes(1);
+    expect(mockResetAlias).toHaveBeenCalledWith('msg-r1', 'rec-42', escapePayload, 'tok-abc');
+  });
+
+  it('shows "已替换" after reset — escape button hidden', () => {
+    mockUseChatStore.mockReturnValue(
+      createMockChatStore({ undoneCards: { 'msg-r1': true } }),
+    );
+
+    renderCard(
+      basePayload({ matched_by_habit: true, escape: escapePayload }),
+      { recordId: 'rec-42' },
+    );
+
+    expect(screen.getByText('已替换')).toBeOnTheScreen();
+    expect(screen.queryByText('不是它？')).not.toBeOnTheScreen();
+  });
+
+  it('does NOT call resetAlias when already replaced', () => {
+    const mockResetAlias = jest.fn();
+    mockUseChatStore.mockReturnValue(
+      createMockChatStore({ resetAlias: mockResetAlias, undoneCards: { 'msg-r1': true } }),
+    );
+
+    renderCard(
+      basePayload({ matched_by_habit: true, escape: escapePayload }),
+      { recordId: 'rec-42' },
+    );
+
+    // "已替换" is rendered, so there's no "不是它？" button to press.
+    expect(mockResetAlias).not.toHaveBeenCalled();
   });
 });

@@ -62,6 +62,7 @@
 | source | text | text / voice |
 | raw_input | text? | 原始输入 |
 | parse_log_id | uuid? | 关联解析日志 |
+| alias_canonical | text? | 若由用户食物直连（`user_food_alias` streak≥2）自动匹配，存匹配用的 canonical；撤销/改食物时据此联动清该 alias 的 streak（T30，见 LEARNING_SPEC §6 §7） |
 | date | date | 归属日期 |
 | created_at | timestamptz | |
 

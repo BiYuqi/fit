@@ -3,7 +3,7 @@ import { matchFood } from "../matcher";
 import { itemNutrition } from "../calc";
 import { recompute, buildContextCard } from "../summary";
 import { recordModifyCorrection } from "../trace";
-import { recordLearningEvent } from "../learning";
+import { recordLearningEvent, resetFoodAliasStreak } from "../learning";
 import { processItems } from "./food-item";
 import { guessMealType } from "../../lib/dates";
 import type { MealType, PortionLabel } from "@prisma/client";
@@ -145,6 +145,12 @@ export async function handleModify(
     portion_label = "custom";
   }
 
+  // 学习信号（LEARNING_SPEC §7）：改食物覆盖了用户食物直连自动匹配的结果 → 清零该 alias 的 streak，
+  // 且这条记录不再代表"按习惯匹配"，清掉标记（同「不是它？」逃生口，只是触发方式是 modify 而非按钮）
+  if (change.food && rec.alias_canonical) {
+    resetFoodAliasStreak(user_id, rec.alias_canonical);
+  }
+
   const nutrition = itemNutrition(food, weight_g);
   const updated = await prisma.foodRecord.update({
     where: { id: rec.id },
@@ -152,6 +158,7 @@ export async function handleModify(
       food_id: food.id, portion_label, weight_g,
       calories: nutrition.calories, protein: nutrition.protein_g,
       fat: nutrition.fat_g, carbs: nutrition.carbs_g,
+      alias_canonical: change.food ? null : undefined,
     },
   });
   await recompute(user_id, today);
