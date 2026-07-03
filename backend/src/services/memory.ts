@@ -92,6 +92,7 @@ export interface RecordRef {
 export interface TurnSummary {
   said: string;                                  // 用户原话（来自 ai_parse_log.input_text）
   intent: string | null;                         // record / query / chat
+  at?: Date;                                     // 发生时刻（ai_parse_log.created_at），供 L0 相对时间标注
   foods?: Array<{ name: string; portion: string }>; // record 意图时的动作锚点
 }
 
@@ -114,7 +115,7 @@ export interface MemoryPack {
   card: ContextCard;
   recent_records: RecordRef[];
   recent_turns: TurnSummary[];
-  recent_days: DaySummary[];   // 近7天每日汇总（不含今天）
+  recent_days: DaySummary[];   // 近3天每日汇总（不含今天）
   portion_habits: PortionHabit[]; // 学到的份量倾向（LEARNING_SPEC §6，T31），只影响 chosen_label
 }
 
@@ -144,12 +145,12 @@ export async function buildMemoryPack(user_id: string): Promise<MemoryPack> {
       orderBy: { created_at: "desc" },
       take: TURN_WINDOW,
     }),
-    // 近7天已有 summary 的天
+    // 近3天已有 summary 的天
     prisma.dailySummary.findMany({
       where: { user_id, date: { gte: threeDaysAgo, lte: yesterday } },
       orderBy: { date: "desc" },
     }),
-    // 近7天有记录但可能没有 summary 的天（实时聚合兜底）
+    // 近3天有记录但可能没有 summary 的天（实时聚合兜底）
     prisma.foodRecord.groupBy({
       by: ["date"],
       where: { user_id, date: { gte: threeDaysAgo, lte: yesterday } },
@@ -222,7 +223,7 @@ export async function buildMemoryPack(user_id: string): Promise<MemoryPack> {
     .slice()
     .reverse()
     .map((log) => {
-      const turn: TurnSummary = { said: log.input_text, intent: log.intent };
+      const turn: TurnSummary = { said: log.input_text, intent: log.intent, at: log.created_at };
       const pj = log.parsed_json as any;
       if (log.intent === "record" && Array.isArray(pj?.items)) {
         turn.foods = pj.items.map((it: any) => ({

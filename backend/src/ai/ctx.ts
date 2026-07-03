@@ -16,6 +16,21 @@ function todayStrCtx(): string {
   return local.toISOString().slice(0, 10);
 }
 
+// L0 相对时间前缀（北京时间口径与 todayStrCtx 一致）：
+// 今天 → "HH:mm"，昨天 → "昨天HH:mm"，更早 → "M月D日"
+function turnTimeLabel(at: Date | undefined): string {
+  if (!at) return "";
+  const local = new Date(at.getTime() + 8 * 3600 * 1000);
+  const dateStr = local.toISOString().slice(0, 10);
+  const hm = local.toISOString().slice(11, 16);
+  const today = todayStrCtx();
+  if (dateStr === today) return hm;
+  const yesterday = new Date(new Date(today + "T00:00:00.000Z").getTime() - 86400000)
+    .toISOString().slice(0, 10);
+  if (dateStr === yesterday) return `昨天${hm}`;
+  return `${local.getUTCMonth() + 1}月${local.getUTCDate()}日`;
+}
+
 export function compressContext(pack: MemoryPack): string {
   const { profile: p, card, recent_records, recent_turns, recent_days, portion_habits } = pack;
   const lines: string[] = [];
@@ -36,6 +51,9 @@ export function compressContext(pack: MemoryPack): string {
   lines.push(
     `【今日进度】摄入${card.today.in}kcal 总消耗${card.today.out}kcal 实际缺口${card.today.deficit}kcal 目标摄入${card.targets.calories}kcal 还可吃${card.today.remaining}kcal 蛋白${card.today.p}/${card.targets.protein}g`
   );
+  // 周/月聚合（buildContextCard 已算好，answerQuery 靠这两行答"本周/本月均值"类问题）
+  lines.push(`【本周】平均缺口${card.week.avg_deficit}kcal 已记录${card.week.logged_days}天`);
+  lines.push(`【本月】平均摄入${card.month.avg_in}kcal 已记录${card.month.logged_days}天`);
   // 学到的份量倾向（LEARNING_SPEC §6，T31）：只影响 chosen_label 选档，不给数字——克数修正在后端 applyBias
   if (portion_habits && portion_habits.length > 0) {
     lines.push(
@@ -82,7 +100,8 @@ export function compressContext(pack: MemoryPack): string {
           : t.intent === "modify"  ? "修改记录"
           : t.intent === "discuss" ? "质疑/追问记录"
           : "闲聊/咨询";
-      lines.push(`  用户:"${t.said}" → ${act}`);
+      const time = turnTimeLabel(t.at);
+      lines.push(`  ${time ? `[${time}] ` : ""}用户:"${t.said}" → ${act}`);
     }
   }
 
