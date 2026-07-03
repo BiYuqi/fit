@@ -47,8 +47,9 @@ export async function buildCandidateCardData(params: {
   portions: FoodItem["portions"];
   chosen_label: PortionLabel;
   ai_candidates?: string[];
+  scene?: string | null;
 }): Promise<CandidateCardData> {
-  const { user_id, query, raw, meal_type, source, portions, chosen_label, ai_candidates } = params;
+  const { user_id, query, raw, meal_type, source, portions, chosen_label, ai_candidates, scene } = params;
   const { foods: dbCandidates } = await matchFoodCandidates(query);
 
   const mediumGrams = (portions.find((p) => p.label === "medium") ?? portions[0])?.grams ?? 150;
@@ -66,7 +67,7 @@ export async function buildCandidateCardData(params: {
   const pendingRecord = await prisma.pendingRecord.create({
     data: {
       user_id, type: "food_choice", raw_input: raw,
-      candidates: { query, meal_type, source, portions, chosen_label } as object,
+      candidates: { query, meal_type, source, portions, chosen_label, scene: scene ?? null } as object,
     },
   });
 
@@ -79,6 +80,7 @@ export interface ItemCtx {
   source: string;
   dateObj: Date;
   withUndo: boolean; // append 时记录卡带 undo
+  scene?: string | null; // 进食场景 takeout/canteen/home/unknown，parser 提取（T32）；append 等无场景路径缺省
   itrace?: ItemTrace; // 由 processFoodItem 内部消费，不对外暴露
 }
 
@@ -92,7 +94,7 @@ export interface ItemResult {
 }
 
 export async function processFoodItem(item: FoodItem, ctx: ItemCtx): Promise<ItemResult> {
-  const { user_id, meal_type, source, dateObj, withUndo, itrace } = ctx;
+  const { user_id, meal_type, source, dateObj, withUndo, scene, itrace } = ctx;
   const { canonical, chosen_label, portions, food_confidence, portion_confidence, raw, is_ambiguous, ai_candidates } = item;
   const query = canonical || raw;
 
@@ -155,7 +157,7 @@ export async function processFoodItem(item: FoodItem, ctx: ItemCtx): Promise<Ite
       }
 
       const { pendingRecord: pr, foodsPayload } = await buildCandidateCardData({
-        user_id, query, raw, meal_type, source, portions, chosen_label, ai_candidates,
+        user_id, query, raw, meal_type, source, portions, chosen_label, ai_candidates, scene,
       });
 
       if (itrace) {
@@ -185,7 +187,7 @@ export async function processFoodItem(item: FoodItem, ctx: ItemCtx): Promise<Ite
   // ── 份量偏差应用（LEARNING_SPEC §5 §6，T31）──
   // 食物确定后，对各档克数应用该用户学到的份量偏差；冷启动/开关关闭时原样返回。
   // rawChosen 是 AI 原估（学习事件的 predicted 基准），biasedChosen 是展示/入库的值。
-  const biases = biasEnabled() ? await getBiases(user_id, food.id, food.category) : {};
+  const biases = biasEnabled() ? await getBiases(user_id, food.id, food.category, scene) : {};
   const biasedPortions = portions.map((p) => ({ ...p, grams: applyBias(p.grams, biases) }));
   const rawChosen = portions.find((p) => p.label === chosen_label) ?? portions[0];
   const biasedChosen = biasedPortions.find((p) => p.label === chosen_label) ?? biasedPortions[0];
@@ -260,6 +262,7 @@ export async function processFoodItem(item: FoodItem, ctx: ItemCtx): Promise<Ite
         parse_log_id: itrace?.traceId || null,
         alias_canonical: matchedByHabit ? query : null,
         predicted_grams: rawChosen.grams,
+        scene: scene ?? null,
       },
     });
 
@@ -321,6 +324,7 @@ export async function processFoodItem(item: FoodItem, ctx: ItemCtx): Promise<Ite
         food_id: food.id, food_name: food.name, meal_type, source,
         portions: biasedPortions, chosen_label,
         predicted_grams: rawChosen.grams, applied_grams: biasedChosen.grams,
+        scene: scene ?? null,
       } as object,
     },
   });

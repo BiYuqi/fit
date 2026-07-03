@@ -69,6 +69,7 @@ export async function pendingRoutes(app: FastifyInstance) {
             predicted_label: deletedRec.portion_label,
             final_label: deletedRec.portion_label,
             signal_type: "delete",
+            scene: deletedRec.scene,
           });
         }
         await prisma.foodRecord.deleteMany({ where: { id: candidates.record_id, user_id } });
@@ -135,7 +136,7 @@ export async function pendingRoutes(app: FastifyInstance) {
       const rawChosen = portionsList.find((p) => p.label === candidates.chosen_label)
         ?? portionsList.find((p) => p.label === "medium")
         ?? portionsList[0];
-      const biases = biasEnabled() ? await getBiases(user_id, food.id, food.category) : {};
+      const biases = biasEnabled() ? await getBiases(user_id, food.id, food.category, candidates.scene) : {};
       const portionsWithCal = portionsList.map((p) => {
         const grams = applyBias(p.grams, biases);
         return {
@@ -160,6 +161,7 @@ export async function pendingRoutes(app: FastifyInstance) {
             chosen_label: candidates.chosen_label,
             predicted_grams: rawChosen?.grams,
             applied_grams: appliedChosen?.grams,
+            scene: candidates.scene ?? null,
           } as object,
         },
       });
@@ -206,6 +208,7 @@ export async function pendingRoutes(app: FastifyInstance) {
         raw_input: pr.raw_input,
         date: dateObj,
         predicted_grams: predictedGrams ?? null,
+        scene: candidates.scene ?? null,
       },
     });
 
@@ -234,6 +237,7 @@ export async function pendingRoutes(app: FastifyInstance) {
         predicted_label: predictedLabel ?? null,
         final_label: portion_label,
         signal_type: learningSignal,
+        scene: candidates.scene ?? null,
       });
     }
 

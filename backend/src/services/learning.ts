@@ -16,11 +16,18 @@ const SIGNAL_WEIGHTS: Record<SignalType, number> = {
   delete: 0,
 };
 
+// scene 层只认这三个值：unknown/null 不建 bias 行、不参与融合（LEARNING_SPEC §4，T32）
+const BIAS_SCENES = new Set(["takeout", "canteen", "home"]);
+function sceneScopeKey(scene: string | null | undefined): string | null {
+  return scene && BIAS_SCENES.has(scene) ? scene : null;
+}
+
 export interface LearningEventInput {
   user_id: string;
   food_record_id?: string | null;
   food_id?: string | null;
   category?: string | null;
+  scene?: string | null;
   predicted_grams: number;
   applied_grams?: number; // applyBias 之后展示给用户的克数；缺省 = predicted（无修正）
   final_grams: number;
@@ -46,6 +53,7 @@ export async function recordLearningEvent(ev: LearningEventInput): Promise<void>
         food_record_id: ev.food_record_id ?? null,
         food_id: ev.food_id ?? null,
         category: ev.category ?? null,
+        scene: ev.scene ?? null,
         predicted_grams: ev.predicted_grams,
         applied_grams: ev.applied_grams ?? ev.predicted_grams,
         final_grams: ev.final_grams,
@@ -63,6 +71,7 @@ export async function recordLearningEvent(ev: LearningEventInput): Promise<void>
       await updateBiasForEvent(event.id, ev.user_id, log_ratio, signal_weight, {
         food_id: ev.food_id ?? null,
         category: ev.category ?? null,
+        scene: ev.scene ?? null,
       });
     }
   } catch {
@@ -113,6 +122,7 @@ export async function runImplicitAcceptJob(hoursThreshold = 24): Promise<number>
       predicted_label: fr.portion_label,
       final_label: fr.portion_label,
       signal_type: "implicit_accept",
+      scene: fr.scene,
     });
   }
 
@@ -237,16 +247,19 @@ export function biasEnabled(): boolean {
   return process.env.LEARNING_BIAS !== "off";
 }
 
-// ── 持久化：读某用户对某食物的分层偏差（food + category；scene 层 T32 接入）──
+// ── 持久化：读某用户对某食物的分层偏差（food + category + scene；unknown 场景无行自然沉默）──
 export async function getBiases(
   user_id: string,
   food_id: string | null,
   category: string | null,
-): Promise<{ food?: Bias | null; category?: Bias | null }> {
+  scene?: string | null,
+): Promise<{ food?: Bias | null; category?: Bias | null; scene?: Bias | null }> {
   try {
+    const sceneKey = sceneScopeKey(scene);
     const keys: Array<{ scope: string; scope_key: string }> = [];
     if (food_id) keys.push({ scope: "food", scope_key: food_id });
     if (category) keys.push({ scope: "category", scope_key: category });
+    if (sceneKey) keys.push({ scope: "scene", scope_key: sceneKey });
     if (keys.length === 0) return {};
     const rows = await prisma.userBias.findMany({
       where: { user_id, OR: keys },
@@ -254,6 +267,7 @@ export async function getBiases(
     return {
       food: rows.find((r) => r.scope === "food") ?? null,
       category: rows.find((r) => r.scope === "category") ?? null,
+      scene: rows.find((r) => r.scope === "scene") ?? null,
     };
   } catch {
     return {};
@@ -266,23 +280,26 @@ export async function applyBiasToGrams(
   food_id: string | null,
   category: string | null,
   grams: number,
+  scene?: string | null,
 ): Promise<number> {
   if (!biasEnabled()) return grams;
-  const biases = await getBiases(user_id, food_id, category);
+  const biases = await getBiases(user_id, food_id, category, scene);
   return applyBias(grams, biases);
 }
 
-// ── 在线更新：一个学习事件更新 food/category 两层后验，前后状态写 bias_update_log ──
+// ── 在线更新：一个学习事件更新 food/category/scene 三层后验，前后状态写 bias_update_log ──
 async function updateBiasForEvent(
   event_id: string,
   user_id: string,
   e: number,
   signalWeight: number,
-  scopes: { food_id: string | null; category: string | null },
+  scopes: { food_id: string | null; category: string | null; scene?: string | null },
 ): Promise<void> {
+  const sceneKey = sceneScopeKey(scopes.scene);
   const layers: Array<{ scope: string; scope_key: string }> = [];
   if (scopes.food_id) layers.push({ scope: "food", scope_key: scopes.food_id });
   if (scopes.category) layers.push({ scope: "category", scope_key: scopes.category });
+  if (sceneKey) layers.push({ scope: "scene", scope_key: sceneKey });
 
   for (const { scope, scope_key } of layers) {
     const existing = await prisma.userBias.findUnique({

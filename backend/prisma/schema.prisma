@@ -124,6 +124,7 @@ model FoodRecord {
   parse_log_id       String?
   alias_canonical    String? // 若由用户食物直连(streak≥2)自动匹配，存匹配用的 canonical；供撤销/改食物联动清 alias streak（T30）
   predicted_grams    Float? // AI 原估克数（applyBias 之前）；隐式确认 job 与 discuss 偏差说明的 predicted 基准（T31）
+  scene              String? // takeout | canteen | home | unknown，parser 从原话提取（T32）
   date               DateTime     @db.Date
   created_at         DateTime     @default(now())
 

@@ -56,6 +56,7 @@ export async function learningRoutes(app: FastifyInstance) {
       predicted_label: rec.portion_label,
       final_label: rec.portion_label,
       signal_type: "delete",
+      scene: rec.scene,
     });
 
     // 撤销这条误判记录——类比 append 撤销：直接删，让用户重新走候选卡选对的
@@ -73,6 +74,7 @@ export async function learningRoutes(app: FastifyInstance) {
       portions,
       chosen_label,
       ai_candidates,
+      scene: rec.scene,
     });
 
     const candidateCardMsg = await prisma.chatMessage.create({

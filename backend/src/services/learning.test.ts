@@ -136,6 +136,20 @@ test("分层收缩：food 层数据足时主导；只有 category 层时也能�
   assert.ok(both > 200, `food 层应主导：${both}`);
 });
 
+test("scene 层参与融合（T32）：同食物在不同场景偏差下修正结果不同", () => {
+  // 用户外卖场景系统性偏大（油多量足），自制场景偏小
+  const takeout: Bias = { mu: 0.3, sigma2: 0.02, n_eff: 6 };
+  const home: Bias = { mu: -0.2, sigma2: 0.02, n_eff: 6 };
+  const atTakeout = applyBias(400, { scene: takeout });
+  const atHome = applyBias(400, { scene: home });
+  assert.ok(atTakeout > 400, `takeout 正偏差应上调：${atTakeout}`);
+  assert.ok(atHome < 400, `home 负偏差应下调：${atHome}`);
+  assert.notEqual(atTakeout, atHome);
+  // unknown 场景（无 scene bias）不受影响
+  assert.equal(applyBias(400, {}), 400);
+  assert.equal(applyBias(400, { scene: null }), 400);
+});
+
 test("TRUST_K 语义：单层精度恰为 TRUST_K/PRIOR_SIGMA2 时 trust=0.5", () => {
   // 构造 n_eff/sigma2 = TRUST_K/PRIOR_SIGMA2 的层
   const b: Bias = { mu: 0.4, sigma2: 0.09, n_eff: TRUST_K };

@@ -190,6 +190,7 @@ export async function handleModify(
       predicted_label: prev_state.portion_label,
       final_label: portion_label,
       signal_type: "explicit_gram",
+      scene: rec.scene,
     });
   }
   // Trace: correction event（modify update——用户主动修改了 AI 的记录）

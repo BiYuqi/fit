@@ -38,6 +38,16 @@
 
 > 引用规则：同一信息只在一处定义。字段去 DATA_MODEL，公式去 CALORIE_ENGINE，接口去 API_SPEC，别处只引用不重抄。
 
+## Compact Instructions
+
+When compressing, preserve in priority order:
+
+1. Architecture decisions (NEVER summarize)
+2. Modified files and their key changes
+3. Current verification status (pass/fail)
+4. Open TODOs and rollback notes
+5. Tool outputs (can delete, keep pass/fail only)
+
 ## 运行
 
 ```bash

@@ -64,6 +64,7 @@
 | parse_log_id | uuid? | 关联解析日志 |
 | alias_canonical | text? | 若由用户食物直连（`user_food_alias` streak≥2）自动匹配，存匹配用的 canonical；撤销/改食物时据此联动清该 alias 的 streak（T30，见 LEARNING_SPEC §6 §7） |
 | predicted_grams | float? | AI 原估克数（applyBias 之前）；隐式确认 job 与 discuss 偏差说明的 predicted 基准（T31，见 LEARNING_SPEC §5 §7） |
+| scene | text? | 进食场景 takeout/canteen/home/unknown，parser 从原话提取（T32，见 LEARNING_SPEC §4） |
 | date | date | 归属日期 |
 | created_at | timestamptz | |
 
@@ -205,5 +206,3 @@ modify 的 update/append 高置信直执行：record_card 的 `payload.undo` 带
 | date | date | PK 之一 |
 | weight_kg | decimal | 设置页改体重时后端顺手 append |
 | created_at | timestamptz | |
-
-> `food_record` 于 T32 加 `scene text?` 列（parser 从原话提取）。

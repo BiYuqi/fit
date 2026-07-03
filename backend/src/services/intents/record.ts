@@ -24,7 +24,7 @@ export async function handleRecord(
   const { records, replyParts, pending, needsRecompute: itemsNeedRecompute, confirmedCreateFns, pendingCreateFns } =
     await processItems(
       parsed.items ?? [],
-      { user_id, meal_type, source, dateObj, withUndo: false },
+      { user_id, meal_type, source, dateObj, withUndo: false, scene: parsed.scene ?? "unknown" },
       (idx) => tctx.itemTrace(idx),
     );
   let needsRecompute = itemsNeedRecompute;

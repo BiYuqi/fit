@@ -13,6 +13,10 @@ export type MealType = z.infer<typeof MealTypeSchema>;
 export const PortionLabelSchema = z.enum(["small", "medium", "large", "custom"]);
 export type PortionLabel = z.infer<typeof PortionLabelSchema>;
 
+// 进食场景（T32）：外卖/食堂/自制油量与份量系统性不同，scene 层偏差参与融合（LEARNING_SPEC §4）
+export const SceneSchema = z.enum(["takeout", "canteen", "home", "unknown"]);
+export type Scene = z.infer<typeof SceneSchema>;
+
 // ---------- 份量估算 ----------
 export const PortionSchema = z.object({
   label: PortionLabelSchema,
@@ -57,6 +61,7 @@ export const ParseResultSchema = z.discriminatedUnion("intent", [
   z.object({
     intent: z.literal("record"),
     meal_type: MealTypeSchema.optional(),
+    scene: SceneSchema.optional(),              // 原话提不出场景时 AI 填 unknown 或省略
     items: z.array(FoodItemSchema).optional(),
     exercise: z.array(ExerciseItemSchema).optional(),
   }).refine(
@@ -132,6 +137,11 @@ export const parseToolSchema = {
           type: "string",
           enum: ["breakfast", "lunch", "dinner", "snack"],
           description: "仅 intent=record 且能判断时填写",
+        },
+        scene: {
+          type: "string",
+          enum: ["takeout", "canteen", "home", "unknown"],
+          description: "仅 intent=record 填。进食场景，只从用户原话提取：点外卖/叫的/点了个→takeout；食堂/单位餐厅→canteen；自己做/煮/在家做的→home；原话没有场景线索→unknown，不要猜",
         },
         items: {
           type: "array",
