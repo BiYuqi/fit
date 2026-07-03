@@ -92,7 +92,7 @@ export const MessageItem = memo(function MessageItem({ message, isLast }: { mess
 
   switch (message.kind) {
     case 'record_card':
-      return <RecordCard payload={p as RecordCardPayload} messageId={message.id} recordId={message.record_id} />;
+      return <RecordCard payload={p as RecordCardPayload} mealType={(p as RecordCardPayload)?.meal_type} messageId={message.id} recordId={message.record_id} />;
 
     case 'portion_card': {
       const resolved = !!(p as PortionCardPayload)?.resolved;

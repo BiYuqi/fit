@@ -279,7 +279,7 @@ export async function processFoodItem(item: FoodItem, ctx: ItemCtx): Promise<Ite
       food_name: food.name, weight_g, calories: Math.round(nutrition.calories),
       protein_g: Math.round(nutrition.protein_g), fat_g: Math.round(nutrition.fat_g),
       carbs_g: Math.round(nutrition.carbs_g), is_estimated: food.is_estimated,
-      unit,
+      unit, meal_type,
     };
     if (withUndo) payload.undo = { record_id: record.id };
     if (matchedByHabit) {

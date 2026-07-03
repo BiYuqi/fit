@@ -47,6 +47,8 @@ modify 行为（AI_PARSING_SPEC §8）：
 - `update` → 直接改 food_record + 重算，返回 `record_card`，其 `payload.undo = { record_id, prev_state }`。
 - `append` → 在 target 所属餐新增记录 + 重算，`record_card` 的 `payload.undo = { record_id }`（高置信）；低置信走 portion/candidate 卡。
 
+`record_card.payload` 基础字段：`{ food_name, weight_g, unit, calories, protein_g, fat_g, carbs_g, is_estimated, meal_type }`。`meal_type` 为该记录餐次（breakfast/lunch/dinner/snack），前端卡片据此显示"午餐 · 80g"；历史消息可能缺失，缺失时前端不显示餐次（不得兜底成某个具体餐次）。
+
 用户食物直连命中时（LEARNING_SPEC §6 §7，T30），`record_card.payload` 额外带：
 ```json
 { "matched_by_habit": true, "escape": { "canonical", "portions", "chosen_label", "ai_candidates?" } }

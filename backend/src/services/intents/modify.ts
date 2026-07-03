@@ -171,6 +171,7 @@ export async function handleModify(
         food_name: food.name, weight_g: Math.round(weight_g), calories: Math.round(nutrition.calories),
         protein_g: Math.round(nutrition.protein_g), fat_g: Math.round(nutrition.fat_g),
         carbs_g: Math.round(nutrition.carbs_g), is_estimated: food.is_estimated,
+        meal_type: rec.meal_type,
         undo: { record_id: updated.id, prev_state }, // 撤销=还原 prev_state
       } as object,
       record_id: updated.id as string,

@@ -47,6 +47,7 @@ export type RecordCardPayload = {
   protein_g: number;
   fat_g: number;
   carbs_g: number;
+  meal_type?: string; // breakfast/lunch/dinner/snack；旧消息无此字段，卡片不显示餐次
   is_estimated?: boolean;
   unit?: string;
   undo?: RecordUndo; // modify 的 update/append 直执行时带，支持撤销

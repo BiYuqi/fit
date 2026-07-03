@@ -68,7 +68,13 @@ describe('RecordCard', () => {
     expect(screen.getByText(/鸡胸肉/)).toBeOnTheScreen();
     expect(screen.getByText('200')).toBeOnTheScreen();
     expect(screen.getByText('kcal')).toBeOnTheScreen();
-    // Weight is in nested foodMeta Text: "加餐 · 150g"
+    // Weight is in nested foodMeta Text: "午餐 · 150g"（无 meal_type 时只有 "150g"）
+    expect(screen.getByText(/150g/)).toBeOnTheScreen();
+  });
+
+  it('omits meal label when mealType is missing (旧消息不冒充"加餐")', () => {
+    renderCard(basePayload()); // no mealType prop
+    expect(screen.queryByText(/加餐/)).not.toBeOnTheScreen();
     expect(screen.getByText(/150g/)).toBeOnTheScreen();
   });
 

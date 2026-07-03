@@ -272,6 +272,7 @@ export async function pendingRoutes(app: FastifyInstance) {
           fat_g: Math.round(nutrition.fat_g),
           carbs_g: Math.round(nutrition.carbs_g),
           is_estimated: food.is_estimated,
+          meal_type,
         } as object,
         record_id: record.id as string,
       },

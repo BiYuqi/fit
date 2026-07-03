@@ -33,7 +33,8 @@ export function RecordCard({
   recordId?: string | null;
 }) {
   const colors = useTheme();
-  const meal = MEAL_LABEL[mealType ?? ''] ?? '加餐';
+  // 旧消息 payload 无 meal_type → 不显示餐次（宁缺勿错，此前兜底"加餐"造成所有卡片显示错误餐次）
+  const meal = MEAL_LABEL[mealType ?? ''];
 
   const { undo, resetAlias, undoneCards } = useChatStore();
   const { token } = useAuthStore();
@@ -65,7 +66,7 @@ export function RecordCard({
           <ThemedText style={styles.foodLine} numberOfLines={1}>
             {payload.food_name}{' '}
             <ThemedText themeColor="textSecondary" style={styles.foodMeta}>
-              {meal} · {payload.weight_g}{payload.unit ?? 'g'}
+              {meal ? `${meal} · ` : ''}{payload.weight_g}{payload.unit ?? 'g'}
             </ThemedText>
           </ThemedText>
           <View style={styles.calBlock}>
