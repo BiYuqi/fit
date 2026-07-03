@@ -3,6 +3,14 @@ import type { MemoryPack } from "../services/memory";
 
 const RECORD_LIMIT = 20;
 const TURN_LIMIT = 5;
+// L0 渲染截断（T37 上下文预算护栏）：单条消息上限 2000 字，长语音转文字会撑爆 L0。
+// 原则：上下文靠分层衰减控量（近的原始、远的聚合），不靠拉长窗口。
+const SAID_MAX = 60;   // 用户原话截断
+const REPLY_MAX = 150; // AI 回复摘要截断（写入 ai_parse_log 时也按此截，这里是渲染兜底）
+
+export function truncateText(s: string, max: number): string {
+  return s.length > max ? s.slice(0, max) + "…" : s;
+}
 
 const MEAL_ZH: Record<string, string> = {
   breakfast: "早餐", lunch: "午餐", dinner: "晚餐", snack: "加餐",
@@ -96,12 +104,18 @@ export function compressContext(pack: MemoryPack): string {
       const act =
         t.intent === "record"
           ? `记录(${(t.foods ?? []).map((f) => `${f.name}/${f.portion}`).join("、")})`
+          : t.intent === "resolve"
+          ? (t.foods?.length
+              ? `卡片确认(${t.foods.map((f) => (f.portion ? `${f.name}/${f.portion}` : f.name)).join("、")})`
+              : "卡片确认")
           : t.intent === "query"   ? "查询"
           : t.intent === "modify"  ? "修改记录"
           : t.intent === "discuss" ? "质疑/追问记录"
           : "闲聊/咨询";
       const time = turnTimeLabel(t.at);
-      lines.push(`  ${time ? `[${time}] ` : ""}用户:"${t.said}" → ${act}`);
+      // T37 双向记忆：AI 侧摘要跟在动作后（reply 已是摘要，不含卡片 payload）
+      const reply = t.reply ? `；AI:"${truncateText(t.reply, REPLY_MAX)}"` : "";
+      lines.push(`  ${time ? `[${time}] ` : ""}用户:"${truncateText(t.said, SAID_MAX)}" → ${act}${reply}`);
     }
   }
 

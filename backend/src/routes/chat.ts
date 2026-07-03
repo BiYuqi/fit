@@ -7,6 +7,7 @@ import { prisma } from "../lib/prisma";
 import { ChatTrace } from "../services/trace";
 import { todayStr, toDateOnly } from "../lib/dates";
 import { answerChat, answerDiscuss } from "../ai/answers";
+import { truncateText } from "../ai/ctx";
 import { handleQuery } from "../services/intents/query";
 import { handleModify } from "../services/intents/modify";
 import { handleRecord } from "../services/intents/record";
@@ -97,7 +98,7 @@ export async function chatRoutes(app: FastifyInstance) {
     }
 
     // 写解析日志
-    await prisma.aiParseLog.create({
+    const parseLog = await prisma.aiParseLog.create({
       data: {
         user_id,
         input_text: text,
@@ -107,6 +108,18 @@ export async function chatRoutes(app: FastifyInstance) {
       },
     });
 
+    // T37 双向记忆：回复生成后回填本轮 reply_summary（模板回复本身已是摘要，
+    // 自由回复截断 ~150 字；不额外调 AI 做摘要）。所有意图分支的返回值都带 reply，统一在此收口。
+    const backfillReply = async <T extends { reply?: string | null }>(result: T): Promise<T> => {
+      if (result.reply) {
+        await prisma.aiParseLog.update({
+          where: { id: parseLog.id },
+          data: { reply_summary: truncateText(result.reply, 150) },
+        });
+      }
+      return result;
+    };
+
     // Trace: 记录 parse event（DeepSeek 返回 → 写入 ai_trace_event）
     await tctx.recordParse(parsed, modelUsed, upgraded);
     resolvedIntent = parsed.intent;
@@ -115,7 +128,7 @@ export async function chatRoutes(app: FastifyInstance) {
 
     // ── query ──────────────────────────────────
     if (parsed.intent === "query") {
-      return await handleQuery(intentCtx);
+      return await backfillReply(await handleQuery(intentCtx));
     }
 
     // ── chat ───────────────────────────────────
@@ -126,7 +139,7 @@ export async function chatRoutes(app: FastifyInstance) {
       });
       messages.push(aiMsg);
       tctx.ok("chat", { tokenUsage: chatUsage, promptMessages: parseMessages });
-      return { intent: "chat", reply: aiText, summary_card: pack.card, messages };
+      return await backfillReply({ intent: "chat", reply: aiText, summary_card: pack.card, messages });
     }
 
     // ── discuss（针对某条记录提问/质疑，不动数据）─────
@@ -154,16 +167,16 @@ export async function chatRoutes(app: FastifyInstance) {
       });
       messages.push(aiMsg);
       tctx.ok("discuss", { tokenUsage: discussUsage, promptMessages: parseMessages });
-      return { intent: "discuss", reply: aiText, summary_card: pack.card, messages };
+      return await backfillReply({ intent: "discuss", reply: aiText, summary_card: pack.card, messages });
     }
 
     // ── modify（改 / 删 / 追加，AI_PARSING_SPEC §8）──
     if (parsed.intent === "modify") {
-      return await handleModify(parsed, intentCtx);
+      return await backfillReply(await handleModify(parsed, intentCtx));
     }
 
     // ── record ─────────────────────────────────
-    return await handleRecord(parsed, intentCtx);
+    return await backfillReply(await handleRecord(parsed, intentCtx));
   } catch (err: any) {
     // 异常路径也要关闭 trace，避免留下 status="started" 的僵尸记录
     tctx.fail(resolvedIntent ?? "unknown", { message: err?.message }, { promptMessages: parseMessages });

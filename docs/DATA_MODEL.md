@@ -126,10 +126,11 @@ modify 的 update/append 高置信直执行：record_card 的 `payload.undo` 带
 | id | uuid PK | |
 | user_id | uuid FK | |
 | input_text | text | |
-| parsed_json | jsonb? | DeepSeek 解析结果 |
-| intent | text? | record/query/chat |
+| parsed_json | jsonb? | DeepSeek 解析结果；`intent=resolve` 时为卡片动作 `{action, food_name, portion_label?, grams?…}` |
+| intent | text? | record/query/chat/modify/discuss/resolve（resolve=卡片点选，input_text 固定为 `[点选卡片]`，见 AI_PARSING_SPEC §7） |
 | confidence | float? | |
 | status | text? | auto/pending/resolved/failed |
+| reply_summary | text? | AI 回复摘要（T37 双向记忆，L0 的 AI 侧来源）：record/modify 存回复模板文本，chat/query/discuss 存回复截断 ~150 字，resolve 存确认摘要（如"确认：煎饼果子 中份 450g"）。不额外调 AI 做摘要 |
 | created_at | timestamptz | |
 
 ## pending_record（待用户确认）

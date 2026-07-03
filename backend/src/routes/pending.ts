@@ -7,6 +7,7 @@ import { itemNutrition } from "../services/calc";
 import { recompute, buildContextCard } from "../services/summary";
 import { recordDeleteCorrection, recordResolveCorrection } from "../services/trace";
 import { recordLearningEvent, upsertFoodAlias, getBiases, applyBias, biasEnabled } from "../services/learning";
+import { buildResolveLogData } from "../services/resolve-log";
 import type { MealType, PortionLabel } from "@prisma/client";
 
 const ResolveBodySchema = z.object({
@@ -75,6 +76,15 @@ export async function pendingRoutes(app: FastifyInstance) {
         await prisma.foodRecord.deleteMany({ where: { id: candidates.record_id, user_id } });
       }
       await prisma.pendingRecord.update({ where: { id }, data: { status: "resolved" } });
+      // T37：删除确认进 L0——下一轮 AI 知道这条已经删了
+      await prisma.aiParseLog.create({
+        data: buildResolveLogData(user_id, {
+          action: "delete_confirm",
+          name: candidates.name,
+          record_id: candidates.record_id,
+          kind: candidates.kind ?? "food",
+        }),
+      });
       await recompute(user_id, today);
       const summary_card = await buildContextCard(user_id);
       // Trace: correction event（用户确认删除）
@@ -168,6 +178,11 @@ export async function pendingRoutes(app: FastifyInstance) {
 
       await prisma.pendingRecord.update({ where: { id }, data: { status: "resolved" } });
 
+      // T37：候选卡选定食物进 L0——即使还没落库，下一轮"再来一份"也知道指的是它
+      await prisma.aiParseLog.create({
+        data: buildResolveLogData(user_id, { action: "food_choice", food_name: food.name }),
+      });
+
       const portionCardMsg = await prisma.chatMessage.create({
         data: {
           user_id,
@@ -222,6 +237,16 @@ export async function pendingRoutes(app: FastifyInstance) {
     await prisma.pendingRecord.update({
       where: { id },
       data: { status: "resolved", candidates: resolvedCandidates as object },
+    });
+
+    // T37：份量确认进 L0，成为一轮完整对话（parsed_json 带食物锚点供指代）
+    await prisma.aiParseLog.create({
+      data: buildResolveLogData(user_id, {
+        action: "portion_choice",
+        food_name: food.name,
+        portion_label,
+        grams: weight_g,
+      }),
     });
 
     // 学习信号（LEARNING_SPEC §3）：predicted = AI 原估（chosen_label 档），final = 用户实选

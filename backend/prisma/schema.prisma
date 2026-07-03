@@ -178,14 +178,15 @@ model DailySummary {
 
 // ---------- AI 解析日志 ----------
 model AiParseLog {
-  id          String   @id @default(uuid())
-  user_id     String
-  input_text  String
-  parsed_json Json?
-  intent      String? // record | query | chat
-  confidence  Float?
-  status      String? // auto | pending | resolved | failed
-  created_at  DateTime @default(now())
+  id            String   @id @default(uuid())
+  user_id       String
+  input_text    String
+  parsed_json   Json?
+  intent        String? // record | query | chat | modify | discuss | resolve（卡片点选）
+  confidence    Float?
+  status        String? // auto | pending | resolved | failed
+  reply_summary String? // AI 回复摘要（T37 双向记忆）：模板回复直接存，自由回复截断 ~150 字
+  created_at    DateTime @default(now())
 
   user User @relation(fields: [user_id], references: [id])
 }

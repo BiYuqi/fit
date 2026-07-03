@@ -76,3 +76,67 @@ test("compressContext 无 at 的 turn 不带时间前缀（向后兼容）", () 
   const line = out.split("\n").find((l) => l.includes("无时间戳"))!;
   assert.match(line, /^\s*用户:"无时间戳"/);
 });
+
+// ═══ T37 双向记忆：TurnSummary.reply 渲染 + 截断护栏 ═══
+
+test("compressContext 渲染 AI 回复摘要（reply 段跟在动作后）", () => {
+  const pack = makePack({
+    recent_turns: [
+      { said: "蛋白质还差多少", intent: "query", reply: "还差 35g，建议来份鸡胸肉" },
+      { said: "行，来一份", intent: "record", foods: [{ name: "鸡胸肉", portion: "medium" }] },
+    ],
+  });
+  const out = compressContext(pack);
+  assert.match(out, /用户:"蛋白质还差多少" → 查询；AI:"还差 35g，建议来份鸡胸肉"/);
+  assert.match(out, /用户:"行，来一份" → 记录\(鸡胸肉\/medium\)/);
+});
+
+test("compressContext 渲染 resolve 轮（卡片确认 + 食物锚点）", () => {
+  const pack = makePack({
+    recent_turns: [
+      {
+        said: "[点选卡片]", intent: "resolve",
+        foods: [{ name: "煎饼果子", portion: "medium" }],
+        reply: "确认：煎饼果子 中份 450g",
+      },
+      { said: "[点选卡片]", intent: "resolve", reply: "已删除：牛肉面" },
+    ],
+  });
+  const out = compressContext(pack);
+  assert.match(out, /用户:"\[点选卡片\]" → 卡片确认\(煎饼果子\/medium\)；AI:"确认：煎饼果子 中份 450g"/);
+  // 无 foods（删除确认）不渲染空括号
+  assert.match(out, /用户:"\[点选卡片\]" → 卡片确认；AI:"已删除：牛肉面"/);
+});
+
+test("compressContext 无 reply 的 turn 渲染不带 AI 段（向后兼容旧日志）", () => {
+  const pack = makePack({ recent_turns: [{ said: "老日志", intent: "chat" }] });
+  const out = compressContext(pack);
+  const line = out.split("\n").find((l) => l.includes("老日志"))!;
+  assert.doesNotMatch(line, /AI:/);
+});
+
+test("compressContext 超长 said/reply 渲染后被截断（said≤60+…，reply≤150+…）", () => {
+  const longSaid = "长".repeat(500);
+  const longReply = "答".repeat(300);
+  const pack = makePack({ recent_turns: [{ said: longSaid, intent: "chat", reply: longReply }] });
+  const out = compressContext(pack);
+  const line = out.split("\n").find((l) => l.includes("长长长"))!;
+  const saidMatch = line.match(/用户:"([^"]*)"/)!;
+  const replyMatch = line.match(/AI:"([^"]*)"/)!;
+  assert.equal(saidMatch[1], "长".repeat(60) + "…");
+  assert.equal(replyMatch[1], "答".repeat(150) + "…");
+});
+
+test("compressContext 5 轮全量 L0 渲染文本 ≤ ~1200 字（上下文预算护栏）", () => {
+  const turns = Array.from({ length: 5 }, (_, i) => ({
+    said: `第${i}轮`.padEnd(500, "话"),
+    intent: "chat",
+    reply: "答".repeat(300),
+    at: new Date(),
+  }));
+  const out = compressContext(makePack({ recent_turns: turns }));
+  const l0Start = out.indexOf("【最近对话】");
+  const l0Block = out.slice(l0Start);
+  // 最坏情况每行 ≈ 时间8 + said 61 + reply 151 + 结构字符 ≈ 241，5 行 + 标题 ≈ 1220
+  assert.ok(l0Block.length <= 1250, `L0 块 ${l0Block.length} 字超预算`);
+});

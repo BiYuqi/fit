@@ -90,10 +90,11 @@ export interface RecordRef {
 }
 
 export interface TurnSummary {
-  said: string;                                  // 用户原话（来自 ai_parse_log.input_text）
-  intent: string | null;                         // record / query / chat
+  said: string;                                  // 用户原话（来自 ai_parse_log.input_text；卡片动作为 "[点选卡片]"）
+  intent: string | null;                         // record / query / chat / modify / discuss / resolve
   at?: Date;                                     // 发生时刻（ai_parse_log.created_at），供 L0 相对时间标注
-  foods?: Array<{ name: string; portion: string }>; // record 意图时的动作锚点
+  foods?: Array<{ name: string; portion: string }>; // record / resolve 意图时的动作锚点
+  reply?: string;                                // AI 回复摘要（ai_parse_log.reply_summary，T37 双向记忆）
 }
 
 export interface DaySummary {
@@ -224,12 +225,16 @@ export async function buildMemoryPack(user_id: string): Promise<MemoryPack> {
     .reverse()
     .map((log) => {
       const turn: TurnSummary = { said: log.input_text, intent: log.intent, at: log.created_at };
+      if (log.reply_summary) turn.reply = log.reply_summary;
       const pj = log.parsed_json as any;
       if (log.intent === "record" && Array.isArray(pj?.items)) {
         turn.foods = pj.items.map((it: any) => ({
           name: it.canonical || it.raw || "",
           portion: it.chosen_label || "",
         }));
+      } else if (log.intent === "resolve" && pj?.food_name) {
+        // 卡片点选轮（T37）：parsed_json 是 ResolveAction，food_name 作指代锚点
+        turn.foods = [{ name: pj.food_name, portion: pj.portion_label ?? "" }];
       }
       return turn;
     });
