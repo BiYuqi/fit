@@ -5,6 +5,9 @@ import jwtPlugin from "./plugins/jwt";
 import { authRoutes } from "./routes/auth";
 import { userRoutes } from "./routes/user";
 import { chatRoutes } from "./routes/chat";
+import { chatHistoryRoutes } from "./routes/chat-history";
+import { pendingRoutes } from "./routes/pending";
+import { recordsRoutes } from "./routes/records";
 import { dailyRoutes } from "./routes/daily";
 
 const app = Fastify({ logger: true });
@@ -18,6 +21,9 @@ app.register(jwtPlugin);
 app.register(authRoutes);
 app.register(userRoutes);
 app.register(chatRoutes);
+app.register(chatHistoryRoutes);
+app.register(pendingRoutes);
+app.register(recordsRoutes);
 app.register(dailyRoutes);
 
 // 公共路由

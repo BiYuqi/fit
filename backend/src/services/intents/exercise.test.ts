@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { resolveDuration } from "./chat";
+import { resolveDuration } from "./exercise";
 
 // ── resolveDuration ───────────────────────────────────────
 // 持续型运动用 duration_min，次数型用 reps 估算，
