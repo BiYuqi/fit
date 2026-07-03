@@ -48,7 +48,7 @@ iOS 26 Liquid Glass / Apple Intelligence：毛玻璃卡片、柔和半透明层�
 
 **关键交互态**：
 - 高置信 → 直接出 record_card。
-- 中/低置信 → 出 portion/candidate/clarify 卡；用户点选后该卡**替换为确认后的 record_card**。
+- 中/低置信 → 出 portion/candidate/clarify 卡。portion_card 点选后**替换为确认后的 record_card**；candidate_card 点选食物后**先出 portion_card 确认份量**，再出 record_card（两步串行，见 AI_PARSING_SPEC §4；一步化为暂定候选，见 FEATURE_CANDIDATES）。
 - **Pending 卡片过期**：portion_card / candidate_card 超过 **5 分钟**未操作即显示"已过期"，不可再交互。防止旧消息的 pending 卡片被误触后在新日期产生记录。
 - modify 修改（见 AI_PARSING_SPEC §8）：
   - 删除 → delete_confirm_card，**必须确认**后才删（破坏性）。

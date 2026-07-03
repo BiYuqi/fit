@@ -53,12 +53,12 @@ DeepSeek 输出（strict tool schema，zod 同构校验）：
 
 | 判定结果 | 行为 |
 |---|---|
-| 歧义（双信号任一为真） | CandidateCard：列出候选食物，每项显示默认中份热量，点击直接录入食物+份量，再点展开小/中/大换份量 |
+| 歧义（双信号任一为真） | CandidateCard：列出候选食物，每项显示默认中份热量；点击选定食物后再出 PortionCard 确认份量（两步串行） |
 | 不歧义 + 食物高 + 份量高 (>0.8) | 自动入库，直接反馈 record_card |
 | 不歧义 + 份量不确定 | PortionCard：份量给 小/中/大（含热量）让用户选 |
 | 食物低置信 (<0.5) | clarify_card（极少见，是解析失败兜底） |
 
-每张食物最多问一次（食物歧义优先于份量歧义），resolve 后不再追问份量。
+食物歧义优先于份量歧义：命中歧义先出 CandidateCard，选定食物后接 PortionCard 确认份量（现状为两步串行；「候选卡一步化」——点击即按默认档入库、档位卡上可改——为暂定候选方案，见 `FEATURE_CANDIDATES.md`）。
 中/低置信生成 `pending_record`，前端出对应卡片，用户选择后走 `/pending/:id/resolve`。
 
 > 以上为 `record` 路由。`modify`（改/删/追加）的路由与确认策略单独见 §8。
