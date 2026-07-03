@@ -7,6 +7,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "test": "node --require tsx/cjs --test \"src/**/*.test.ts\"",
+    "eval": "tsx eval/run.ts",
     "job:implicit-accept": "tsx scripts/implicit-accept-job.ts",
     "learning:metrics": "tsx scripts/learning-metrics.ts"
   },
@@ -28,6 +29,7 @@
     "fastify-plugin": "^6.0.0",
     "prisma": "^7.0.0",
     "tsx": "^4.0.0",
-    "typescript": "^6.0.0"
+    "typescript": "^6.0.0",
+    "yaml": "^2.9.0"
   }
 }

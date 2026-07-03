@@ -1,0 +1,30 @@
+# 指代与续报：份量卡两步、餐次继承、modify 指代修改
+name: 指代与续报（份量卡 → 续报继承餐次 → 指代改份量）
+turns:
+  # "一碗"份量不确定（0.6~0.75）→ 份量卡，不直接入库
+  - say: "中午吃了一碗米饭"
+    expect:
+      intent: record
+      db:
+        pending_record: { type: portion_choice }
+        food_record_count: 0
+
+  - resolve: { choice: medium }
+    expect:
+      db:
+        food_record: { where: { food_name: "米饭" }, meal_type: lunch }
+        pending_record: null
+
+  # 续报："还有X"应跟随刚才那一餐（午餐），个数明确自动入库
+  - say: "还有一个鸡蛋"
+    expect:
+      intent: record
+      db:
+        food_record: { meal_type: lunch }
+
+  # 指代修改：从上下文找到米饭那条，改档位
+  - say: "刚才那碗米饭改成小份"
+    expect:
+      intent: modify
+      db:
+        food_record: { where: { food_name: "米饭" }, portion_label: small }

@@ -1,0 +1,27 @@
+# 歧义候选卡两步流（对齐 AI_PARSING_SPEC §4 现状：候选卡 → 份量卡 → 入库）
+# 若将来采纳"候选卡一步化"（FEATURE_CANDIDATES P2），第二轮断言需要改
+name: 歧义候选卡两步流（煎饼）
+turns:
+  # "煎饼"是提示词里的歧义示例 → 候选卡
+  - say: "早上吃了一个煎饼"
+    expect:
+      intent: record
+      db:
+        pending_record: { type: food_choice }
+        last_card: candidate_card
+        food_record_count: 0
+
+  # 现状两步：选定食物后出份量卡，尚未入库
+  - resolve: { choice: "煎饼果子" }
+    expect:
+      db:
+        pending_record: { type: portion_choice }
+        last_card: portion_card
+        food_record_count: 0
+
+  - resolve: { choice: medium }
+    expect:
+      db:
+        food_record: { meal_type: breakfast }
+        pending_record: null
+        food_record_count: 1

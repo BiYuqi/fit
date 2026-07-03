@@ -1,0 +1,50 @@
+# 2026-07-03 outoftoken 真实案例：葱花饼修正闭环
+# 暴露的缺陷：修正表达无协议可落地（T40）、只读路径谎称已更新（T39）、纠正不沉淀（T37）
+name: 葱花饼修正闭环（outoftoken 真实案例）
+turns:
+  # T41 首日抓获的真 bug：模型返回 chosen_label=custom 但 portions 无 custom 条目，
+  # 代码回退 portions[0]（小份80g），用户明示的 100g 被静默篡改。间歇复现（模型形态随机）
+  - say: "晚上吃了100克葱花饼 煎的"
+    known_fail: T42
+    expect:
+      intent: record
+      db:
+        food_record: { weight_g: 100, meal_type: dinner }
+
+  # "无油款"是影响营养口径的属性修正，应触发 modify 重估；现状被判 chat 并跑题反问
+  - say: "无油款"
+    known_fail: T40
+    expect:
+      intent: modify
+
+  # 用户解释性质疑：chat 或 discuss 都算合理路由
+  - say: "我说我吃的葱花饼不是用油煎的，你热量算高了吧"
+    expect:
+      intent: [chat, discuss]
+      reply_forbid: ["已更新", "已修改"]
+
+  # 核心缺陷轮：应为 modify + 热量落库 180；现状判 discuss（只读）且谎称"已更新"
+  - say: "记录成180kcal"
+    known_fail: T40
+    expect:
+      intent: modify
+      db:
+        food_record: { where: { food_name: "葱花饼" }, calories: 180 }
+      reply_forbid: ["已更新(?![\\s\\S]*180)"]
+
+  # 上一轮真改成功后，这里必须答修正后的数字。
+  # 注意必须配落库断言：AI 会从 L0 鹦鹉学舌"180"，但库里仍是 267——嘴对账不对也是缺陷
+  - say: "今晚都吃了啥"
+    known_fail: T40
+    expect:
+      intent: query
+      reply_contain: ["180"]
+      db:
+        food_record: { where: { food_name: "葱花饼" }, calories: 180 }
+
+  # 续报：餐次继承晚餐；克数明确应自动入库
+  - say: "晚饭再加80克鸡蛋葱花煎饼"
+    expect:
+      intent: [record, modify]
+      db:
+        food_record: { weight_g: 80, meal_type: dinner }
