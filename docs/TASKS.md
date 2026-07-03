@@ -4,7 +4,7 @@
 > 用法：一次只做一个任务，按下方顺序，自测验收通过再下一个。
 > 状态：⬜待办 / 🔄进行中 / ✅完成。**任务验收通过后更新两处**：本表该行 + `tasks/Txx.md` 顶部状态行。
 
-**进度：38 / 42**　里程碑：✅ M1 命令行心跳(T07)　✅ M2 后端全通(T12)　✅ 前端可用(T19)　⬜ 可出包(T21)　✅ E 对话上下文(T23)　✅ L 学习闭环(T31)　⬜ C 对话智能(T40)
+**进度：39 / 42**　里程碑：✅ M1 命令行心跳(T07)　✅ M2 后端全通(T12)　✅ 前端可用(T19)　⬜ 可出包(T21)　✅ E 对话上下文(T23)　✅ L 学习闭环(T31)　⬜ C 对话智能(T40)
 
 ## 分轨
 - **基建 S**：T01
@@ -104,7 +104,7 @@ T01 → T02 → T03 → T04 → T05 → T06 → T07(✅M1)
 | ✅ | T36 | tasks/T36-context-completeness.md | 上下文补全：week/month 聚合注入 compressContext + L0 时间标注 |
 | ✅ | T37 | tasks/T37-bidirectional-memory.md | 双向记忆：ai_parse_log.reply_summary 回填 + 卡片动作进 L0 |
 | ✅ | T38 | tasks/T38-pending-aware-parse.md | pending 感知：注入待确认卡 + resolve_pending 意图，文字应答卡片 |
-| ⬜ | T39 | tasks/T39-answer-quality.md | 回答质量：chat/query/discuss 升 pro + 人设提示词 + 只读路径禁谎称操作 |
+| ✅ | T39 | tasks/T39-answer-quality.md | 回答质量：chat/query/discuss 升 pro + 人设提示词 + 只读路径禁谎称操作 |
 | ⬜ | T40 | tasks/T40-food-correction.md | 食物修正闭环：改热量(用户真值) + 属性修正重估 + alias 自愈（C 里程碑） |
 | ✅ | T41 | tasks/T41-conversation-eval.md | 对话回归评测集：一次性账号回放真实失败案例，意图/落库/红线三层断言 |
 | ✅ | T42 | tasks/T42-portion-label-guard.md | chosen_label 护栏：用户明示克数被静默改档（T41 首日抓获，数据污染级） |

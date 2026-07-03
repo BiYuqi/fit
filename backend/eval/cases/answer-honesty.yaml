@@ -1,0 +1,26 @@
+# T39：chat/query/discuss 升 pro + 人设提示词——只读路径禁止谎称操作（2026-07-03 真实案例）
+name: 只读路径禁止谎称操作（discuss/chat 红线）
+turns:
+  - say: "早上吃了一碗米饭"
+    expect:
+      intent: record
+      db:
+        pending_record: { type: portion_choice }
+
+  - resolve: { choice: medium }
+    expect:
+      db:
+        food_record: { where: { food_name: "米饭" } }
+        pending_record: null
+
+  # discuss：针对这条记录提问，只读路径——绝不能说已经改过数据
+  - say: "这条记录里的克数是怎么估的"
+    expect:
+      intent: discuss
+      reply_forbid: ["已更新", "已修改", "已记录", "已删除"]
+
+  # 元问题：问 AI 会不会真的去改数据库，属于只读闲聊，不该触发 modify 也不该谎称已操作
+  - say: "如果我让你把这条记成80大卡，你现在真的会去改数据库吗"
+    expect:
+      intent: [chat, discuss]
+      reply_forbid: ["已更新", "已修改", "已删除"]

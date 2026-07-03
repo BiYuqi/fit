@@ -1,6 +1,6 @@
 # T39 — 回答质量：chat/query/discuss 升 pro + 人设提示词（对话智能）
 
-**状态**：⬜待办
+**状态**：✅已完成
 
 **目标**：面向用户的**文字回复**（answerChat / answerQuery / answerDiscuss）从"机械、单薄"升级为"专业、有人味"。解析（parse）不动，仍是 flash 主力 + 低置信升 pro。
 **依赖**：无硬依赖（建议在 T36/T37 之后做，上下文补全后提示词才有料可用）　**关注文档**：AI_PARSING_SPEC §1、CALORIE_ENGINE（口径引用）
