@@ -77,6 +77,7 @@ model User {
   learning_events  LearningEvent[]
   weight_logs      WeightLog[]
   food_aliases     UserFoodAlias[]
+  biases           UserBias[]
 }
 
 // ---------- 食物标准库（seed 导入的目标表）----------
@@ -122,6 +123,7 @@ model FoodRecord {
   raw_input          String?
   parse_log_id       String?
   alias_canonical    String? // 若由用户食物直连(streak≥2)自动匹配，存匹配用的 canonical；供撤销/改食物联动清 alias streak（T30）
+  predicted_grams    Float? // AI 原估克数（applyBias 之前）；隐式确认 job 与 discuss 偏差说明的 predicted 基准（T31）
   date               DateTime     @db.Date
   created_at         DateTime     @default(now())
 
@@ -224,6 +226,8 @@ model LearningEvent {
   food_record FoodRecord?    @relation(fields: [food_record_id], references: [id], onDelete: SetNull)
   food        FoodStandard?  @relation(fields: [food_id], references: [id], onDelete: SetNull)
 
+  bias_updates BiasUpdateLog[]
+
   @@index([user_id, food_id, created_at])
 }
 
@@ -237,6 +241,42 @@ model WeightLog {
   user User @relation(fields: [user_id], references: [id])
 
   @@id([user_id, date])
+}
+
+// 三层偏差后验（LEARNING_SPEC §4 §5）：一行 = 一个 (scope, scope_key) 的正态后验（log 克数比）
+model UserBias {
+  user_id    String
+  scope      String // food | category | scene
+  scope_key  String // food_id / 类目名 / 场景名
+  mu         Float    @default(0) // log-ratio 后验均值
+  sigma2     Float    @default(0.09) // 后验方差（初始≈±35%不确定）
+  n_eff      Float    @default(0) // 有效样本数（封顶 20，防僵化=防漂移）
+  updated_at DateTime @default(now()) @updatedAt
+
+  user User @relation(fields: [user_id], references: [id])
+
+  @@id([user_id, scope, scope_key])
+}
+
+// 模型更新审计（可回放回滚、排查漂移；clamped 标记污染防护触发）
+model BiasUpdateLog {
+  id            String   @id @default(uuid())
+  event_id      String
+  user_id       String
+  scope         String
+  scope_key     String
+  mu_before     Float
+  sigma2_before Float
+  n_eff_before  Float
+  mu_after      Float
+  sigma2_after  Float
+  n_eff_after   Float
+  clamped       Boolean  @default(false)
+  created_at    DateTime @default(now())
+
+  event LearningEvent @relation(fields: [event_id], references: [id])
+
+  @@index([user_id, scope, scope_key, created_at])
 }
 
 // 用户食物直连：canonical → 用户惯用的 food_id，streak≥2 时跳过 CandidateCard（T30）

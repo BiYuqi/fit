@@ -1,7 +1,7 @@
 import { matchFood, matchFoodCandidates } from "../matcher";
 import { itemNutrition } from "../calc";
 import { prisma } from "../../lib/prisma";
-import { getFoodAlias } from "../learning";
+import { getFoodAlias, getBiases, applyBias, biasEnabled } from "../learning";
 import type { FoodItem } from "../../ai/schema";
 import type { FoodStandard, MealType, PortionLabel, PendingRecord } from "@prisma/client";
 import type { ItemTrace } from "../trace";
@@ -182,6 +182,14 @@ export async function processFoodItem(item: FoodItem, ctx: ItemCtx): Promise<Ite
     food = await matchFood(query, raw, user_id);
   }
 
+  // ── 份量偏差应用（LEARNING_SPEC §5 §6，T31）──
+  // 食物确定后，对各档克数应用该用户学到的份量偏差；冷启动/开关关闭时原样返回。
+  // rawChosen 是 AI 原估（学习事件的 predicted 基准），biasedChosen 是展示/入库的值。
+  const biases = biasEnabled() ? await getBiases(user_id, food.id, food.category) : {};
+  const biasedPortions = portions.map((p) => ({ ...p, grams: applyBias(p.grams, biases) }));
+  const rawChosen = portions.find((p) => p.label === chosen_label) ?? portions[0];
+  const biasedChosen = biasedPortions.find((p) => p.label === chosen_label) ?? biasedPortions[0];
+
   // ── normalize：canonical → food_standard 映射 ──
   if (itrace) {
     const matchPath = matchedByHabit ? "user_alias" : inferMatchPath(food, query, dbCandidates);
@@ -239,9 +247,8 @@ export async function processFoodItem(item: FoodItem, ctx: ItemCtx): Promise<Ite
       );
     }
 
-    const chosenPortion = portions.find((p) => p.label === chosen_label) ?? portions[0];
-    const weight_g = chosenPortion.grams;
-    const unit = (chosenPortion as any)?.unit ?? "g";
+    const weight_g = biasedChosen.grams;
+    const unit = (biasedChosen as any)?.unit ?? "g";
     const nutrition = itemNutrition(food, weight_g);
 
     const record = await prisma.foodRecord.create({
@@ -252,6 +259,7 @@ export async function processFoodItem(item: FoodItem, ctx: ItemCtx): Promise<Ite
         food_confidence, portion_confidence, source, raw_input: raw, date: dateObj,
         parse_log_id: itrace?.traceId || null,
         alias_canonical: matchedByHabit ? query : null,
+        predicted_grams: rawChosen.grams,
       },
     });
 
@@ -275,6 +283,10 @@ export async function processFoodItem(item: FoodItem, ctx: ItemCtx): Promise<Ite
       payload.matched_by_habit = true;
       payload.escape = { canonical: query, portions, chosen_label, ai_candidates };
     }
+    // 偏差修正生效时带上 from/to，供 discuss 解释与 debug（前端可不展示）
+    if (biasedChosen.grams !== rawChosen.grams) {
+      payload.bias_applied = { from: rawChosen.grams, to: biasedChosen.grams };
+    }
 
     return {
       record,
@@ -297,14 +309,19 @@ export async function processFoodItem(item: FoodItem, ctx: ItemCtx): Promise<Ite
     );
   }
 
-  const portionsWithCal = portions.map((p) => ({
+  // 份量卡展示与候选克数都用偏差修正后的值；predicted_grams 保留 AI 原估作学习基准
+  const portionsWithCal = biasedPortions.map((p) => ({
     ...p,
     calories: p.grams > 0 ? Math.round(Number(food.calories_100g) * p.grams / 100) : undefined,
   }));
   const pr = await prisma.pendingRecord.create({
     data: {
       user_id, type: "portion_choice", raw_input: raw,
-      candidates: { food_id: food.id, food_name: food.name, meal_type, source, portions, chosen_label } as object,
+      candidates: {
+        food_id: food.id, food_name: food.name, meal_type, source,
+        portions: biasedPortions, chosen_label,
+        predicted_grams: rawChosen.grams, applied_grams: biasedChosen.grams,
+      } as object,
     },
   });
 

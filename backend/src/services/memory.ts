@@ -1,5 +1,37 @@
 import { prisma } from "../lib/prisma";
 import { buildContextCard, type ContextCard } from "./summary";
+import { biasEnabled } from "./learning";
+
+// 份量倾向的显著性门槛：|μ|≥0.15（≈±16%）且 n_eff≥2 才算"习惯"，避免噪声进 prompt
+const HABIT_MU_MIN = 0.15;
+const HABIT_N_MIN = 2;
+const HABIT_LIMIT = 5;
+
+async function buildPortionHabits(user_id: string): Promise<PortionHabit[]> {
+  if (!biasEnabled()) return [];
+  try {
+    const rows = await prisma.userBias.findMany({
+      where: { user_id, scope: "food", n_eff: { gte: HABIT_N_MIN } },
+      orderBy: { n_eff: "desc" },
+      take: 20,
+    });
+    const significant = rows.filter((r) => Math.abs(r.mu) >= HABIT_MU_MIN).slice(0, HABIT_LIMIT);
+    if (significant.length === 0) return [];
+    const foods = await prisma.foodStandard.findMany({
+      where: { id: { in: significant.map((r) => r.scope_key) } },
+      select: { id: true, name: true },
+    });
+    const nameById = new Map(foods.map((f) => [f.id, f.name]));
+    return significant
+      .filter((r) => nameById.has(r.scope_key))
+      .map((r) => ({
+        name: nameById.get(r.scope_key)!,
+        tendency: r.mu > 0 ? ("large" as const) : ("small" as const),
+      }));
+  } catch {
+    return [];
+  }
+}
 
 // ─────────────────────────────────────────────
 // 对话记忆包（AI_PARSING_SPEC §7）
@@ -72,12 +104,18 @@ export interface DaySummary {
   c: number;
 }
 
+export interface PortionHabit {
+  name: string; // 食物名
+  tendency: "large" | "small"; // 相对 AI 估算的方向（不给数字，数字修正在后端 applyBias）
+}
+
 export interface MemoryPack {
   profile: MemoryProfile;
   card: ContextCard;
   recent_records: RecordRef[];
   recent_turns: TurnSummary[];
   recent_days: DaySummary[];   // 近7天每日汇总（不含今天）
+  portion_habits: PortionHabit[]; // 学到的份量倾向（LEARNING_SPEC §6，T31），只影响 chosen_label
 }
 
 export async function buildMemoryPack(user_id: string): Promise<MemoryPack> {
@@ -89,7 +127,7 @@ export async function buildMemoryPack(user_id: string): Promise<MemoryPack> {
   const yesterday = new Date(todayDate);
   yesterday.setUTCDate(yesterday.getUTCDate() - 1);
 
-  const [user, card, foods, exercises, logs, summaryRows, liveAgg] = await Promise.all([
+  const [user, card, foods, exercises, logs, summaryRows, liveAgg, portion_habits] = await Promise.all([
     prisma.user.findUniqueOrThrow({ where: { id: user_id } }),
     buildContextCard(user_id),
     prisma.foodRecord.findMany({
@@ -117,6 +155,7 @@ export async function buildMemoryPack(user_id: string): Promise<MemoryPack> {
       where: { user_id, date: { gte: threeDaysAgo, lte: yesterday } },
       _sum: { calories: true, protein: true, fat: true, carbs: true },
     }),
+    buildPortionHabits(user_id),
   ]);
 
   // 合并：summary 优先，没有则用 foodRecord 实时聚合
@@ -209,5 +248,6 @@ export async function buildMemoryPack(user_id: string): Promise<MemoryPack> {
     recent_records,
     recent_turns,
     recent_days,
+    portion_habits,
   };
 }

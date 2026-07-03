@@ -17,7 +17,7 @@ function todayStrCtx(): string {
 }
 
 export function compressContext(pack: MemoryPack): string {
-  const { profile: p, card, recent_records, recent_turns, recent_days } = pack;
+  const { profile: p, card, recent_records, recent_turns, recent_days, portion_habits } = pack;
   const lines: string[] = [];
 
   // 日期锚点：让 AI 知道"今天/昨天/前天"对应的实际日期
@@ -36,6 +36,12 @@ export function compressContext(pack: MemoryPack): string {
   lines.push(
     `【今日进度】摄入${card.today.in}kcal 总消耗${card.today.out}kcal 实际缺口${card.today.deficit}kcal 目标摄入${card.targets.calories}kcal 还可吃${card.today.remaining}kcal 蛋白${card.today.p}/${card.targets.protein}g`
   );
+  // 学到的份量倾向（LEARNING_SPEC §6，T31）：只影响 chosen_label 选档，不给数字——克数修正在后端 applyBias
+  if (portion_habits && portion_habits.length > 0) {
+    lines.push(
+      `【份量习惯】${portion_habits.map((h) => `${h.name}:常选${h.tendency === "large" ? "大" : "小"}份`).join(" ")}`
+    );
+  }
   // 近3天每日明细（有记录的天才输出）
   if (recent_days.length > 0) {
     lines.push("【近3日每日摄入】");

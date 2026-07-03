@@ -22,6 +22,7 @@ export interface LearningEventInput {
   food_id?: string | null;
   category?: string | null;
   predicted_grams: number;
+  applied_grams?: number; // applyBias 之后展示给用户的克数；缺省 = predicted（无修正）
   final_grams: number;
   predicted_label?: string | null;
   final_label?: string | null;
@@ -30,6 +31,7 @@ export interface LearningEventInput {
 }
 
 // 学习信号写入失败不影响主流程——异常一律吞掉，只在测试/排查时靠日志发现。
+// 写入后立即在线更新 user_bias（LEARNING_SPEC §5）——事件即训练，无独立训练管线。
 export async function recordLearningEvent(ev: LearningEventInput): Promise<void> {
   try {
     const signal_weight = SIGNAL_WEIGHTS[ev.signal_type];
@@ -38,14 +40,14 @@ export async function recordLearningEvent(ev: LearningEventInput): Promise<void>
         ? Math.log(ev.final_grams / ev.predicted_grams)
         : null;
 
-    await prisma.learningEvent.create({
+    const event = await prisma.learningEvent.create({
       data: {
         user_id: ev.user_id,
         food_record_id: ev.food_record_id ?? null,
         food_id: ev.food_id ?? null,
         category: ev.category ?? null,
         predicted_grams: ev.predicted_grams,
-        applied_grams: ev.predicted_grams, // T31 前恒等于 predicted_grams（applyBias 尚不存在）
+        applied_grams: ev.applied_grams ?? ev.predicted_grams,
         final_grams: ev.final_grams,
         predicted_label: ev.predicted_label ?? null,
         final_label: ev.final_label ?? null,
@@ -55,6 +57,14 @@ export async function recordLearningEvent(ev: LearningEventInput): Promise<void>
         parse_log_id: ev.parse_log_id ?? null,
       },
     });
+
+    // 权重为 0（delete）或误差不可算的事件只留档不训练
+    if (signal_weight > 0 && log_ratio != null) {
+      await updateBiasForEvent(event.id, ev.user_id, log_ratio, signal_weight, {
+        food_id: ev.food_id ?? null,
+        category: ev.category ?? null,
+      });
+    }
   } catch {
     // 静默失败，不影响主流程
   }
@@ -89,12 +99,16 @@ export async function runImplicitAcceptJob(hoursThreshold = 24): Promise<number>
   });
 
   for (const fr of candidates) {
+    // predicted 用 AI 原估（predicted_grams，T31 起有值），不用 weight_g：
+    // 若 weight_g 是 applyBias 调整后的值，用户静置=接受了调整，误差应为 ln(applied/raw)
+    // ——强化已学到的偏差；若用 weight_g 当 predicted，e 恒为 0，会把 μ 往 0 拉、侵蚀偏差。
     await recordLearningEvent({
       user_id: fr.user_id,
       food_record_id: fr.id,
       food_id: fr.food_id,
       category: fr.food?.category ?? null,
-      predicted_grams: fr.weight_g,
+      predicted_grams: fr.predicted_grams ?? fr.weight_g,
+      applied_grams: fr.weight_g,
       final_grams: fr.weight_g,
       predicted_label: fr.portion_label,
       final_label: fr.portion_label,
@@ -152,5 +166,151 @@ export async function resetFoodAliasStreak(user_id: string, canonical: string): 
     });
   } catch {
     // 静默失败，不影响主流程
+  }
+}
+
+// ---------- 份量偏差学习（LEARNING_SPEC §4 §5，T31）----------
+// 误差 = log 克数比 e = ln(final/predicted)。每层维护正态后验 (μ, σ², n_eff)。
+// 常数是 LEARNING_SPEC §5 的唯一实现，改动须同步文档。
+
+export const PRIOR_SIGMA2 = 0.09; // 先验方差：ln²(1.35)，默认信 AI ±35%
+export const OBS_SIGMA2 = 0.04; // 单次观测噪声（用户自己也估不准）
+export const N_EFF_CAP = 20; // 有效样本封顶 → 永远保留可塑性，防僵化
+export const CLAMP = Math.log(3); // 单次观测截断 ±ln(3)，防污染
+export const MULT_RANGE: [number, number] = [0.6, 1.8]; // 最终修正倍率硬边界，防漂移
+export const TRUST_K = 4; // 修正强度渐进：证据≈4 次时用一半力
+
+export interface Bias {
+  mu: number;
+  sigma2: number;
+  n_eff: number;
+}
+
+export const DEFAULT_BIAS: Bias = { mu: 0, sigma2: PRIOR_SIGMA2, n_eff: 0 };
+
+// ── 更新（纯函数，供单测）：一次观测的 Bayesian 共轭更新 ──
+export function updateBias(prior: Bias, e: number, signalWeight: number): { post: Bias; clamped: boolean } {
+  // 1. 污染防护：截断离谱观测（"改成9999克"或手滑）
+  const eClamped = Math.max(-CLAMP, Math.min(CLAMP, e));
+  const clamped = eClamped !== e;
+  // 2. 离群降权：偏离当前后验 >2σ 的观测，权重再砍半（不拒绝，只怀疑）
+  const dev = Math.abs(eClamped - prior.mu) / Math.sqrt(prior.sigma2 + OBS_SIGMA2);
+  const w = signalWeight * (dev > 2 ? 0.5 : 1);
+  // 3. 精度加权平均——数学上等价于自适应 EMA：数据少时步长大，数据多时步长小
+  const precPrior = 1 / prior.sigma2;
+  const precObs = w / OBS_SIGMA2;
+  const mu = (precPrior * prior.mu + precObs * eClamped) / (precPrior + precObs);
+  const sigma2Raw = 1 / (precPrior + precObs);
+  // 4. 防漂移：n_eff 封顶 = 观测计数带遗忘；σ² 保底 → 模型永远"愿意改主意"
+  const n_eff = Math.min(prior.n_eff + w, N_EFF_CAP);
+  return {
+    post: { mu, sigma2: Math.max(sigma2Raw, PRIOR_SIGMA2 / N_EFF_CAP), n_eff },
+    clamped,
+  };
+}
+
+// ── 应用（纯函数，供单测）：分层收缩融合 + trust 渐进 + 硬边界 + 取整5g ──
+export function applyBias(
+  predictedGrams: number,
+  biases: { food?: Bias | null; category?: Bias | null; scene?: Bias | null },
+): number {
+  // 按后验精度加权融合三层（哪层数据足，哪层说话响）；数据不足的层自动沉默
+  let num = 0;
+  let den = 0;
+  for (const b of [biases.food, biases.category, biases.scene]) {
+    if (!b || b.n_eff < 1) continue; // 至少 1 个有效观测才发言
+    const prec = b.n_eff / b.sigma2;
+    num += prec * b.mu;
+    den += prec;
+  }
+  if (den === 0) return predictedGrams; // 冷启动：原样返回 AI 估算
+  const muBlend = num / den;
+  // 不确定时少改：修正强度随总证据量渐进（0→1），证据≈TRUST_K 次时用一半力
+  const trust = den / (den + TRUST_K / PRIOR_SIGMA2);
+  const mult = Math.exp(muBlend * trust);
+  const safe = Math.max(MULT_RANGE[0], Math.min(MULT_RANGE[1], mult));
+  return Math.round((predictedGrams * safe) / 5) * 5; // 取整到 5g，显示友好
+}
+
+// 应用开关：LEARNING_BIAS=off 一键关闭克数修正（采集不受影响）
+export function biasEnabled(): boolean {
+  return process.env.LEARNING_BIAS !== "off";
+}
+
+// ── 持久化：读某用户对某食物的分层偏差（food + category；scene 层 T32 接入）──
+export async function getBiases(
+  user_id: string,
+  food_id: string | null,
+  category: string | null,
+): Promise<{ food?: Bias | null; category?: Bias | null }> {
+  try {
+    const keys: Array<{ scope: string; scope_key: string }> = [];
+    if (food_id) keys.push({ scope: "food", scope_key: food_id });
+    if (category) keys.push({ scope: "category", scope_key: category });
+    if (keys.length === 0) return {};
+    const rows = await prisma.userBias.findMany({
+      where: { user_id, OR: keys },
+    });
+    return {
+      food: rows.find((r) => r.scope === "food") ?? null,
+      category: rows.find((r) => r.scope === "category") ?? null,
+    };
+  } catch {
+    return {};
+  }
+}
+
+// 便捷入口：对一个克数应用该用户对该食物的学习偏差。开关关闭/无数据时原样返回。
+export async function applyBiasToGrams(
+  user_id: string,
+  food_id: string | null,
+  category: string | null,
+  grams: number,
+): Promise<number> {
+  if (!biasEnabled()) return grams;
+  const biases = await getBiases(user_id, food_id, category);
+  return applyBias(grams, biases);
+}
+
+// ── 在线更新：一个学习事件更新 food/category 两层后验，前后状态写 bias_update_log ──
+async function updateBiasForEvent(
+  event_id: string,
+  user_id: string,
+  e: number,
+  signalWeight: number,
+  scopes: { food_id: string | null; category: string | null },
+): Promise<void> {
+  const layers: Array<{ scope: string; scope_key: string }> = [];
+  if (scopes.food_id) layers.push({ scope: "food", scope_key: scopes.food_id });
+  if (scopes.category) layers.push({ scope: "category", scope_key: scopes.category });
+
+  for (const { scope, scope_key } of layers) {
+    const existing = await prisma.userBias.findUnique({
+      where: { user_id_scope_scope_key: { user_id, scope, scope_key } },
+    });
+    const prior: Bias = existing ?? DEFAULT_BIAS;
+    const { post, clamped } = updateBias(prior, e, signalWeight);
+
+    await prisma.userBias.upsert({
+      where: { user_id_scope_scope_key: { user_id, scope, scope_key } },
+      update: { mu: post.mu, sigma2: post.sigma2, n_eff: post.n_eff },
+      create: { user_id, scope, scope_key, mu: post.mu, sigma2: post.sigma2, n_eff: post.n_eff },
+    });
+
+    await prisma.biasUpdateLog.create({
+      data: {
+        event_id,
+        user_id,
+        scope,
+        scope_key,
+        mu_before: prior.mu,
+        sigma2_before: prior.sigma2,
+        n_eff_before: prior.n_eff,
+        mu_after: post.mu,
+        sigma2_after: post.sigma2,
+        n_eff_after: post.n_eff,
+        clamped,
+      },
+    });
   }
 }

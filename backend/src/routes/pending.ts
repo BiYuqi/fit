@@ -6,7 +6,7 @@ import { matchFood } from "../services/matcher";
 import { itemNutrition } from "../services/calc";
 import { recompute, buildContextCard } from "../services/summary";
 import { recordDeleteCorrection, recordResolveCorrection } from "../services/trace";
-import { recordLearningEvent, upsertFoodAlias } from "../services/learning";
+import { recordLearningEvent, upsertFoodAlias, getBiases, applyBias, biasEnabled } from "../services/learning";
 import type { MealType, PortionLabel } from "@prisma/client";
 
 const ResolveBodySchema = z.object({
@@ -102,7 +102,8 @@ export async function pendingRoutes(app: FastifyInstance) {
       const predictedPortion = portions.find((p) => p.label === candidates.chosen_label)
         ?? portions.find((p) => p.label === "medium")
         ?? portions[0];
-      predictedGrams = predictedPortion?.grams;
+      // T31 起 candidates.portions 是偏差修正后的克数；学习基准（predicted）用建卡时存的 AI 原估
+      predictedGrams = candidates.predicted_grams ?? predictedPortion?.grams;
       predictedLabel = predictedPortion?.label ?? candidates.chosen_label;
 
       if (typeof choice === "object" && "grams" in choice) {
@@ -128,11 +129,22 @@ export async function pendingRoutes(app: FastifyInstance) {
         upsertFoodAlias(user_id, aliasCanonical, food.id);
       }
 
+      // 份量偏差（LEARNING_SPEC §5，T31）：候选卡阶段食物未知没法修正，
+      // 此刻食物已定 → 对各档克数应用偏差；predicted_grams 保留 AI 原估作学习基准
       const portionsList: Array<{ label: string; grams: number }> = candidates.portions ?? [];
-      const portionsWithCal = portionsList.map((p) => ({
-        ...p,
-        calories: p.grams > 0 ? Math.round(Number(food.calories_100g) * p.grams / 100) : undefined,
-      }));
+      const rawChosen = portionsList.find((p) => p.label === candidates.chosen_label)
+        ?? portionsList.find((p) => p.label === "medium")
+        ?? portionsList[0];
+      const biases = biasEnabled() ? await getBiases(user_id, food.id, food.category) : {};
+      const portionsWithCal = portionsList.map((p) => {
+        const grams = applyBias(p.grams, biases);
+        return {
+          ...p,
+          grams,
+          calories: grams > 0 ? Math.round(Number(food.calories_100g) * grams / 100) : undefined,
+        };
+      });
+      const appliedChosen = portionsWithCal.find((p) => p.label === (rawChosen?.label ?? "medium"));
 
       const newPr = await prisma.pendingRecord.create({
         data: {
@@ -146,6 +158,8 @@ export async function pendingRoutes(app: FastifyInstance) {
             source,
             portions: portionsWithCal,
             chosen_label: candidates.chosen_label,
+            predicted_grams: rawChosen?.grams,
+            applied_grams: appliedChosen?.grams,
           } as object,
         },
       });
@@ -191,6 +205,7 @@ export async function pendingRoutes(app: FastifyInstance) {
         source,
         raw_input: pr.raw_input,
         date: dateObj,
+        predicted_grams: predictedGrams ?? null,
       },
     });
 
@@ -206,7 +221,7 @@ export async function pendingRoutes(app: FastifyInstance) {
       data: { status: "resolved", candidates: resolvedCandidates as object },
     });
 
-    // 学习信号（LEARNING_SPEC §3）：predicted = AI chosen_label 档克数，final = 用户实选
+    // 学习信号（LEARNING_SPEC §3）：predicted = AI 原估（chosen_label 档），final = 用户实选
     if (predictedGrams != null && learningSignal) {
       recordLearningEvent({
         user_id,
@@ -214,6 +229,7 @@ export async function pendingRoutes(app: FastifyInstance) {
         food_id: food.id,
         category: food.category,
         predicted_grams: predictedGrams,
+        applied_grams: candidates.applied_grams ?? predictedGrams,
         final_grams: weight_g,
         predicted_label: predictedLabel ?? null,
         final_label: portion_label,

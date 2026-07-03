@@ -52,6 +52,7 @@ export type RecordCardPayload = {
   undo?: RecordUndo; // modify 的 update/append 直执行时带，支持撤销
   matched_by_habit?: boolean; // 用户食物直连（streak≥2）自动匹配，见 LEARNING_SPEC §6 §7
   escape?: FoodAliasEscape; // 「不是它？」逃生口所需数据
+  bias_applied?: { from: number; to: number }; // 份量偏差修正 AI原估→实记（T31，前端可不展示，discuss/debug 用）
 };
 
 export type DeleteConfirmCardPayload = {

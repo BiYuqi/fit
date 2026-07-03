@@ -69,7 +69,7 @@ export async function answerChat(text: string, pack: MemoryPack, userId: string)
 export async function answerDiscuss(
   question: string,
   target: RecordRef,
-  fullRecord: { portion_label: string; food_confidence: number; portion_confidence: number; raw_input: string | null; food: { name: string; calories_100g: unknown } | null } | null,
+  fullRecord: { portion_label: string; food_confidence: number; portion_confidence: number; raw_input: string | null; predicted_grams?: number | null; food: { name: string; calories_100g: unknown } | null } | null,
   pack: MemoryPack,
   userId: string,
 ): Promise<{
@@ -93,8 +93,16 @@ export async function answerDiscuss(
       if (fullRecord.food) {
         detail += `\n- 食物库：${fullRecord.food.name} 每100g ${Math.round(Number(fullRecord.food.calories_100g))}kcal`;
       }
+      // 偏差校准说明（LEARNING_SPEC §7，T31）：后端调过克数而 AI 不知情会编造错误解释
+      if (
+        fullRecord.predicted_grams != null &&
+        target.weight_g != null &&
+        Math.round(fullRecord.predicted_grams) !== Math.round(target.weight_g)
+      ) {
+        detail += `\n- AI 原估克数：${Math.round(fullRecord.predicted_grams)}g；当前 ${target.weight_g}g 的差异来自系统按该用户历史份量纠正习惯做的自动校准（或用户后续修改）`;
+      }
     }
-    systemPrompt = `你是减脂助手。用户对某条饮食记录提出了疑问，请结合以下记录详情，简洁中文解释这条记录是如何产生的（份量估算依据、克数来源、热量算法）。若用户觉得克数不准，告知可以说"改成X克"来调整。\n\n${detail}`;
+    systemPrompt = `你是减脂助手。用户对某条饮食记录提出了疑问，请结合以下记录详情，简洁中文解释这条记录是如何产生的（份量估算依据、克数来源、热量算法）。若详情里有"AI 原估克数"一行，须如实说明克数经过了基于用户历史纠正习惯的系统自动校准，不要编造其他理由。若用户觉得克数不准，告知可以说"改成X克"来调整。\n\n${detail}`;
   }
 
   const { res } = await callDeepSeekCtx(
