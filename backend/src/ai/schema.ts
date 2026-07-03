@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 // ---------- 枚举 ----------
-export const IntentSchema = z.enum(["record", "query", "chat", "modify", "discuss"]);
+export const IntentSchema = z.enum(["record", "query", "chat", "modify", "discuss", "resolve_pending"]);
 export type Intent = z.infer<typeof IntentSchema>;
 
 export const ModifyActionSchema = z.enum(["update", "delete", "append"]);
@@ -111,6 +111,11 @@ export const ParseResultSchema = z.discriminatedUnion("intent", [
     intent: z.literal("discuss"),
     target: z.string(),                          // 引用记忆包 recent_records.ref（如 r1/e1）
   }),
+  z.object({
+    intent: z.literal("resolve_pending"),
+    // 用户打字回答【待确认】卡片（T38）：份量档位/食物名(string) 或自定义克数({grams})
+    choice: z.union([z.string().min(1), z.object({ grams: z.number().positive() })]),
+  }),
 ]);
 export type ParseResult = z.infer<typeof ParseResultSchema>;
 
@@ -131,8 +136,8 @@ export const parseToolSchema = {
       properties: {
         intent: {
           type: "string",
-          enum: ["record", "query", "chat", "modify", "discuss"],
-          description: "record=记录饮食/运动; query=查询今日汇总数据; modify=改/删/追加已记录的食物; discuss=针对某条已有记录提问/质疑(不动数据); chat=其他闲聊/营养咨询",
+          enum: ["record", "query", "chat", "modify", "discuss", "resolve_pending"],
+          description: "record=记录饮食/运动; query=查询今日汇总数据; modify=改/删/追加已记录的食物; discuss=针对某条已有记录提问/质疑(不动数据); resolve_pending=打字回答上下文里的【待确认】卡片; chat=其他闲聊/营养咨询",
         },
         action: {
           type: "string",
@@ -158,6 +163,18 @@ export const parseToolSchema = {
         modify_confidence: {
           type: "number",
           description: "仅 intent=modify 填。对「改哪条+怎么改」整体把握度 0~1",
+        },
+        choice: {
+          description: "仅 intent=resolve_pending 必填。回答的是份量档位/食物名就填字符串（'small'/'medium'/'large'/具体食物名）；回答的是精确克数就填 {grams:数字}",
+          anyOf: [
+            { type: "string" },
+            {
+              type: "object",
+              additionalProperties: false,
+              required: ["grams"],
+              properties: { grams: { type: "number" } },
+            },
+          ],
         },
         meal_type: {
           type: "string",

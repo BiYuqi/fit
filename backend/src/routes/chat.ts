@@ -11,6 +11,7 @@ import { truncateText } from "../ai/ctx";
 import { handleQuery } from "../services/intents/query";
 import { handleModify } from "../services/intents/modify";
 import { handleRecord } from "../services/intents/record";
+import { handleResolvePending } from "../services/intents/resolve-pending";
 import type { IntentCtx } from "../services/intents/types";
 
 // ---------- 请求 schema ----------
@@ -124,7 +125,7 @@ export async function chatRoutes(app: FastifyInstance) {
     await tctx.recordParse(parsed, modelUsed, upgraded);
     resolvedIntent = parsed.intent;
 
-    const intentCtx: IntentCtx = { user_id, text, source, today, dateObj, pack, messages, tctx, parseUsage, parseMessages };
+    const intentCtx: IntentCtx = { user_id, text, source, today, dateObj, pack, messages, tctx, parseUsage, parseMessages, parseLogId: parseLog.id };
 
     // ── query ──────────────────────────────────
     if (parsed.intent === "query") {
@@ -173,6 +174,11 @@ export async function chatRoutes(app: FastifyInstance) {
     // ── modify（改 / 删 / 追加，AI_PARSING_SPEC §8）──
     if (parsed.intent === "modify") {
       return await backfillReply(await handleModify(parsed, intentCtx));
+    }
+
+    // ── resolve_pending（打字回答【待确认】卡片，T38）──
+    if (parsed.intent === "resolve_pending") {
+      return await backfillReply(await handleResolvePending(parsed, intentCtx));
     }
 
     // ── record ─────────────────────────────────

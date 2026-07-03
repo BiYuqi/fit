@@ -15,6 +15,7 @@ export const SYSTEM_PROMPT = `你是一个减脂 App 的饮食助手，帮助用
 - query：用户在询问自己某天/本周/本月的汇总数据（如总热量、还能吃多少、蛋白缺口；含历史日期："昨天/前天/6月1日吃了多少"）
 - modify：改/删/追加【今日已记录】里的某条记录
 - discuss：针对某条已有记录提问/质疑（不动数据，只解释）
+- resolve_pending：打字回答上下文里的【待确认】卡片（份量/候选食物），而不是点卡
 - chat：其他营养咨询、闲聊
 
 关键判断规则：
@@ -46,6 +47,13 @@ modify 意图（改 / 删 / 追加已记录的食物或运动）：
 - **纯确认词处理**：若当前消息是极简确认（"好"、"改吧"、"修改吧"、"行"、"ok"、"是"、"确认"），且【最近对话】最后几轮的用户消息涉及对某条记录数值的讨论（如"不是50克吗"、"应该是50g"、"改成400"），则推断 target（从【今日已记录】ref 找最近被讨论的那条）和 change 内容（从讨论中提取数字，视 target 类型填 grams 或 calories_burned），输出 intent=modify, action=update。若推断不出具体 target 或数值，走 chat。
 - 区分 append 与 record：点名某餐追加新食物（"早餐再加个蛋"）→ modify.append；无明确餐次的再次食用（"再来一碗"）→ record。
 - modify_confidence 给「改哪条+怎么改」的整体把握度。
+
+resolve_pending 意图（打字回答【待确认】卡片，不是点卡）：
+- 仅当上下文里存在【待确认】行，且当前消息明显是在回答它时才用此意图；否则（哪怕消息里出现"中份""小份"这类词）一律按原意图正常路由（record/query/chat 等），无【待确认】时绝不能用 resolve_pending。
+- 【待确认】份量卡：回答"小/中/大/小份/中份/大份"→ choice 填 "small"/"medium"/"large"；回答精确数量（"180克"、"200ml"）→ choice 填 {"grams":180}。
+- 【待确认】候选卡：回答候选之一（如"酱香饼"）或"都不是，是X"→ choice 填该食物标准名（string，"都不是，是X"取 X）。
+- 用户明显在说别的（描述新的食物/运动、提问、无关闲聊、追加说明）→ 不要用 resolve_pending，按其真实意图路由，让【待确认】的卡片继续挂着等回答。
+- 答非所问（如卡片是问份量，用户却说别的事）→ 不要强行 resolve，按消息本身的真实意图路由。
 
 intent=record 时必须填写 items（食物）或 exercise（运动），可同时有。
 
@@ -169,6 +177,18 @@ export async function parseUserInput(
         delete obj.items;
         delete obj.exercise;
         delete obj.meal_type;
+      }
+    }
+    // 防御（T38）：resolve_pending 缺 choice 或 choice 形态不对，降级为 chat——
+    // 由 chat.ts 兜底路由（此时既没有可 resolve 的选择，硬当 resolve_pending 只会白白吃掉一轮）
+    if (obj.intent === "resolve_pending") {
+      const choice = obj.choice;
+      const validChoice =
+        (typeof choice === "string" && choice.length > 0) ||
+        (typeof choice === "object" && choice !== null && typeof (choice as any).grams === "number");
+      if (!validChoice) {
+        obj.intent = "chat";
+        delete obj.choice;
       }
     }
   }

@@ -244,8 +244,18 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         const without = s.messages.filter(m => m.id !== tempId);
         const existingIds = new Set(without.map(m => m.id));
         const toAdd = newMsgs.filter(m => !existingIds.has(m.id));
+        // T38：本轮打字回答了某张待确认卡片——把聊天流里那张旧卡就地标记已确认，
+        // 防止用户在同一屏幕上还能再点一次（resolve 接口本身有 status=pending 防线兜底，这里是体验层同步）
+        const resolvedId = res.resolved_pending_id;
+        const withResolved = resolvedId
+          ? without.map(m =>
+              (m.payload as any)?.pending_id === resolvedId
+                ? { ...m, payload: { ...(m.payload as any), resolved: true } }
+                : m,
+            )
+          : without;
         return {
-          messages: [...without, ...toAdd],
+          messages: [...withResolved, ...toAdd],
           summaryCard: res.summary_card ?? s.summaryCard,
         };
       });

@@ -14,4 +14,5 @@ export interface IntentCtx {
   tctx: ChatTrace;
   parseUsage?: Usage;
   parseMessages?: object;
+  parseLogId?: string; // 本轮 ai_parse_log 主键（resolve_pending 回填 intent/parsed_json 用，见 intents/resolve-pending.ts）
 }

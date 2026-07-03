@@ -1,0 +1,84 @@
+# T38：pending 感知——用户打字回答【待确认】卡片（不点卡），而不是被判成新记录/闲聊
+name: pending 感知——打字回答待确认卡片
+turns:
+  # 份量卡（"一碗"份量不确定）+ 打字回答"中份"
+  - say: "中午吃了一碗米饭"
+    expect:
+      intent: record
+      db:
+        pending_record: { type: portion_choice }
+        last_card: portion_card
+        food_record_count: 0
+
+  - say: "中份"
+    expect:
+      intent: resolve_pending
+      db:
+        food_record: { where: { food_name: "米饭" }, meal_type: lunch }
+        pending_record: null
+        food_record_count: 1
+
+  # 候选卡 + 打字纠正"都不是，是X" → 接后续份量卡 → 打字"小份"
+  - say: "早上吃了一个煎饼"
+    expect:
+      intent: record
+      db:
+        pending_record: { type: food_choice }
+        last_card: candidate_card
+        food_record_count: 1
+
+  - say: "都不是，是酱香饼"
+    expect:
+      intent: resolve_pending
+      db:
+        pending_record: { type: portion_choice }
+        last_card: portion_card
+        food_record_count: 1
+
+  - say: "小份"
+    expect:
+      intent: resolve_pending
+      db:
+        food_record: { where: { food_name: "酱香饼" }, meal_type: breakfast }
+        pending_record: null
+        food_record_count: 2
+
+  # 份量卡 + 打字回答精确克数（custom 档，学习信号 custom_gram）
+  - say: "晚上吃了一碗牛肉面"
+    expect:
+      intent: record
+      db:
+        pending_record: { type: portion_choice }
+        food_record_count: 2
+
+  - say: "180克"
+    expect:
+      intent: resolve_pending
+      db:
+        food_record: { where: { food_name: "牛肉面" }, weight_g: 180, portion_label: custom }
+        pending_record: null
+        food_record_count: 3
+
+  # 答非所问：份量卡挂着，不该被误 resolve
+  - say: "早上吃了一碗刀削面"
+    expect:
+      intent: record
+      db:
+        pending_record: { type: portion_choice }
+        food_record_count: 3
+
+  - say: "对了这周三有个聚餐"
+    expect:
+      intent: [chat, query]
+      db:
+        pending_record: { type: portion_choice }
+        food_record_count: 3
+
+  - say: "中份"
+    expect:
+      intent: resolve_pending
+      db:
+        # canonical 归一化把"刀削面"（煮熟吃的面）记成"熟面条"（AI_PARSING_SPEC §3 生/熟口径），符合预期
+        food_record: { where: { food_name: "熟面条" }, meal_type: breakfast }
+        pending_record: null
+        food_record_count: 4

@@ -39,8 +39,31 @@ function turnTimeLabel(at: Date | undefined): string {
   return `${local.getUTCMonth() + 1}月${local.getUTCDate()}日`;
 }
 
+const PORTION_ZH_CTX: Record<string, string> = { small: "小", medium: "中", large: "大" };
+
+// 【待确认】行（T38 pending 感知）：告诉 parser 当前有张卡等答案，
+// 使其在合适时机输出 intent=resolve_pending，而不是把回答误判成新记录/闲聊。
+function pendingLine(pending: MemoryPack["pending"]): string | null {
+  if (!pending) return null;
+  if (pending.type === "portion_choice") {
+    const tiers = (pending.portions ?? [])
+      .filter((p) => p.label !== "custom")
+      .map((p) => `${PORTION_ZH_CTX[p.label] ?? p.label}(${p.grams}${p.unit ?? "g"})`)
+      .join("/");
+    return `【待确认】份量卡：${pending.food_name ?? ""} ${tiers}，可自定克数`;
+  }
+  if (pending.type === "food_choice") {
+    const names = (pending.candidate_names ?? []).join("/");
+    return `【待确认】候选卡："${pending.query ?? ""}" → ${names}`;
+  }
+  if (pending.type === "delete_confirm") {
+    return `【待确认】删除确认："${pending.food_name ?? ""}"，回复确认才会删除`;
+  }
+  return null;
+}
+
 export function compressContext(pack: MemoryPack): string {
-  const { profile: p, card, recent_records, recent_turns, recent_days, portion_habits } = pack;
+  const { profile: p, card, recent_records, recent_turns, recent_days, portion_habits, pending } = pack;
   const lines: string[] = [];
 
   // 日期锚点：让 AI 知道"今天/昨天/前天"对应的实际日期
@@ -96,6 +119,10 @@ export function compressContext(pack: MemoryPack): string {
     }
   }
 
+  // 待确认卡（T38）：紧挨在【最近对话】前，parser 判断"这是不是在回答卡片"时离得最近最显眼
+  const pendingText = pendingLine(pending);
+  if (pendingText) lines.push(pendingText);
+
   // L0 最近 TURN_LIMIT 轮对话（旧→新，去噪留链）
   const turns = recent_turns.slice(-TURN_LIMIT);
   if (turns.length > 0) {
@@ -111,6 +138,9 @@ export function compressContext(pack: MemoryPack): string {
           : t.intent === "query"   ? "查询"
           : t.intent === "modify"  ? "修改记录"
           : t.intent === "discuss" ? "质疑/追问记录"
+          // resolve_pending 兜底路径（无卡/卡过期，见 intents/resolve-pending.ts）：命中的分支已把
+          // intent 改写为 resolve，走上面的分支；这里只会剩下未命中的兜底
+          : t.intent === "resolve_pending" ? "回答确认卡片(未命中)"
           : "闲聊/咨询";
       const time = turnTimeLabel(t.at);
       // T37 双向记忆：AI 侧摘要跟在动作后（reply 已是摘要，不含卡片 payload）

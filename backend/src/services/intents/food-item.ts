@@ -67,7 +67,8 @@ export async function buildCandidateCardData(params: {
   const pendingRecord = await prisma.pendingRecord.create({
     data: {
       user_id, type: "food_choice", raw_input: raw,
-      candidates: { query, meal_type, source, portions, chosen_label, scene: scene ?? null } as object,
+      // candidate_names：T38 注入记忆包用，避免为了渲染【待确认】而重跑 matchFoodCandidates 或读 chat_message
+      candidates: { query, meal_type, source, portions, chosen_label, scene: scene ?? null, candidate_names: allNames } as object,
     },
   });
 

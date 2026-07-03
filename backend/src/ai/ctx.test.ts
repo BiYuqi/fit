@@ -28,6 +28,7 @@ function makePack(over: Partial<MemoryPack> = {}): MemoryPack {
     recent_turns: [],
     recent_days: [],
     portion_habits: [],
+    pending: null,
     ...over,
   };
 }
@@ -125,6 +126,32 @@ test("compressContext 超长 said/reply 渲染后被截断（said≤60+…，rep
   const replyMatch = line.match(/AI:"([^"]*)"/)!;
   assert.equal(saidMatch[1], "长".repeat(60) + "…");
   assert.equal(replyMatch[1], "答".repeat(150) + "…");
+});
+
+// ═══ T38 pending 感知：【待确认】行 ═══
+
+test("compressContext 无 pending 时不输出【待确认】行", () => {
+  const out = compressContext(makePack());
+  assert.doesNotMatch(out, /【待确认】/);
+});
+
+test("compressContext 渲染份量卡 pending", () => {
+  const pack = makePack({
+    pending: {
+      id: "p1", type: "portion_choice", food_name: "煎饼果子",
+      portions: [{ label: "small", grams: 300 }, { label: "medium", grams: 450 }, { label: "large", grams: 600 }],
+    },
+  });
+  const out = compressContext(pack);
+  assert.match(out, /【待确认】份量卡：煎饼果子 小\(300g\)\/中\(450g\)\/大\(600g\)，可自定克数/);
+});
+
+test("compressContext 渲染候选卡 pending", () => {
+  const pack = makePack({
+    pending: { id: "p1", type: "food_choice", query: "煎饼", candidate_names: ["煎饼果子", "鸡蛋煎饼", "酱香饼"] },
+  });
+  const out = compressContext(pack);
+  assert.match(out, /【待确认】候选卡："煎饼" → 煎饼果子\/鸡蛋煎饼\/酱香饼/);
 });
 
 test("compressContext 5 轮全量 L0 渲染文本 ≤ ~1200 字（上下文预算护栏）", () => {

@@ -1,6 +1,7 @@
 import { prisma } from "../lib/prisma";
 import { buildContextCard, type ContextCard } from "./summary";
 import { biasEnabled } from "./learning";
+import { PENDING_STALE_MS } from "./pending-resolve";
 
 // 份量倾向的显著性门槛：|μ|≥0.15（≈±16%）且 n_eff≥2 才算"习惯"，避免噪声进 prompt
 const HABIT_MU_MIN = 0.15;
@@ -111,6 +112,17 @@ export interface PortionHabit {
   tendency: "large" | "small"; // 相对 AI 估算的方向（不给数字，数字修正在后端 applyBias）
 }
 
+// 待确认卡摘要（T38 pending 感知）：喂给 parser 让它知道"当前有张卡等着被回答"，
+// 用户打字回答（"中份"/"都不是，是酱香饼"/"180克"）才能被识别为 resolve_pending 而不是新记录/闲聊。
+export interface PendingSummary {
+  id: string;
+  type: string; // portion_choice | food_choice | delete_confirm
+  food_name?: string;                                        // portion_choice / delete_confirm
+  portions?: Array<{ label: string; grams: number; unit?: string }>; // portion_choice
+  query?: string;                                             // food_choice：用户原始泛称（"煎饼"）
+  candidate_names?: string[];                                 // food_choice：候选具体食物名
+}
+
 export interface MemoryPack {
   profile: MemoryProfile;
   card: ContextCard;
@@ -118,6 +130,30 @@ export interface MemoryPack {
   recent_turns: TurnSummary[];
   recent_days: DaySummary[];   // 近3天每日汇总（不含今天）
   portion_habits: PortionHabit[]; // 学到的份量倾向（LEARNING_SPEC §6，T31），只影响 chosen_label
+  pending: PendingSummary | null; // 最新未过期的待确认卡（T38），null=当前无待确认
+}
+
+async function buildPendingSummary(user_id: string): Promise<PendingSummary | null> {
+  const pr = await prisma.pendingRecord.findFirst({
+    where: {
+      user_id,
+      status: "pending",
+      created_at: { gte: new Date(Date.now() - PENDING_STALE_MS) },
+    },
+    orderBy: { created_at: "desc" },
+  });
+  if (!pr) return null;
+  const c = pr.candidates as any;
+  if (pr.type === "portion_choice") {
+    return { id: pr.id, type: pr.type, food_name: c.food_name, portions: c.portions };
+  }
+  if (pr.type === "food_choice") {
+    return { id: pr.id, type: pr.type, query: c.query, candidate_names: c.candidate_names };
+  }
+  if (pr.type === "delete_confirm") {
+    return { id: pr.id, type: pr.type, food_name: c.name };
+  }
+  return { id: pr.id, type: pr.type };
 }
 
 export async function buildMemoryPack(user_id: string): Promise<MemoryPack> {
@@ -129,7 +165,7 @@ export async function buildMemoryPack(user_id: string): Promise<MemoryPack> {
   const yesterday = new Date(todayDate);
   yesterday.setUTCDate(yesterday.getUTCDate() - 1);
 
-  const [user, card, foods, exercises, logs, summaryRows, liveAgg, portion_habits] = await Promise.all([
+  const [user, card, foods, exercises, logs, summaryRows, liveAgg, portion_habits, pending] = await Promise.all([
     prisma.user.findUniqueOrThrow({ where: { id: user_id } }),
     buildContextCard(user_id),
     prisma.foodRecord.findMany({
@@ -158,6 +194,7 @@ export async function buildMemoryPack(user_id: string): Promise<MemoryPack> {
       _sum: { calories: true, protein: true, fat: true, carbs: true },
     }),
     buildPortionHabits(user_id),
+    buildPendingSummary(user_id),
   ]);
 
   // 合并：summary 优先，没有则用 foodRecord 实时聚合
@@ -255,5 +292,6 @@ export async function buildMemoryPack(user_id: string): Promise<MemoryPack> {
     recent_turns,
     recent_days,
     portion_habits,
+    pending,
   };
 }

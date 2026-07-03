@@ -27,25 +27,25 @@ export interface ResolveLogData {
   reply_summary: string;
 }
 
-export function buildResolveLogData(user_id: string, act: ResolveAction): ResolveLogData {
-  let reply_summary: string;
+// T38：chat.ts 文字回答路径复用这段文案生成撰写 reply，不必落一条多余的 ai_parse_log 就能拿到摘要。
+export function describeResolveAction(act: ResolveAction): string {
   switch (act.action) {
     case "portion_choice":
-      reply_summary = `确认：${act.food_name} ${PORTION_ZH[act.portion_label] ?? act.portion_label} ${Math.round(act.grams)}g`;
-      break;
+      return `确认：${act.food_name} ${PORTION_ZH[act.portion_label] ?? act.portion_label} ${Math.round(act.grams)}g`;
     case "food_choice":
-      reply_summary = `已选「${act.food_name}」，待确认份量`;
-      break;
+      return `已选「${act.food_name}」，待确认份量`;
     case "delete_confirm":
-      reply_summary = `已删除：${act.name}`;
-      break;
+      return `已删除：${act.name}`;
   }
+}
+
+export function buildResolveLogData(user_id: string, act: ResolveAction): ResolveLogData {
   return {
     user_id,
     input_text: CARD_INPUT_TEXT,
     intent: "resolve",
     status: "resolved",
     parsed_json: act as object,
-    reply_summary,
+    reply_summary: describeResolveAction(act),
   };
 }

@@ -121,12 +121,15 @@ export type ExerciseCardPayload = {
 };
 
 export type SendMessageResponse = {
-  intent: 'record' | 'query' | 'chat' | 'modify';
+  intent: 'record' | 'query' | 'chat' | 'modify' | 'discuss' | 'resolve_pending';
   reply: string;
   record?: unknown;
   pending?: unknown;
   summary_card?: ContextCard;
   messages: ChatMessage[];
+  // T38：本轮若通过打字回答了某张【待确认】卡片，带上它的 pending_id，
+  // 让前端把聊天流里那张旧卡就地标记为已确认（否则用户还能再点一次）。
+  resolved_pending_id?: string;
 };
 
 export type ResolveResponse = {

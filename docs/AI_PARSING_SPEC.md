@@ -11,7 +11,7 @@
 - **模型升级策略（在 T05+T06 完成后实现）**：flash 默认；若任一 item `food_confidence < 0.5` 或 zod 校验失败，自动用 pro 重试一次，不再降级。前端永不指定模型。
 
 ## 2. 意图路由
-每条消息先判：`record`（记录饮食/运动）/ `query`（查某天/本周/本月汇总数据，含历史日期）/ `modify`（改/删/追加已有记录，见 §8）/ `discuss`（针对某条已有记录提问/质疑，不动数据，见 §9）/ `chat`（其余闲聊/营养问题）。可与解析在同一次调用完成。
+每条消息先判：`record`（记录饮食/运动）/ `query`（查某天/本周/本月汇总数据，含历史日期）/ `modify`（改/删/追加已有记录，见 §8）/ `discuss`（针对某条已有记录提问/质疑，不动数据，见 §9）/ `resolve_pending`（打字回答上下文里的【待确认】卡片，见 §10）/ `chat`（其余闲聊/营养问题）。可与解析在同一次调用完成。
 
 ## 3. record 解析协议
 DeepSeek 输出（strict tool schema，zod 同构校验）：
@@ -60,7 +60,7 @@ DeepSeek 输出（strict tool schema，zod 同构校验）：
 | 食物低置信 (<0.5) | clarify_card（极少见，是解析失败兜底） |
 
 食物歧义优先于份量歧义：命中歧义先出 CandidateCard，选定食物后接 PortionCard 确认份量（现状为两步串行；「候选卡一步化」——点击即按默认档入库、档位卡上可改——为暂定候选方案，见 `FEATURE_CANDIDATES.md`）。
-中/低置信生成 `pending_record`，前端出对应卡片，用户选择后走 `/pending/:id/resolve`。
+中/低置信生成 `pending_record`，前端出对应卡片，用户选择后走 `/pending/:id/resolve`（点卡）或打字回答由 `resolve_pending` 意图路由到同一逻辑（见 §10）。
 
 > 以上为 `record` 路由。`modify`（改/删/追加）的路由与确认策略单独见 §8。
 
@@ -202,3 +202,30 @@ callDeepSeekCtx(pack, messages, opts)
 2. 查 `food_record`（含 `raw_input`、`food_confidence`、`portion_confidence`）和关联 `food_standard`（含每100g营养）
 3. 把记录详情注入 system message，调 `answerDiscuss` 解释来龙去脉（份量估算依据、克数来源、热量算法）
 4. 不写 `food_record`，只回复文本气泡；回复中告知用户可说「改成X克」来调整
+
+## 10. resolve_pending 意图（打字回答【待确认】卡片，T38）
+
+弹卡片问"小/中/大？"或"你可能吃的是？"后，用户不点卡而**打字回答**（尤其语音输入场景）也要能被理解并落地，不能被误判成闲聊或新记录。
+
+**注入**：`buildMemoryPack` 查该用户最新一条 `status=pending` 且未过期（创建于最近 5 分钟内，与前端 `STALE_MS` 口径一致）的 `pending_record`，写入记忆包 `pending` 字段；`compressContext` 渲染成【待确认】行（紧邻【最近对话】之前）：
+```
+【待确认】份量卡：煎饼果子 小(300g)/中(450g)/大(600g)，可自定克数
+【待确认】候选卡："煎饼" → 煎饼果子/鸡蛋煎饼/酱香饼
+```
+`food_choice` 类型的候选名取自建卡时写入 `pending_record.candidates.candidate_names`（建卡时随手存一份，避免为了渲染这行而重跑食物匹配或读 `chat_message`，违反铁律 3）。
+
+**协议**（strict tool schema + zod 同构）：
+```json
+{"intent":"resolve_pending","choice":"medium"}
+{"intent":"resolve_pending","choice":"酱香饼"}
+{"intent":"resolve_pending","choice":{"grams":180}}
+```
+仅当上下文存在【待确认】且当前消息明显是在回答它时才用此意图；答非所问（新记录/提问/无关闲聊）照常按真实意图路由，卡片继续挂着。无【待确认】时，`choice` 校验失败或 parser 误判都会被兜底为 `chat`（`parser.ts` 的防御归一化 + prompt 双重把关）。
+
+**落地**：`/pending/:id/resolve` 的核心逻辑抽成 `resolvePendingRecord`（`services/pending-resolve.ts`），`routes/pending.ts`（点卡）与 `intents/resolve-pending.ts`（打字）共用同一份实现，行为完全等价（含 `status=pending` 的原子防线——查不到就是没得 resolve，防止重复入库）。
+
+**日志归口**：`chat.ts` 已为本轮写了一条 `ai_parse_log`（`intent=resolve_pending`）。为避免 L0 出现两条重复轮次，`resolvePendingRecord` 调用时传 `skipLog:true`，改由 `intents/resolve-pending.ts` 把 resolve 出的动作回填进那条日志（`intent` 改写为 `resolve`，`parsed_json` 存 `ResolveAction`），复用既有的「卡片确认(...)」L0 渲染与指代锚点抽取——下一轮"再来一份"依然找得到锚点。
+
+**卡片状态同步**：响应体带 `resolved_pending_id`（见 API_SPEC），前端据此把聊天流里那张旧卡就地标记 `payload.resolved=true`，防止用户在同一屏幕上对已经文字确认过的卡片再点一次。
+
+**过期**：卡片超过 5 分钟未回答，`resolve_pending` 不再生效——后端查不到未过期的 pending，礼貌回复「已过期，请重新描述」，不落任何数据。

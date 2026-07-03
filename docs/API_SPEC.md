@@ -28,17 +28,18 @@ resp: 同 GET。
 ## 聊天主入口
 ### POST /api/chat/message
 req: `{ text, source: "text"|"voice" }`
-后端：判意图 → record（自动入库或生成 pending）/ query（用上下文卡回答）/ chat / modify（改/删/追加已记录，见 AI_PARSING_SPEC §8）。
+后端：判意图 → record（自动入库或生成 pending）/ query（用上下文卡回答）/ chat / modify（改/删/追加已记录，见 AI_PARSING_SPEC §8）/ discuss（针对某条记录提问，见 §9）/ resolve_pending（打字回答【待确认】卡片，见 §10）。
 > 每轮注入「对话记忆包」(L0/L1/L2，见 AI_PARSING_SPEC §7) 消解指代，记忆只取 ai_parse_log/事实表，不读 chat_message。
 resp:
 ```json
 {
-  "intent": "record|query|chat|modify",
+  "intent": "record|query|chat|modify|discuss|resolve_pending",
   "reply": "已记录 牛肉面+鸡蛋，约 620 kcal",
-  "record": { /* food_record，若高置信自动入库；modify.update 返回更新后的记录 */ },
+  "record": { /* food_record，若高置信自动入库；modify.update / resolve_pending 返回落库或更新后的记录 */ },
   "pending": { "id": "...", "type": "portion_choice|food_choice|clarify|delete_confirm", "candidates": [ ... ] },
   "summary_card": { /* 见 AI_PARSING_SPEC 上下文卡结构 */ },
-  "messages": [ /* 本轮新增的 chat_message（用户气泡 + AI 卡片），供前端直接渲染并入本地缓存 */ ]
+  "messages": [ /* 本轮新增的 chat_message（用户气泡 + AI 卡片），供前端直接渲染并入本地缓存 */ ],
+  "resolved_pending_id": "...（仅 resolve_pending 命中时返回，前端据此把聊天流里那张旧卡就地标已确认）"
 }
 ```
 `record` 与 `pending` 互斥；query/chat 时二者均无。
@@ -54,6 +55,8 @@ modify 行为（AI_PARSING_SPEC §8）：
 { "matched_by_habit": true, "escape": { "canonical", "portions", "chosen_label", "ai_candidates?" } }
 ```
 前端据此显示"已按你的习惯记为「X」"+「不是它？」按钮；点击时把 `escape` 的字段连同 `canonical`/`record_id` 传给 `/api/learning/alias/reset`（见下）。
+
+resolve_pending 行为（AI_PARSING_SPEC §10，T38）：用户打字回答【待确认】卡片（不点卡）时命中。内部复用 `/api/pending/:id/resolve` 同一套落地逻辑（份量卡/候选卡/删除确认三分支），返回其产出的卡片消息 + `resolved_pending_id`；无待确认或卡片已过期（>5分钟）时不落任何数据，只回一句提示文本。
 
 ### POST /api/pending/:id/resolve
 req: `{ choice }`（选中的候选标识，或自定义克数 `{ grams }`；`delete_confirm` 传 `{ choice: "confirm" }`）
