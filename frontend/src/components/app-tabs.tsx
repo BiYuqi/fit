@@ -1,13 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  Keyboard,
   LayoutChangeEvent,
   Platform,
   Pressable,
   StyleSheet,
   Text,
+  useWindowDimensions,
   View,
 } from 'react-native';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
+  Extrapolation,
+  interpolate,
+  runOnJS,
   useSharedValue,
   useAnimatedStyle,
   withSpring,
@@ -85,6 +91,21 @@ const INDICATOR = {
 const SPRING = { damping: 22, stiffness: 220, mass: 0.8 };
 const BACK = 38;
 
+// ── Swipe-back (chat → 首页) ──────────────────────────────────
+// chatX: 0 = chat 完全展开；screenW = chat 完全滑出（收起）。
+// 所有过渡视觉（chat 平移 / 底页视差 / 暗幕 / tab 栏渐显）都由它驱动。
+const EDGE_WIDTH = 28;          // 左边缘起手区宽度
+const PARALLAX = 0.28;          // 底页视差比例（iOS 原生栈手感）
+const SCRIM_MAX = 0.22;         // chat 全开时底页暗幕不透明度
+const SWIPE_SPRING = {
+  stiffness: 320,
+  damping: 32,
+  mass: 1,
+  overshootClamping: true,      // 绝不过冲——过冲会在边缘露出底页
+  restDisplacementThreshold: 0.5,
+  restSpeedThreshold: 10,
+};
+
 function TabIcon({ name, isActive, color }: { name: string; isActive: boolean; color: string }) {
   const tab = TABS.find(t => t.name === name)!;
   if (Platform.OS === 'ios') {
@@ -93,11 +114,17 @@ function TabIcon({ name, isActive, color }: { name: string; isActive: boolean; c
   return <Text style={[styles.emoji, { color }]}>{tab.emoji}</Text>;
 }
 
+type BgTab = Exclude<TabName, 'chat'>;
+
 export default function AppTabs() {
   const [active, setActive] = useState<TabName>('chat');
   // Lazy mount: only mount screens that have been visited at least once.
   // Once mounted, they stay resident so tab switches are instant.
   const [mounted, setMounted] = useState<Set<TabName>>(new Set(['chat', 'today']));
+  // Chat 底下露出的那一页：进 chat 前所在的 tab，滑动返回也回到它
+  const [lastBgTab, setLastBgTab] = useState<BgTab>('today');
+  // 手势进行中 → 提前挂载 tab 栏让它随滑动渐显
+  const [swiping, setSwiping] = useState(false);
   const scheme   = useColorScheme() ?? 'light';
   const isDark   = scheme === 'dark';
   const glass    = Glass[isDark ? 'dark' : 'light'];
@@ -149,79 +176,177 @@ export default function AppTabs() {
 
   const isChat = active === 'chat';
 
+  // ── Swipe back: chat → lastBgTab ──────────────────────────────
+  const { width: screenW } = useWindowDimensions();
+  const chatX = useSharedValue(0); // 首启即 chat，故初始 0（展开）
+
+  const finishClose = useCallback(() => {
+    Keyboard.dismiss();
+    setSwiping(false);
+    setActive(lastBgTab);
+  }, [lastBgTab]);
+
+  const cancelClose = useCallback(() => setSwiping(false), []);
+
+  // 返回按钮与手势共用同一条收起动画
+  const animateClose = useCallback(() => {
+    chatX.value = withSpring(screenW, SWIPE_SPRING, (finished) => {
+      if (finished) runOnJS(finishClose)();
+    });
+  }, [screenW, finishClose]);
+
+  const openChat = useCallback(() => {
+    setMounted(prev => (prev.has('chat') ? prev : new Set([...prev, 'chat'])));
+    if (activeRef.current !== 'chat') setLastBgTab(activeRef.current as BgTab);
+    setActive('chat');
+    // 进入期间 tab 栏保持挂载，随滑入渐隐（对称于滑出渐显）
+    setSwiping(true);
+    chatX.value = withSpring(0, SWIPE_SPRING, (finished) => {
+      if (finished) runOnJS(cancelClose)();
+    });
+  }, [cancelClose]);
+
+  // chat 关闭时停在屏幕右侧外（不切 display，避免显示翻转的闪帧）；
+  // 尺寸变化（旋转）时把收起位置对齐到新宽度
+  useEffect(() => {
+    if (activeRef.current !== 'chat') chatX.value = screenW;
+  }, [screenW]);
+
+  const backPan = Gesture.Pan()
+    .hitSlop({ left: 0, width: EDGE_WIDTH }) // 只在左边缘起手
+    .activeOffsetX(12)                        // 明确横向意图才激活
+    .failOffsetY([-16, 16])                   // 竖向滚动让位给聊天列表
+    .onStart(() => {
+      runOnJS(setSwiping)(true);
+    })
+    .onUpdate(e => {
+      chatX.value = Math.min(Math.max(e.translationX, 0), screenW);
+    })
+    .onEnd(e => {
+      const shouldClose =
+        e.velocityX > 800 || (chatX.value > screenW * 0.4 && e.velocityX > -500);
+      if (shouldClose) {
+        chatX.value = withSpring(screenW, { ...SWIPE_SPRING, velocity: e.velocityX }, (finished) => {
+          if (finished) runOnJS(finishClose)();
+        });
+      } else {
+        // 回弹结束后再卸载 tab 栏，让它随动画淡出而不是瞬间消失
+        chatX.value = withSpring(0, { ...SWIPE_SPRING, velocity: e.velocityX }, (finished) => {
+          if (finished) runOnJS(cancelClose)();
+        });
+      }
+    });
+
+  const chatLayerStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: chatX.value }],
+  }));
+  // 底页视差：chat 全开时底页藏在左侧 -28%，随滑出归位
+  const bgParallaxStyle = useAnimatedStyle(() => ({
+    transform: [{
+      translateX: interpolate(chatX.value, [0, screenW], [-screenW * PARALLAX, 0], Extrapolation.CLAMP),
+    }],
+  }));
+  const scrimStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(chatX.value, [0, screenW], [SCRIM_MAX, 0], Extrapolation.CLAMP),
+  }));
+  const pillFadeStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(chatX.value, [0, screenW], [0, 1], Extrapolation.CLAMP),
+  }));
+
   return (
     <GradientBackground style={styles.root}>
-      {/* Background screens — rendered first so Chat stacks on top */}
-      {TABS.filter(t => t.name !== 'chat').map(tab => {
-        if (!mounted.has(tab.name)) return null;
-        const Screen = SCREENS[tab.name];
-        const isActiveTab = tab.name === active;
-        return (
-          <View
-            key={tab.name}
-            style={isActiveTab ? styles.screenOn : styles.screenOff}
-            pointerEvents={isActiveTab ? 'auto' : 'none'}
-          >
-            <Screen isActive={isActiveTab} />
-          </View>
-        );
-      })}
+      {/* Background screens — rendered first so Chat stacks on top.
+          chat 在场时 lastBgTab 保持可见（被不透明的 chat 层盖住），
+          手势一开始平移 chat 就能立刻露出它，不存在挂载延迟。 */}
+      <Animated.View style={[styles.bgGroup, bgParallaxStyle]}>
+        {TABS.filter(t => t.name !== 'chat').map(tab => {
+          if (!mounted.has(tab.name)) return null;
+          const Screen = SCREENS[tab.name];
+          const isActiveTab = tab.name === active;
+          const isUnderlay = isChat && tab.name === lastBgTab;
+          return (
+            <View
+              key={tab.name}
+              style={isActiveTab || isUnderlay ? styles.screenOn : styles.screenOff}
+              pointerEvents={isActiveTab ? 'auto' : 'none'}
+            >
+              <Screen isActive={isActiveTab} />
+            </View>
+          );
+        })}
+      </Animated.View>
 
-      {/* Chat — always on top of other screens */}
+      {/* 底页暗幕：chat 越展开越暗，滑出过程渐亮 */}
+      <Animated.View
+        pointerEvents="none"
+        style={[StyleSheet.absoluteFill, styles.scrim, scrimStyle]}
+      />
+
+      {/* Chat — always on top of other screens.
+          自带不透明 GradientBackground：平移时绝不透出底页。 */}
       {mounted.has('chat') && (
-        <View
-          key="chat"
-          style={active === 'chat' ? styles.screenOn : styles.screenOff}
-          pointerEvents={active === 'chat' ? 'auto' : 'none'}
-        >
-          <ChatScreen isActive={active === 'chat'} />
-        </View>
+        <GestureDetector gesture={backPan}>
+          <Animated.View
+            key="chat"
+            style={[styles.chatLayer, chatLayerStyle]}
+            pointerEvents={isChat ? 'auto' : 'none'}
+          >
+            <GradientBackground style={styles.chatBg}>
+              <ChatScreen isActive={isChat} />
+
+              {/* 左缘投影：滑动时压在底页上，模拟原生栈卡片阴影 */}
+              <LinearGradient
+                colors={['rgba(0,0,0,0)', 'rgba(0,0,0,0.16)']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+                style={styles.edgeShadow}
+                pointerEvents="none"
+              />
+
+              {/* ── Back button（随 chat 层一起滑动）── */}
+              <View style={[
+                styles.backShadow,
+                { top: insets.top + 10,
+                  shadowColor: g.shadowColor, shadowOpacity: g.shadowOpacity,
+                  shadowOffset: g.shadowOffset, shadowRadius: g.shadowRadius,
+                  elevation: g.elevation },
+              ]}>
+                <Pressable style={styles.backClip} onPress={animateClose} hitSlop={8}>
+                  {/* Blur */}
+                  <BlurView intensity={40} tint={blurTint} style={StyleSheet.absoluteFill} />
+                  {/* Glass gradient */}
+                  <LinearGradient
+                    colors={g.gradColors}
+                    locations={g.gradLocs}
+                    start={{ x: 0.85, y: 0 }}
+                    end={{ x: 0.15, y: 1 }}
+                    style={StyleSheet.absoluteFill}
+                    pointerEvents="none"
+                  />
+                  {/* Top inner highlight */}
+                  <View style={[styles.backTopHL, { backgroundColor: g.topHighlight }]} pointerEvents="none" />
+                  {/* Border */}
+                  <View style={[styles.backBorder, { borderColor: g.stroke }]} pointerEvents="none" />
+                  {/* Icon */}
+                  {Platform.OS === 'ios'
+                    ? <SymbolView name="chevron.left" size={17} tintColor={glass.tabInactive} weight="semibold" />
+                    : <Text style={[styles.backArrow, { color: glass.tabInactive }]}>‹</Text>}
+                </Pressable>
+              </View>
+            </GradientBackground>
+          </Animated.View>
+        </GestureDetector>
       )}
 
-      {/* ── Back button ── */}
-      {isChat && (
-        // Shadow wrapper (no overflow:hidden so shadow renders)
-        <View style={[
-          styles.backShadow,
-          { top: insets.top + 10,
-            shadowColor: g.shadowColor, shadowOpacity: g.shadowOpacity,
-            shadowOffset: g.shadowOffset, shadowRadius: g.shadowRadius,
-            elevation: g.elevation },
-        ]}>
-          <Pressable style={styles.backClip} onPress={() => {
-            setMounted(prev => prev.has('today') ? prev : new Set([...prev, 'today']));
-            setActive('today');
-          }} hitSlop={8}>
-            {/* Blur */}
-            <BlurView intensity={40} tint={blurTint} style={StyleSheet.absoluteFill} />
-            {/* Glass gradient */}
-            <LinearGradient
-              colors={g.gradColors}
-              locations={g.gradLocs}
-              start={{ x: 0.85, y: 0 }}
-              end={{ x: 0.15, y: 1 }}
-              style={StyleSheet.absoluteFill}
-              pointerEvents="none"
-            />
-            {/* Top inner highlight */}
-            <View style={[styles.backTopHL, { backgroundColor: g.topHighlight }]} pointerEvents="none" />
-            {/* Border */}
-            <View style={[styles.backBorder, { borderColor: g.stroke }]} pointerEvents="none" />
-            {/* Icon */}
-            {Platform.OS === 'ios'
-              ? <SymbolView name="chevron.left" size={17} tintColor={glass.tabInactive} weight="semibold" />
-              : <Text style={[styles.backArrow, { color: glass.tabInactive }]}>‹</Text>}
-          </Pressable>
-        </View>
-      )}
-
-      {/* ── Floating pill tab bar ── */}
-      {!isChat && (
-        <View
+      {/* ── Floating pill tab bar ──
+          swiping 时也挂载：随 chat 滑出渐显，落地不突兀 */}
+      {(!isChat || swiping) && (
+        <Animated.View
           pointerEvents="box-none"
           style={[
             styles.pillOuter,
             { bottom: Math.max(20, insets.bottom - 10) },
+            pillFadeStyle,
           ]}
         >
           {/* Shadow wrapper */}
@@ -288,6 +413,10 @@ export default function AppTabs() {
                     style={styles.tabItem}
                     onLayout={e => handleTabLayout(index, e)}
                     onPress={() => {
+                      if (tab.name === 'chat') { openChat(); return; }
+                      // chat 不切 display，若正处于进入动画中途切走，直接收到屏幕外
+                      chatX.value = screenW;
+                      setSwiping(false);
                       setMounted(prev => prev.has(tab.name) ? prev : new Set([...prev, tab.name]));
                       setActive(tab.name);
                     }}
@@ -301,7 +430,7 @@ export default function AppTabs() {
 
             </BlurView>
           </View>
-        </View>
+        </Animated.View>
       )}
     </GradientBackground>
   );
@@ -311,6 +440,23 @@ const styles = StyleSheet.create({
   root:      { flex: 1 },
   screenOn:   { flex: 1 },
   screenOff:  { display: 'none' },
+  bgGroup:    { flex: 1 },
+  scrim:      { backgroundColor: '#000' },
+
+  // ── Chat sliding layer ──
+  chatLayer: {
+    position: 'absolute',
+    top: 0, left: 0, right: 0, bottom: 0,
+    zIndex: 20,
+  },
+  chatBg: { flex: 1 },
+  edgeShadow: {
+    position: 'absolute',
+    left: -16,
+    top: 0,
+    bottom: 0,
+    width: 16,
+  },
 
   // ── Back button ──
   backShadow: {
