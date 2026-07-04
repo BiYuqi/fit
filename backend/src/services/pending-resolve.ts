@@ -8,6 +8,7 @@ import { itemNutrition } from "./calc";
 import { recompute, buildContextCard, type ContextCard } from "./summary";
 import { recordDeleteCorrection, recordResolveCorrection } from "./trace";
 import { recordLearningEvent, upsertFoodAlias, getBiases, applyBias, biasEnabled } from "./learning";
+import { upsertMealCardMessage, enrichMealCards } from "./meal-card";
 import { buildResolveLogData, type ResolveAction } from "./resolve-log";
 import type { MealType, PortionLabel, FoodRecord, ChatMessage } from "@prisma/client";
 
@@ -279,27 +280,21 @@ export async function resolvePendingRecord(params: {
   await recompute(user_id, today);
   const summary_card = await buildContextCard(user_id);
 
-  const aiMsg = await prisma.chatMessage.create({
+  // T46：落库确认不再发独立 record_card，改为文本确认 + 该餐 meal_card upsert。
+  // 时序：先文本后卡片 bump，保证卡片排在本轮回复之后、聊天流最末（卡片跟随）。
+  const confirmMsg = await prisma.chatMessage.create({
     data: {
       user_id,
       date: dateObj,
       role: "assistant",
-      kind: "record_card",
+      kind: "text",
       content: `已确认：${food.name} ${weight_g}${resolved_unit}（约 ${Math.round(nutrition.calories)} kcal）`,
-      payload: {
-        food_name: food.name,
-        weight_g,
-        unit: resolved_unit,
-        calories: Math.round(nutrition.calories),
-        protein_g: Math.round(nutrition.protein_g),
-        fat_g: Math.round(nutrition.fat_g),
-        carbs_g: Math.round(nutrition.carbs_g),
-        is_estimated: food.is_estimated,
-        meal_type,
-      } as object,
-      record_id: record.id as string,
     },
   });
+  const { message: cardMsg } = await upsertMealCardMessage({
+    user_id, mealDate: today, meal_type, chatDate: dateObj,
+  });
+  const [mealCardMsg] = await enrichMealCards([cardMsg]);
 
-  return { ok: true, record, summary_card, messages: [aiMsg], action };
+  return { ok: true, record, summary_card, messages: [confirmMsg, mealCardMsg], action };
 }

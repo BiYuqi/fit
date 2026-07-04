@@ -279,13 +279,22 @@ export async function processFoodItem(item: FoodItem, ctx: ItemCtx): Promise<Ite
       );
     }
 
+    const replyPart = `${food.name} ${weight_g}${unit}（约 ${Math.round(nutrition.calories)} kcal）`;
+
+    // T46：record 路径（withUndo=false）不再逐食材发 record_card——卡片生成上移到 handleRecord，
+    // processItems 结束后对本轮餐次统一挂 meal_card（一餐一卡）。
+    // modify.append（withUndo=true）在 T47 接入 meal_card 前维持原 record_card + undo，保住项级撤销。
+    if (!withUndo) {
+      return { record, replyPart, needsRecompute: true };
+    }
+
     const payload: any = {
       food_name: food.name, weight_g, calories: Math.round(nutrition.calories),
       protein_g: Math.round(nutrition.protein_g), fat_g: Math.round(nutrition.fat_g),
       carbs_g: Math.round(nutrition.carbs_g), is_estimated: food.is_estimated,
       unit, meal_type,
+      undo: { record_id: record.id },
     };
-    if (withUndo) payload.undo = { record_id: record.id };
     if (matchedByHabit) {
       payload.matched_by_habit = true;
       payload.escape = { canonical: query, portions, chosen_label, ai_candidates };
@@ -297,7 +306,7 @@ export async function processFoodItem(item: FoodItem, ctx: ItemCtx): Promise<Ite
 
     return {
       record,
-      replyPart: `${food.name} ${weight_g}${unit}（约 ${Math.round(nutrition.calories)} kcal）`,
+      replyPart,
       needsRecompute: true,
       confirmedFn: () => prisma.chatMessage.create({
         data: { user_id, date: dateObj, role: "assistant", kind: "record_card", payload, record_id: record.id as string },

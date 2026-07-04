@@ -2,6 +2,7 @@ import { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
 import { toDateOnly } from "../lib/dates";
+import { enrichMealCards } from "../services/meal-card";
 import type { ChatMessage } from "@prisma/client";
 
 // Enrich card messages with resolved status + resolution details from pendingRecord
@@ -72,7 +73,8 @@ export async function chatHistoryRoutes(app: FastifyInstance) {
       orderBy: { created_at: "asc" },
     });
 
-    const enriched = await enrichResolved(messages);
+    // T46：meal_card 明细/总计从 food_record 实时组装（payload 落库只有 meal_key）
+    const enriched = await enrichMealCards(await enrichResolved(messages));
     return { date, messages: enriched };
   });
 
@@ -116,7 +118,7 @@ export async function chatHistoryRoutes(app: FastifyInstance) {
       orderBy: { created_at: "asc" },
     });
 
-    const enriched = await enrichResolved(messages);
+    const enriched = await enrichMealCards(await enrichResolved(messages));
     return { messages: enriched };
   });
 }

@@ -111,14 +111,14 @@
 | user_id | uuid FK | |
 | date | date | 归属对话日（线程分组用） |
 | role | enum(user/assistant) | 谁发的 |
-| kind | text | text / record_card / portion_card / candidate_card / clarify_card / query_card / exercise_card / delete_confirm_card |
+| kind | text | text / record_card / meal_card / portion_card / candidate_card / clarify_card / query_card / exercise_card / delete_confirm_card |
 | content | text? | 文本内容 |
 | payload | jsonb? | 卡片数据（候选、份量、营养等） |
 | record_id | uuid? | 记录类卡片关联的 food_record（用于实时回填/删除联动显示） |
 | created_at | timestamptz | |
 
 索引：`(user_id, date, created_at)`。
-卡片显示策略：**查询类卡片冻结**（payload 即当时答案）；**记录类卡片绑 record_id 实时回填**（底层记录改/删则显示更新或"已删除"）。
+卡片显示策略：**查询类卡片冻结**（payload 即当时答案）；**记录类卡片绑 record_id 实时回填**（底层记录改/删则显示更新或"已删除"）；**meal_card 实时组装 + created_at 跟随**（T46）——按 (用户, 餐归属日, 餐次) 一餐一卡，落库 payload 只存组装键 `{ meal_key: { date, meal_type }, last_change }`（`meal_key.date` 与本表 date 独立：跨天修改时餐归属日 ≠ 对话日；`last_change` T47 启用），明细 `items[]` 与营养 `totals` 在响应/GET 时从 food_record 实时组装、不落库、永不过期；内容变更时同一条消息 created_at 刷成当前时间，前端按时间重排后卡片浮到聊天流末尾（历史 record_card 消息不迁移、照旧渲染）。
 modify 的 update/append 高置信直执行：record_card 的 `payload.undo` 带 `{record_id, prev_state?}` 支持撤销（见 AI_PARSING_SPEC §8），不进 pending 流程。
 
 ## ai_parse_log（解析日志）

@@ -1,5 +1,6 @@
 import { prisma } from "../../lib/prisma";
 import { recompute, buildContextCard } from "../summary";
+import { upsertMealCardMessage, enrichMealCards } from "../meal-card";
 import { processItems } from "./food-item";
 import { calcExerciseCalories, resolveDuration } from "./exercise";
 import { guessMealType, extractMealTypeFromText } from "../../lib/dates";
@@ -84,6 +85,22 @@ export async function handleRecord(
     messages.push(msg);
   }
 
+  // T46：本轮有食材入库 → 对该餐 upsert meal_card（一餐一卡，幂等）。
+  // 放在其他消息之后创建/bump，保证卡片排在本轮回复末尾（卡片跟随）。
+  // 明细/总计由 enrichMealCards 从 food_record 实时组装，不落库。
+  let isFirstMealCard = false;
+  if (records.length > 0) {
+    const { message: cardMsg, isFirst } = await upsertMealCardMessage({
+      user_id, mealDate: today, meal_type, chatDate: dateObj,
+    });
+    isFirstMealCard = isFirst;
+    const [enrichedCard] = await enrichMealCards([cardMsg]);
+    // multi 场景同一餐可能被多个 op 触到：messages 里按 id 去重，只留最新 enrich 结果
+    const dup = messages.findIndex((m) => (m as any).id === cardMsg.id);
+    if (dup >= 0) messages.splice(dup, 1);
+    messages.push(enrichedCard);
+  }
+
   if (needsRecompute) await recompute(user_id, today);
   const summary_card = await buildContextCard(user_id);
 
@@ -97,6 +114,10 @@ export async function handleRecord(
     replyText = "请帮我确认一下具体信息。";
   } else {
     replyText = "已记录。";
+  }
+  // 首次引导（T46）：用户第一张 meal_card 生成时提示一次，之后不再出现（不常驻卡片上）
+  if (isFirstMealCard) {
+    replyText += "直接说就能修改、新增、删除食材。";
   }
 
   // Trace 结束：status=ok，所有 item 的 event 已在 processFoodItem 内写入

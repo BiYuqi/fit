@@ -38,7 +38,7 @@ resp:
   "record": { /* food_record，若高置信自动入库；modify.update / resolve_pending 返回落库或更新后的记录 */ },
   "pending": { "id": "...", "type": "portion_choice|food_choice|clarify|delete_confirm", "candidates": [ ... ] },
   "summary_card": { /* 见 AI_PARSING_SPEC 上下文卡结构 */ },
-  "messages": [ /* 本轮新增的 chat_message（用户气泡 + AI 卡片），供前端直接渲染并入本地缓存 */ ],
+  "messages": [ /* 本轮的 chat_message（用户气泡 + AI 卡片），供前端直接渲染并入本地缓存。T46 起可含已存在 id 的消息（meal_card 原地更新，created_at 已刷新）——语义 = 原地更新，前端须按 id upsert 并按 created_at 重排，不得当新消息追加 */ ],
   "resolved_pending_id": "...（仅 resolve_pending 命中时返回，前端据此把聊天流里那张旧卡就地标已确认）"
 }
 ```
@@ -49,6 +49,19 @@ modify 行为（AI_PARSING_SPEC §8）：
 - `append` → 在 target 所属餐新增记录 + 重算，`record_card` 的 `payload.undo = { record_id }`（高置信）；低置信走 portion/candidate 卡。
 
 `record_card.payload` 基础字段：`{ food_name, weight_g, unit, calories, protein_g, fat_g, carbs_g, is_estimated, meal_type }`。`meal_type` 为该记录餐次（breakfast/lunch/dinner/snack），前端卡片据此显示"午餐 · 80g"；历史消息可能缺失，缺失时前端不显示餐次（不得兜底成某个具体餐次）。
+> T46 起 record / resolve 入库不再逐食材发 record_card，改为该餐的 `meal_card`（modify.append 在 T47 接入前仍发 record_card）；历史 record_card 照旧渲染。
+
+`meal_card.payload`（T46，一餐一卡）：落库只存 `{ meal_key: { date, meal_type }, last_change }`；接口返回时后端从 food_record 实时组装补上：
+```json
+{
+  "meal_key": { "date": "2026-07-04", "meal_type": "lunch" },
+  "last_change": null,
+  "items": [ { "record_id", "food_name", "raw_input", "weight_g", "calories", "protein_g", "fat_g", "carbs_g", "is_estimated", "portion_label" } ],
+  "totals": { "calories", "protein_g", "fat_g", "carbs_g" },
+  "item_count": 3
+}
+```
+明细主显示用 `raw_input`（用户原话子句，自然单位天然保留），`food_name + weight_g` 作兜底/副信息；`items: []` 表示该餐记录已全删光（渲染"已清空"态）。内容变更时同一条消息 `created_at` 刷新（卡片跟随），POST 响应与 GET 都会返回其最新组装态。
 
 用户食物直连命中时（LEARNING_SPEC §6 §7，T30），`record_card.payload` 额外带：
 ```json
@@ -61,7 +74,7 @@ resolve_pending 行为（AI_PARSING_SPEC §10，T38）：用户打字回答【�
 ### POST /api/pending/:id/resolve
 req: `{ choice }`（选中的候选标识，或自定义克数 `{ grams }`；`delete_confirm` 传 `{ choice: "confirm" }`）
 行为：据选择建 food_record / 删记录（delete_confirm）、刷新 daily_summary、补写对应 chat_message。
-resp: `{ record?, summary_card, messages }`。
+resp: `{ record?, summary_card, messages }`。落库确认时（T46）messages = 文本确认 + 该餐 meal_card（可能是已存在 id 的原地更新，见上）。
 
 ### POST /api/records/:id/undo
 撤销 modify 的 update/append（见 AI_PARSING_SPEC §8），由 `record_card.payload.undo` 驱动。
