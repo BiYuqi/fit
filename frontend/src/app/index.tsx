@@ -3,6 +3,8 @@ import {
   ActivityIndicator,
   FlatList,
   KeyboardAvoidingView,
+  NativeScrollEvent,
+  NativeSyntheticEvent,
   Platform,
   StyleSheet,
   TouchableOpacity,
@@ -53,6 +55,9 @@ const GLASS = {
 };
 
 const SEARCH_BTN = 38;
+
+// 偏离底部超过这个距离（px，inverted 列表的 contentOffset.y 即距底距离）才出现回底箭头
+const JUMP_TO_BOTTOM_OFFSET = 600;
 
 function TimeLabel({ time }: { time: string }) {
   const theme = useTheme();
@@ -122,6 +127,7 @@ export default function ChatScreen({ isActive = true }: { isActive?: boolean }) 
     isLoading,
     chatDates,
     jumpTarget,
+    windowTo,
     loadRecentMessages,
     loadMoreMessages,
     loadNewerMessages,
@@ -241,6 +247,27 @@ export default function ChatScreen({ isActive = true }: { isActive?: boolean }) 
     }
   }, [jumpTarget, visibleMessages, clearJumpTarget, scrollToPendingJump]);
 
+  // ── 回到底部箭头 ──
+  // 偏离底部较远、或处于历史窗口（windowTo 非空时不管怎么滚都离最新很远）时显示
+  const [scrolledAway, setScrolledAway] = useState(false);
+  const showJumpToBottom = scrolledAway || windowTo !== null;
+
+  const handleScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    setScrolledAway(e.nativeEvent.contentOffset.y > JUMP_TO_BOTTOM_OFFSET);
+  }, []);
+
+  const handleJumpToBottom = useCallback(() => {
+    pendingJumpRef.current = null; // 终止可能残留的搜索跳转重试
+    if (useChatStore.getState().windowTo) {
+      // 历史窗口：中间隔着未加载的日期，逐屏滚没有意义——直接重载最近窗口
+      flatListRef.current?.scrollToOffset({ offset: 0, animated: false });
+      if (token) loadRecentMessages(token);
+    } else {
+      flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
+    }
+    setScrolledAway(false);
+  }, [token, loadRecentMessages]);
+
   const renderItem = useCallback(
     ({ item, index }: { item: ChatMessage; index: number }) => {
       // Reversed data: index+1 is OLDER, index-1 is NEWER.
@@ -279,6 +306,7 @@ export default function ChatScreen({ isActive = true }: { isActive?: boolean }) 
       keyboardVerticalOffset={-insets.bottom}
     >
     <ThemedView style={[styles.root, { backgroundColor: 'transparent' }]}>
+      <View style={styles.listWrap}>
       <FlatList
         key={listKeyRef.current}
         ref={flatListRef}
@@ -313,6 +341,7 @@ export default function ChatScreen({ isActive = true }: { isActive?: boolean }) 
         maxToRenderPerBatch={15}
         windowSize={21}
         removeClippedSubviews={false}
+        onScroll={handleScroll}
         scrollEventThrottle={16}
         onScrollToIndexFailed={(info) => {
           // 用实测均高估算（比固定 80px 准得多），先滚过去逼 FlatList 渲染目标附近
@@ -330,6 +359,59 @@ export default function ChatScreen({ isActive = true }: { isActive?: boolean }) 
         keyboardDismissMode="on-drag"
         keyboardShouldPersistTaps="handled"
       />
+
+      {/* Jump-to-bottom arrow — bottom-right above input, shows when far from newest */}
+      {showJumpToBottom && (
+        <View
+          style={[
+            styles.jumpFabWrapper,
+            {
+              shadowColor: g.shadowColor,
+              shadowOpacity: g.shadowOpacity,
+              shadowOffset: g.shadowOffset,
+              shadowRadius: g.shadowRadius,
+              elevation: g.elevation,
+            },
+          ]}
+        >
+          <TouchableOpacity
+            style={styles.searchBtn}
+            onPress={handleJumpToBottom}
+            activeOpacity={0.8}
+          >
+            <BlurView intensity={40} tint={blurTint} style={StyleSheet.absoluteFill} />
+            <LinearGradient
+              colors={g.gradColors}
+              locations={g.gradLocs}
+              start={{ x: 0.85, y: 0 }}
+              end={{ x: 0.15, y: 1 }}
+              style={StyleSheet.absoluteFill}
+              pointerEvents="none"
+            />
+            <View
+              style={[styles.searchBtnTopHL, { backgroundColor: g.topHighlight }]}
+              pointerEvents="none"
+            />
+            <View
+              style={[styles.searchBtnBorder, { borderColor: g.stroke }]}
+              pointerEvents="none"
+            />
+            {Platform.OS === 'ios' ? (
+              <SymbolView
+                name="chevron.down"
+                size={16}
+                tintColor={glass.tabInactive}
+                weight="semibold"
+              />
+            ) : (
+              <ThemedText style={[styles.searchBtnEmoji, { color: glass.tabInactive }]}>
+                ↓
+              </ThemedText>
+            )}
+          </TouchableOpacity>
+        </View>
+      )}
+      </View>
 
       {/* Search button — top-right, glass styling matching back button */}
       <View
@@ -400,6 +482,7 @@ export default function ChatScreen({ isActive = true }: { isActive?: boolean }) 
 const styles = StyleSheet.create({
   root: { flex: 1 },
   kav:  { flex: 1 },
+  listWrap: { flex: 1 },
   flatList: { flex: 1 },
   list: {
     paddingHorizontal: 16,
@@ -447,6 +530,17 @@ const styles = StyleSheet.create({
     borderWidth: 0.5,
   },
   searchBtnEmoji: { fontSize: 17 },
+
+  // Jump-to-bottom arrow
+  jumpFabWrapper: {
+    position: 'absolute',
+    right: 14,
+    bottom: 12,
+    zIndex: 30,
+    width: SEARCH_BTN,
+    height: SEARCH_BTN,
+    borderRadius: SEARCH_BTN / 2,
+  },
 
   // Date separator
   dateSeparator: {
