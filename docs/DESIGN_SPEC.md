@@ -55,6 +55,14 @@ iOS 26 Liquid Glass / Apple Intelligence：毛玻璃卡片、柔和半透明层�
   - 改份量/改食物（update）、追加（append）→ 直接出 record_card，卡上带「撤销」轻按钮（payload.undo 存在时）；点撤销→`/records/:id/undo`（带 prev_state 还原 / 不带删除），卡片转「已撤销」灰态。撤销非破坏性、不弹确认。
 - 空状态（当天还没记）→ 友好引导（如"早上好，今天吃了什么？"），不是全白。
 
+**导航与过渡（原生 App，`app-tabs.tsx`）**：
+- Chat 是叠在其他 tab 页之上的滑动层，自带不透明渐变背景（平移过程不透底）。关闭态停在屏幕右侧外一屏，**不切 display**（避免显示翻转闪帧）。
+- **滑动返回**：左边缘 28px 起手右滑，全程跟手；底页 -28% 视差归位 + 暗幕（0.22→0）渐亮 + Chat 左缘投影，iOS 原生栈手感。松手位移 >40% 或速度 >800 即完成返回，否则回弹；弹簧禁止过冲。返回落到**进 Chat 前所在的 tab**（lastBgTab），并收起键盘。
+- **返回按钮**（左上 chevron，随 Chat 层一起滑动）与手势共用同一条收起动画。
+- **进入 Chat**（点 tab）：同款弹簧从右滑入。tab 栏在进入/返回过渡期间保持挂载，随 chatX 渐隐/渐显，不瞬间出没。
+- 手势不与聊天列表竖向滚动冲突（failOffsetY 让位）；参数常量集中在 `app-tabs.tsx` 顶部（EDGE_WIDTH / PARALLAX / SCRIM_MAX / SWIPE_SPRING）。
+- 切回 Chat 不保留上次浏览位置，总是显示最新消息（既有行为）。
+
 **聊天持久化显示行为**：
 - 进页面先读本地 SQLite 缓存秒显示，再用 `GET /chat/messages?date=` 同步。
 - 顶部线程选择器用 `GET /chat/dates` 列出有对话的日期，默认今天；选别的日期加载那天的线程。
