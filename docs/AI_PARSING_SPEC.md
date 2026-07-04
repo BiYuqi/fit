@@ -11,7 +11,7 @@
 - **模型升级策略（在 T05+T06 完成后实现）**：flash 默认；若任一 item `food_confidence < 0.5` 或 zod 校验失败，自动用 pro 重试一次，不再降级。前端永不指定模型。
 
 ## 2. 意图路由
-每条消息先判：`record`（记录饮食/运动）/ `query`（查某天/本周/本月汇总数据，含历史日期）/ `modify`（改/删/追加已有记录，见 §8）/ `discuss`（针对某条已有记录提问/质疑，不动数据，见 §9）/ `resolve_pending`（打字回答上下文里的【待确认】卡片，见 §10）/ `chat`（其余闲聊/营养问题）。可与解析在同一次调用完成。
+每条消息先判：`record`（记录饮食/运动）/ `query`（查自己的饮食/运动数据：任意日期/区间、某食物次数、总结回顾类，见 §11）/ `modify`（改/删/追加已有记录，见 §8）/ `discuss`（针对某条已有记录提问/质疑，不动数据，见 §9）/ `resolve_pending`（打字回答上下文里的【待确认】卡片，见 §10）/ `chat`（其余闲聊/营养问题）。可与解析在同一次调用完成。
 
 ## 3. record 解析协议
 DeepSeek 输出（strict tool schema，zod 同构校验）：
@@ -103,7 +103,7 @@ matchFood（单一最佳匹配）—— 字面只召回，AI 裁决（防"蛋白
   "targets":   {"calories":1600,"protein":110}
 }
 ```
-`query` 意图：**近3天**用卡直接回答；更早日期（前天之前、指定日期等）实时查 `daily_summary`，无 summary 则聚合 `food_record`。
+`query` 意图：所有查询走**查询计划**（§11）实时查库；今日问题的 `query_card` 展示与否也由计划的 `range.type` 判定。
 
 > 区分：**显示用全量聊天记录（chat_message），喂 AI 用「对话记忆包」（§7）**。两者不同，别混。上下文卡是记忆包里的 L2 聚合层。
 
@@ -237,3 +237,30 @@ callDeepSeekCtx(pack, messages, opts)
 **卡片状态同步**：响应体带 `resolved_pending_id`（见 API_SPEC），前端据此把聊天流里那张旧卡就地标记 `payload.resolved=true`，防止用户在同一屏幕上对已经文字确认过的卡片再点一次。
 
 **过期**：卡片超过 5 分钟未回答，`resolve_pending` 不再生效——后端查不到未过期的 pending，礼貌回复「已过期，请重新描述」，不落任何数据。
+
+## 11. query 意图：查询计划（T44）
+
+复刻 §5 食物匹配的分工哲学（铁律4）：**AI 只填一张受限的结构化查询单，后端确定性执行 SQL**。不是"给 AI 挂工具自由调用"——AI 碰不到数据库、没有工具循环，恒定一次 planner 调用。
+
+**流程**：parser 判 `query` → planner（flash + 强制 tool call，失败升 pro 重试一次）产出 QueryPlan → `executeQueryPlan` 校验并查库 → 结果拼成【实时查询】文本注入 `answerQuery`。实现在 `services/intents/query-plan.ts`。
+
+**协议**（strict tool schema + zod `.strict()` 同构）：
+```json
+{
+  "range":  {"type": "today|yesterday|this_week|last_week|this_month|last_month"},
+            // 或 {"type":"last_n_days","n":7} / {"type":"day","date":"2026-06-05"} / {"type":"range","from":"…","to":"…"}
+  "target": "food|exercise|both",
+  "food_filter": "红烧肉",          // 可选，按食物名过滤（contains，参数化查询）
+  "meal_filter": "dinner",          // 可选，只查某一餐
+  "detail": "total|daily|items|report|by_food"
+}
+```
+- **相对日期一律用符号**，由后端 `resolveRange` 确定性解析（周一为一周之始）——AI 不做日期算术（铁律1精神）。明确日期（"6月5日"）才用 `day`。
+- `detail`：`total` 总量+统计；`daily` 按天列（>31天自动降 total）；`items` 逐条明细（上限40条折叠）；`report` 总结复合体（统计+按天+常吃Top5）；`by_food` 食物排行 Top10。
+- **衍生统计由执行器算好**（日均/最高最低天/超目标天数），绝不扔原始行让 AI 自己算（铁律1）。
+
+**安全边界（写死，永不放宽）**：计划里**没有 user_id 字段**（执行器的 user_id 永远来自 JWT，词汇上无法越权）；只查 `food_record`/`exercise_record`/`daily_summary` 三张事实表，`chat_message` 物理不可达（铁律3）；只读（无任何写路径，`query-plan.test.ts` 有源码扫描测试兜底）；区间上限 92 天；未来日期拒绝。zod `.strict()`：计划里出现任何多余字段整单拒绝。
+
+**失败兜底**：planner flash+pro 均失败 → `answerQuery` 无 extraCtx 直接回答，提示词保证对上下文没覆盖的数据如实说"没有记录"，不编造、不 500。失败与升级都记 trace（`decision` event，`meta.stage="query_plan"`）——失败率是"计划 schema 是否够用"的观察指标。
+
+**跟进细问**（"具体吃了什么"不带日期词）：planner 走 `callDeepSeekCtx`，从 L0【最近对话】沿用上一轮查询的日期，无需正则。

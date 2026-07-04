@@ -139,7 +139,7 @@ export const parseToolSchema = {
         intent: {
           type: "string",
           enum: ["record", "query", "chat", "modify", "discuss", "resolve_pending"],
-          description: "record=记录饮食/运动; query=查询今日汇总数据; modify=改/删/追加已记录的食物; discuss=针对某条已有记录提问/质疑(不动数据); resolve_pending=打字回答上下文里的【待确认】卡片; chat=其他闲聊/营养咨询",
+          description: "record=记录饮食/运动; query=查询自己的饮食/运动数据(任意日期/区间/某食物次数/总结回顾); modify=改/删/追加已记录的食物; discuss=针对某条已有记录提问/质疑(不动数据); resolve_pending=打字回答上下文里的【待确认】卡片; chat=其他闲聊/营养咨询",
         },
         action: {
           type: "string",

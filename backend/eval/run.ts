@@ -7,6 +7,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join, basename } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { prisma } from "../src/lib/prisma";
+import { recompute } from "../src/services/summary";
 
 const API = process.env.EVAL_API_BASE ?? "http://localhost:9300";
 const CASES_DIR = join(__dirname, "cases");
@@ -17,6 +18,8 @@ interface EvalCase {
   profile?: Record<string, unknown>; // 覆盖默认档案（PUT /user/profile 的字段）
   setup?: {
     food_alias?: Array<{ canonical: string; food: string; streak?: number; hits?: number }>;
+    // T44：种历史食物记录。days_ago 相对今天（1=昨天），用相对天数避免用例被日历边界（月初/周一）搞抖
+    food_record?: Array<{ days_ago: number; food: string; grams: number; meal_type?: string }>;
   };
   turns: Turn[];
 }
@@ -76,6 +79,36 @@ async function runSetup(userId: string, setup: EvalCase["setup"]) {
       data: { user_id: userId, canonical: a.canonical, food_id: food.id, streak: a.streak ?? 2, hits: a.hits ?? a.streak ?? 2 },
     });
   }
+  // 种历史食物记录：热量按 food_standard 每100g × 克数（与后端 calc 同口径），种完跑 recompute 生成当日 summary
+  const touchedDates = new Set<string>();
+  for (const r of setup?.food_record ?? []) {
+    // 精确名优先，contains 兜底（库里主食多带括号后缀，如"米饭（蒸，代表值）"）
+    const food =
+      (await prisma.foodStandard.findFirst({ where: { name: r.food } })) ??
+      (await prisma.foodStandard.findFirst({ where: { name: { contains: r.food } }, orderBy: { name: "asc" } }));
+    if (!food) throw new Error(`setup.food_record: 食物库中找不到「${r.food}」（用例前提无法建立）`);
+    const local = new Date(Date.now() + 8 * 3600 * 1000);
+    const day = new Date(Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate() - r.days_ago));
+    const dateStr = day.toISOString().slice(0, 10);
+    const per = (v: number | null) => Math.round(((v ?? 0) * r.grams) / 100);
+    await prisma.foodRecord.create({
+      data: {
+        user_id: userId,
+        food_id: food.id,
+        meal_type: (r.meal_type ?? "lunch") as never,
+        portion_label: "custom",
+        weight_g: r.grams,
+        calories: per(food.calories_100g),
+        protein: per(food.protein_100g),
+        fat: per(food.fat_100g),
+        carbs: per(food.carbs_100g),
+        raw_input: `[eval-setup] ${r.food} ${r.grams}g`,
+        date: day,
+      },
+    });
+    touchedDates.add(dateStr);
+  }
+  for (const d of touchedDates) await recompute(userId, d);
 }
 
 // ---------- 断言 ----------

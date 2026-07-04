@@ -33,6 +33,8 @@ name: 一句话说明（含来源，如真实用户案例日期）
 profile: { weight_kg: 60 }          # 可选，覆盖默认档案
 setup:                              # 可选，显式前提状态
   food_alias: [{ canonical: "葱花饼", food: "煎饼果子", streak: 2 }]
+  food_record:                      # T44：种历史食物记录（days_ago 相对今天，1=昨天；用相对天数避免月初/周一日历边界抖动）
+    - { days_ago: 1, food: "鸡蛋", grams: 60, meal_type: breakfast }
 turns:
   - say: "中午吃了一碗米饭"          # 发消息
     known_fail: T40                 # 可选：已知缺陷归属

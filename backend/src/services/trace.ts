@@ -148,6 +148,28 @@ export class ChatTrace {
     return new ItemTrace(this.traceId, idx);
   }
 
+  /**
+   * 记录 query 意图的查询计划 event（T44）。
+   * 成功传 plan，planner 两级失败传 error——失败率是"计划 schema 是否够用"的观察指标。
+   */
+  async recordQueryPlan(out: { plan?: object; error?: string; model?: string; upgraded?: boolean }): Promise<void> {
+    await recordEvent({
+      traceId: this.traceId,
+      seq: 1,
+      eventType: "decision",
+      stateBefore: createEmptyState(),
+      stateAfter: createEmptyState(),
+      inputState: { text: this.inputText, stage: "query_plan" },
+      outputState: (out.plan ?? { error: out.error ?? "unknown" }) as Record<string, unknown>,
+      meta: {
+        stage: "query_plan",
+        model: out.model,
+        model_upgraded_to_pro: out.upgraded ?? false,
+        failed: !out.plan,
+      },
+    });
+  }
+
   /** 正常结束 trace，写入 intent + status="ok" + 聚合字段 */
   ok(intent: string, extra?: { mealType?: string; tokenUsage?: object; promptMessages?: object }): void {
     const lat = Date.now() - this.tStart;

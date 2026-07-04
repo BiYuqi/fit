@@ -1,0 +1,46 @@
+name: T44 查询计划——历史明细/餐次过滤/食物次数/无数据诚实/总结（2026-07-04 架构落地验收）
+# 种子用 days_ago 相对天数（不用日历词），避免用例在月初/周一跑挂
+setup:
+  food_record:
+    - { days_ago: 1, food: "鸡蛋", grams: 60, meal_type: breakfast }
+    - { days_ago: 1, food: "米饭（蒸，代表值）", grams: 200, meal_type: dinner }
+    - { days_ago: 1, food: "鸡胸肉", grams: 100, meal_type: dinner }
+    - { days_ago: 3, food: "鸡蛋", grams: 60, meal_type: breakfast }
+turns:
+  # T43 原始场景回归：首轮就能带出具体食物名，不再"只有总量"
+  - say: "昨天具体吃了什么"
+    expect:
+      intent: query
+      reply_contain: ["米饭", "鸡胸肉"]
+      reply_forbid: ["没有.{0,6}(记录|条目|明细)"]
+  # meal_filter：只答晚餐，早餐的鸡蛋不得出现
+  - say: "昨天晚饭吃了什么"
+    expect:
+      intent: query
+      reply_contain: ["米饭"]
+      reply_forbid: ["鸡蛋"]
+  # food_filter + 次数：后端数好，AI 引用
+  - say: "最近一周吃了几次鸡蛋"
+    expect:
+      intent: query
+      reply_contain_any: ["2次", "两次", "2 次"]
+  # 无数据日期：如实说没有，不编造
+  - say: "3月1日我吃了什么"
+    expect:
+      intent: query
+      reply_contain_any: ["没有", "没记录", "查不到", "无记录"]
+  # 总结类：intent=query（不是 chat），基于统计行给评价，只读红线不谎称操作
+  - say: "总结下我最近一周吃得怎么样"
+    expect:
+      intent: query
+      reply_contain_any: ["平均", "日均", "kcal", "千卡"]
+      reply_forbid: ["已更新", "已修改", "已删除", "已记录"]
+  # 裸追问（不带日期词）：parser 须判 query，planner 从 L0 沿用上一轮日期（截图 bug 的核心场景）
+  - say: "3天前我吃了多少"
+    expect:
+      intent: query
+      reply_contain_any: ["83", "鸡蛋"]
+  - say: "具体吃了什么"
+    expect:
+      intent: query
+      reply_contain: ["鸡蛋"]
