@@ -83,6 +83,57 @@ test("ParseResultSchema 解析 record 时自动归一化 items（葱花饼 bug �
   }
 });
 
+// T40：modify.update change.calories / change.food_desc 的 zod 校验
+
+test("modify.update change.calories 合法解析（用户直接指定热量）", () => {
+  const parsed = ParseResultSchema.parse({
+    intent: "modify", action: "update", target: "r1",
+    change: { calories: 180 },
+  });
+  if (parsed.intent === "modify") {
+    assert.equal(parsed.change?.calories, 180);
+  }
+});
+
+test("modify.update change.food_desc 合法解析（属性修正）", () => {
+  const parsed = ParseResultSchema.parse({
+    intent: "modify", action: "update", target: "r1",
+    change: { food_desc: "无油" },
+  });
+  if (parsed.intent === "modify") {
+    assert.equal(parsed.change?.food_desc, "无油");
+  }
+});
+
+test("change.calories 非正数拒绝（0 或负数不是合法热量）", () => {
+  assert.throws(() => ParseResultSchema.parse({
+    intent: "modify", action: "update", target: "r1",
+    change: { calories: 0 },
+  }));
+  assert.throws(() => ParseResultSchema.parse({
+    intent: "modify", action: "update", target: "r1",
+    change: { calories: -50 },
+  }));
+});
+
+test("change.food_desc 空字符串拒绝", () => {
+  assert.throws(() => ParseResultSchema.parse({
+    intent: "modify", action: "update", target: "r1",
+    change: { food_desc: "" },
+  }));
+});
+
+test("change 可省略 calories/food_desc，不影响其余字段解析（向后兼容）", () => {
+  const parsed = ParseResultSchema.parse({
+    intent: "modify", action: "update", target: "r1",
+    change: { grams: 150, portion_label: "medium" },
+  });
+  if (parsed.intent === "modify") {
+    assert.equal(parsed.change?.calories, undefined);
+    assert.equal(parsed.change?.food_desc, undefined);
+  }
+});
+
 test("ParseResultSchema 解析 modify.append 的 items 同样归一化", () => {
   const parsed = ParseResultSchema.parse({
     intent: "modify",

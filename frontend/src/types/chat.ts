@@ -24,6 +24,13 @@ export type UndoPrevState = {
   portion_label: string;
   weight_g: number;
   meal_type?: string; // 改餐次的撤销还原
+  // T40：改前的精确营养快照，齐全时后端直接还原这些值（不按 food×grams 重算）；
+  // 前端只需原样透传给 /api/records/:id/undo，不用读取
+  calories?: number;
+  protein?: number;
+  fat?: number;
+  carbs?: number;
+  calories_source?: string;
 } | {
   calories_burned: number;
   kind: 'exercise';

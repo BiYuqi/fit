@@ -55,8 +55,9 @@
 | meal_type | enum(breakfast/lunch/dinner/snack) | |
 | portion_label | enum(small/medium/large/custom) | |
 | weight_g | float | 最终克数（AI估或用户定） |
-| calories | float | 后端算：calories_100g/100*weight_g |
-| protein / fat / carbs | float | 同理 |
+| calories | float | 后端算：calories_100g/100*weight_g；若 `calories_source=user_override` 则是用户直接指定的值（modify.update change.calories，T40，见 LEARNING_SPEC §3） |
+| protein / fat / carbs | float | 同理；`user_override` 时按新旧热量比例回推，不是重新估算 |
+| calories_source | text | computed（默认，food×grams 算出）/ user_override（用户直接报的热量，T40）；modify 改 food/grams/food_desc 时会被重置回 computed |
 | food_confidence | float? | 食物识别把握度 |
 | portion_confidence | float? | 份量把握度 |
 | source | text | text / voice |
@@ -159,7 +160,7 @@ modify 的 update/append 高置信直执行：record_card 的 `payload.undo` 带
 | applied_grams | float | applyBias 之后展示给用户的 |
 | final_grams | float | 用户最终确定 |
 | predicted_label / final_label | text? | |
-| signal_type | text | explicit_gram / custom_gram / card_choice / implicit_accept / delete |
+| signal_type | text | explicit_gram / custom_gram / card_choice / implicit_accept / delete / calorie_override / food_desc_correction（后两者 T40，权重0，只记档不训练克数偏差） |
 | signal_weight | float | 见 LEARNING_SPEC §3 |
 | log_ratio | float? | ln(final/predicted)，训练用误差 |
 | parse_log_id | uuid? FK | |

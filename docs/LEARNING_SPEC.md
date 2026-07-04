@@ -40,6 +40,8 @@ parser(DeepSeek) 估 portions
 | 卡片食物选择 | resolve food_choice | — | 走 user_food_alias，不进克数偏差 |
 | 隐式确认（入库 24h 未改未删） | 每日 job 扫 food_record | 0.15 | 用户懒得反馈时仍能收敛 |
 | 删除 | delete resolve | 0 | **不训练**（动机不可知），只记事件 |
+| 热量直接指定（"记录成180kcal"） | modify update `change.calories` | 0 | 用户真值覆盖（T40），克数没变，**不训练**克数偏差，只记档 |
+| 属性修正（无油/去皮等） | modify update `change.food_desc` | 0 | 触发重估新食物条目 + 食物直连自愈（T40），**不训练**克数偏差，只记档 |
 
 ## 4. 三层偏差模型（分层收缩）
 
@@ -118,6 +120,7 @@ function applyBias(grams: number, b: { food?: Bias; category?: Bias; scene?: Bia
 | payload | T31 | record_card / portion_card 带 `bias_applied:{from,to}`，前端可不展示，discuss/debug 用 |
 | 【份量习惯】 | T31 | compressContext 加一行 |
 | scene 字段 | T32 | parser record 协议加 `scene`（strict schema + zod + prompt 示例），同步 AI_PARSING_SPEC §3 |
+| 属性修正自愈 | T40 | modify.update change.food_desc 产生新估算条目后 `upsertFoodAlias(user, 原食物名→新food_id)`，streak 从 1 起，下次同名食物 streak≥2 后食物直连命中修正版；与 T30 逃生口/undo 联动共用同一套 alias 机制 |
 
 parse 主提示词在 T29–T31 期间零改动。
 

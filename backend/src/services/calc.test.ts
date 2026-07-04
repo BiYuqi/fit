@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { bmr, tdee, itemNutrition, dailyTargets } from "./calc";
+import { bmr, tdee, itemNutrition, dailyTargets, scaleNutritionToCalories } from "./calc";
 import type { UserProfile, FoodNutrient } from "./calc";
 
 // 浮点数近似比较（误差 < 0.001）
@@ -383,4 +383,42 @@ test("目标-中年男热量需求低于年轻男（同体型活动量）", () =
   const young: UserProfile = { ...deskMale, age: 25 };
   const mid: UserProfile   = { ...deskMale, age: 45 };
   assert.ok(dailyTargets(young).target_calories > dailyTargets(mid).target_calories);
+});
+
+// ============================================================
+// T40：scaleNutritionToCalories —— 用户直接指定热量后按比例回推宏量素
+// ============================================================
+
+test("T40-回推：热量减半，蛋白/脂肪/碳水同步减半（比例不变）", () => {
+  const n = itemNutrition(油条, 70); // 267kcal, 蛋白5.95g, 脂肪12.11g, 碳水33.32g（葱花饼案例量级）
+  const half = scaleNutritionToCalories(n, n.calories / 2);
+  assert.equal(half.calories, n.calories / 2);
+  approx(half.protein_g, n.protein_g / 2);
+  approx(half.fat_g, n.fat_g / 2);
+  approx(half.carbs_g, n.carbs_g / 2);
+  approx(half.fiber_g!, n.fiber_g! / 2);
+});
+
+test("T40-回推：热量调高，宏量素同比例调高", () => {
+  const n = itemNutrition(白米饭, 200);
+  const scaled = scaleNutritionToCalories(n, n.calories * 1.5);
+  assert.equal(scaled.calories, n.calories * 1.5);
+  approx(scaled.protein_g, n.protein_g * 1.5);
+  approx(scaled.carbs_g, n.carbs_g * 1.5);
+});
+
+test("T40-回推：原热量为 0 时不除以 0，宏量素归零而非 NaN/Infinity", () => {
+  const zeroNutrition = { calories: 0, protein_g: 5, fat_g: 2, carbs_g: 10, fiber_g: 1, incomplete: false };
+  const out = scaleNutritionToCalories(zeroNutrition, 180);
+  assert.equal(out.calories, 180);
+  assert.equal(out.protein_g, 0);
+  assert.equal(out.fat_g, 0);
+  assert.equal(out.carbs_g, 0);
+  assert.equal(out.fiber_g, 0);
+});
+
+test("T40-回推：fiber_g 原为 null 时保持 null（不是 0）", () => {
+  const n: ReturnType<typeof itemNutrition> = { calories: 100, protein_g: 5, fat_g: 2, carbs_g: 10, fiber_g: null, incomplete: false };
+  const out = scaleNutritionToCalories(n, 200);
+  assert.equal(out.fiber_g, null);
 });

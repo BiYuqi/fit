@@ -16,6 +16,13 @@ const UndoBodySchema = z.object({
     portion_label: z.enum(["small", "medium", "large", "custom"]),
     weight_g: z.number().positive(),
     meal_type: z.enum(["breakfast", "lunch", "dinner", "snack"]).optional(), // 改餐次的撤销还原
+    // T40：改前的精确营养快照。存在时直接还原这些值，而不是按 food×grams 重算——
+    // user_override 的记录 food×grams 算出来的值本就和落库值不同，重算会丢失用户真值。
+    calories: z.number().optional(),
+    protein: z.number().optional(),
+    fat: z.number().optional(),
+    carbs: z.number().optional(),
+    calories_source: z.string().optional(),
   }).or(z.object({
     calories_burned: z.number().positive(),
     kind: z.literal("exercise"),
@@ -44,18 +51,24 @@ export async function recordsRoutes(app: FastifyInstance) {
       }
       const prev = bodyParsed.data.prev_state;
       if (prev && "food_id" in prev) {
-        // update 撤销 → 还原食物/份量/克数并重算
+        // update 撤销 → 还原食物/份量/克数
         const food = await prisma.foodStandard.findUnique({ where: { id: prev.food_id } });
         if (!food) {
           return reply.status(400).send({ error: { code: "invalid_food", message: "Previous food not found" } });
         }
-        const nutrition = itemNutrition(food, prev.weight_g);
+        // 有精确营养快照（T40 起）→ 直接还原，不按 food×grams 重算——
+        // user_override 记录的落库值本就不等于 food×grams 算出来的值，重算会丢失用户真值
+        const hasExactSnapshot = prev.calories != null && prev.protein != null && prev.fat != null && prev.carbs != null;
+        const nutrition = hasExactSnapshot
+          ? { calories: prev.calories!, protein_g: prev.protein!, fat_g: prev.fat!, carbs_g: prev.carbs! }
+          : itemNutrition(food, prev.weight_g);
         await prisma.foodRecord.update({
           where: { id },
           data: {
             food_id: prev.food_id, portion_label: prev.portion_label as PortionLabel, weight_g: prev.weight_g,
             meal_type: (prev.meal_type as MealType | undefined) ?? undefined,
             calories: nutrition.calories, protein: nutrition.protein_g, fat: nutrition.fat_g, carbs: nutrition.carbs_g,
+            calories_source: prev.calories_source ?? "computed",
           },
         });
       } else {

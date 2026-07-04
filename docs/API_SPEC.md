@@ -65,7 +65,8 @@ resp: `{ record?, summary_card, messages }`。
 
 ### POST /api/records/:id/undo
 撤销 modify 的 update/append（见 AI_PARSING_SPEC §8），由 `record_card.payload.undo` 驱动。
-req: `{ prev_state? }`——带 `prev_state{food_id,portion_label,weight_g}` → 还原（update 撤销）；不带 → 删该记录（append 撤销）。
+req: `{ prev_state? }`——带 `prev_state{food_id,portion_label,weight_g,meal_type?,calories?,protein?,fat?,carbs?,calories_source?}` → 还原（update 撤销）；不带 → 删该记录（append 撤销）。
+`calories/protein/fat/carbs/calories_source`（T40）若齐全，直接还原这些精确值，不按 food×grams 重算——`change.calories`（用户真值覆盖）产生的记录，重算值会不同于落库值，必须精确还原。
 行为：还原/删记录后重算 daily_summary；若该记录 `alias_canonical` 非空，联动清零对应用户食物直连的 streak（见 LEARNING_SPEC §7）。resp: `{ ok, summary_card }`。
 
 ### POST /api/learning/alias/reset

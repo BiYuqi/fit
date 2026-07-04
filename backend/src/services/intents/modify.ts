@@ -1,9 +1,9 @@
 import { prisma } from "../../lib/prisma";
-import { matchFood } from "../matcher";
-import { itemNutrition } from "../calc";
+import { matchFood, matchFoodExactOrEstimate } from "../matcher";
+import { itemNutrition, scaleNutritionToCalories } from "../calc";
 import { recompute, buildContextCard } from "../summary";
 import { recordModifyCorrection } from "../trace";
-import { recordLearningEvent, resetFoodAliasStreak } from "../learning";
+import { recordLearningEvent, resetFoodAliasStreak, upsertFoodAlias } from "../learning";
 import { processItems } from "./food-item";
 import { guessMealType } from "../../lib/dates";
 import type { MealType, PortionLabel } from "@prisma/client";
@@ -128,15 +128,24 @@ export async function handleModify(
     return { intent: "modify", reply: aiMsg.content, summary_card: card, messages };
   }
 
-  const prev_state = { food_id: rec.food_id, portion_label: rec.portion_label, weight_g: rec.weight_g, meal_type: rec.meal_type };
+  const prev_state = {
+    food_id: rec.food_id, portion_label: rec.portion_label, weight_g: rec.weight_g, meal_type: rec.meal_type,
+    calories: rec.calories, protein: rec.protein, fat: rec.fat, carbs: rec.carbs, calories_source: rec.calories_source,
+  };
   const change = parsed.change ?? {};
   let food = await prisma.foodStandard.findUniqueOrThrow({ where: { id: rec.food_id } });
+  const originalFoodName = food.name; // T40 自愈闭环：属性修正后 alias 指回这个原名（下次同名食物直连命中修正版）
   let weight_g = rec.weight_g;
   let portion_label = rec.portion_label as PortionLabel;
   let meal_type = rec.meal_type as MealType;
 
   if (change.food) {
     food = await matchFood(change.food, undefined, user_id);   // 改食物：份量沿用旧的
+  }
+  if (change.food_desc) {
+    // T40：属性修正（"无油"/"去皮"等）影响营养口径——构造具体变体名强制重估，不走弱匹配裁决
+    // （否则 trgm 几乎必然召回原条目，复用旧营养值会让修正静默失效，见 matchFoodExactOrEstimate 注释）
+    food = await matchFoodExactOrEstimate(`${food.name}（${change.food_desc}）`, text, user_id);
   }
   if (change.meal_type) {
     meal_type = change.meal_type as MealType;                  // 改餐次（"粽子是中午吃的"）：数值不动
@@ -154,15 +163,26 @@ export async function handleModify(
   if (change.food && rec.alias_canonical) {
     resetFoodAliasStreak(user_id, rec.alias_canonical);
   }
+  // T40 自愈闭环（LEARNING_SPEC §6 §7）：属性修正产生的估算条目直连回原食物名，
+  // 下次再说"葱花饼"，streak≥2 后直接命中无油版——修正一次终身受益。
+  if (change.food_desc) {
+    upsertFoodAlias(user_id, originalFoodName, food.id);
+  }
 
-  const nutrition = itemNutrition(food, weight_g);
+  const baseNutrition = itemNutrition(food, weight_g);
+  // T40：change.calories 是用户亲口给出的最终热量（用户真值），铁律 1 禁的是 AI 算账，不禁用户报数——
+  // 直接采信，按比例回推宏量素；calories_source=user_override 防止后续同条记录被 food×grams 静默重算覆盖。
+  const nutrition = change.calories != null ? scaleNutritionToCalories(baseNutrition, change.calories) : baseNutrition;
+  const calories_source = change.calories != null ? "user_override" : "computed";
+
   const updated = await prisma.foodRecord.update({
     where: { id: rec.id },
     data: {
       food_id: food.id, portion_label, weight_g, meal_type,
       calories: nutrition.calories, protein: nutrition.protein_g,
       fat: nutrition.fat_g, carbs: nutrition.carbs_g,
-      alias_canonical: change.food ? null : undefined,
+      calories_source,
+      alias_canonical: (change.food || change.food_desc) ? null : undefined,
     },
   });
   await recompute(user_id, today);
@@ -198,6 +218,35 @@ export async function handleModify(
       scene: rec.scene,
     });
   }
+  // 学习信号（T40）：热量/属性修正只记档不训练克数偏差模型（predicted==final_grams，权重0）
+  if (change.calories != null) {
+    recordLearningEvent({
+      user_id,
+      food_record_id: updated.id,
+      food_id: food.id,
+      category: food.category,
+      predicted_grams: weight_g,
+      final_grams: weight_g,
+      predicted_label: portion_label,
+      final_label: portion_label,
+      signal_type: "calorie_override",
+      scene: rec.scene,
+    });
+  }
+  if (change.food_desc != null) {
+    recordLearningEvent({
+      user_id,
+      food_record_id: updated.id,
+      food_id: food.id,
+      category: food.category,
+      predicted_grams: weight_g,
+      final_grams: weight_g,
+      predicted_label: portion_label,
+      final_label: portion_label,
+      signal_type: "food_desc_correction",
+      scene: rec.scene,
+    });
+  }
   // Trace: correction event（modify update——用户主动修改了 AI 的记录）
   await recordModifyCorrection({
     traceId: tctx.traceId,
@@ -205,8 +254,8 @@ export async function handleModify(
     foodId: rec.food_id,
     foodName: food.name,
     prevState: prev_state,
-    newState: { food_name: food.name, food_id: food.id, portion_label, weight_g, calories: Math.round(nutrition.calories) },
-    isFoodChange: !!change.food,
+    newState: { food_name: food.name, food_id: food.id, portion_label, weight_g, calories: Math.round(nutrition.calories), calories_source },
+    isFoodChange: !!(change.food || change.food_desc),
     modifyConfidence: (parsed as any).modify_confidence,
   });
   tctx.ok("modify", { tokenUsage: parseUsage });

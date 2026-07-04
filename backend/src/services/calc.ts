@@ -72,6 +72,20 @@ export function itemNutrition(food: FoodNutrient, weight_g: number): ItemNutriti
   };
 }
 
+// T40：用户直接指定食物记录的最终热量（用户真值）时，按同一比例回推宏量素，
+// 而不是简单把 protein/fat/carbs 清零——用户纠正的是总量口径（如"少放了油"），营养结构大体不变。
+export function scaleNutritionToCalories(nutrition: ItemNutrition, calories: number): ItemNutrition {
+  const ratio = nutrition.calories > 0 ? calories / nutrition.calories : 0;
+  return {
+    calories,
+    protein_g: nutrition.protein_g * ratio,
+    fat_g: nutrition.fat_g * ratio,
+    carbs_g: nutrition.carbs_g * ratio,
+    fiber_g: nutrition.fiber_g != null ? nutrition.fiber_g * ratio : null,
+    incomplete: nutrition.incomplete,
+  };
+}
+
 export function dailyTargets(user: UserProfile): DailyTargets {
   const deficit = user.daily_deficit ?? 500;
   const pFactor = user.protein_factor ?? 1.8;

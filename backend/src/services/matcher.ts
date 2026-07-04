@@ -237,6 +237,20 @@ export async function matchFoodCandidates(
 }
 
 // ---------- 主管线 ----------
+// ---------- 精确匹配或估算（不走弱匹配裁决，T40 属性修正专用）----------
+// modify.update change.food_desc 构造的具体变体名（如"葱花饼（无油）"）只信任精确同名/别名命中
+// （说明这个变体之前已被估算过）；否则强制重新估算。不走 trgm/AI 裁决——那条链路是为了把"字面像
+// 但不确定是不是同一种东西"的候选交给 AI 把关，而属性修正的前提恰恰是"原条目的营养口径不对"，
+// 若走弱匹配，trgm 几乎必然召回原条目（字面高度相似），AI 裁决又缺乏"无油/无糖"这类营养口径信号，
+// 容易误判为同一种从而复用旧营养值，导致修正静默失效（用户以为改了，数据其实没变）。
+export async function matchFoodExactOrEstimate(canonical: string, raw: string = canonical, userId?: string): Promise<FoodStandard> {
+  const exact = await prisma.foodStandard.findFirst({ where: { name: canonical } });
+  if (exact) return exact;
+  const byAlias = await prisma.foodStandard.findFirst({ where: { aliases: { has: canonical } } });
+  if (byAlias) return byAlias;
+  return estimateByAI(canonical, raw, userId);
+}
+
 // 字面匹配只做"召回"，不做"裁决"：精确/alias 可信任直用；前缀(假前缀)/trgm 属弱匹配，
 // 回灌 AI 把关；AI 否决或无候选 → 估算落库。详见 AI_PARSING_SPEC §5。
 export async function matchFood(canonical: string, raw: string = canonical, userId?: string): Promise<FoodStandard> {

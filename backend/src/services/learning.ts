@@ -6,7 +6,14 @@ import type { UserFoodAlias } from "@prisma/client";
 // P1（T29）：只采集不应用。applied_grams 恒等于 predicted_grams，
 // 直到 T31 接入 applyBias 后才会分叉。
 
-export type SignalType = "explicit_gram" | "custom_gram" | "card_choice" | "implicit_accept" | "delete";
+export type SignalType =
+  | "explicit_gram"
+  | "custom_gram"
+  | "card_choice"
+  | "implicit_accept"
+  | "delete"
+  | "calorie_override"     // T40：modify.update change.calories，用户直接指定热量——只记档不训练克数偏差
+  | "food_desc_correction"; // T40：modify.update change.food_desc，属性修正触发重估——只记档不训练克数偏差
 
 const SIGNAL_WEIGHTS: Record<SignalType, number> = {
   explicit_gram: 1.0,
@@ -14,6 +21,8 @@ const SIGNAL_WEIGHTS: Record<SignalType, number> = {
   card_choice: 0.6,
   implicit_accept: 0.15,
   delete: 0,
+  calorie_override: 0,
+  food_desc_correction: 0,
 };
 
 // scene 层只认这三个值：unknown/null 不建 bias 行、不参与融合（LEARNING_SPEC §4，T32）
