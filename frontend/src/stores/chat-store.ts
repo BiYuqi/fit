@@ -29,6 +29,10 @@ let _loadingMore = false;
 let _loadMoreCooldown: ReturnType<typeof setTimeout> | null = null;
 let _noMoreData = false;
 
+// Same guards for the newer direction (after a search jump)
+let _loadingNewer = false;
+let _loadNewerCooldown: ReturnType<typeof setTimeout> | null = null;
+
 // Generation counter: bumped by jumpToMessage/jumpToDate so any in-flight
 // loadRecentMessages aborts instead of overwriting the jump window.
 let _syncGeneration = 0;
@@ -36,6 +40,15 @@ let _syncGeneration = 0;
 type JumpTarget =
   | { type: 'message'; id: string }
   | { type: 'date'; date: string };
+
+// 跳转窗口的结束日期（含当天）。窗口已覆盖今天时返回 null（= 实时模式，无需向新方向加载）。
+function windowToFor(targetDate: string): string | null {
+  const d = new Date(targetDate + 'T12:00:00');
+  if (isNaN(d.getTime())) return null;
+  d.setDate(d.getDate() + 1); // 与 getMessagesAround(date, 1) 的窗口右边界一致
+  const to = d.toISOString().slice(0, 10);
+  return to >= todayStr() ? null : to;
+}
 
 type ChatStore = {
   messages: ChatMessage[];
@@ -45,10 +58,13 @@ type ChatStore = {
   summaryCard: ContextCard | null;
   undoneCards: Record<string, true>;
   jumpTarget: JumpTarget | null;
+  /** 当前窗口结束日期；null = 窗口已含今天（实时模式） */
+  windowTo: string | null;
 
   loadRecentMessages: (token: string) => Promise<void>;
   loadDates: (token: string) => Promise<void>;
   loadMoreMessages: (token: string) => Promise<void>;
+  loadNewerMessages: (token: string) => Promise<void>;
   jumpToMessage: (messageId: string) => Promise<void>;
   jumpToDate: (date: string) => Promise<void>;
   clearJumpTarget: () => void;
@@ -66,6 +82,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   summaryCard: null,
   undoneCards: {},
   jumpTarget: null,
+  windowTo: null,
 
   loadDates: async (token: string) => {
     try {
@@ -86,7 +103,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
   loadRecentMessages: async (token: string) => {
     const gen = ++_syncGeneration;
-    set({ isLoading: true });
+    set({ isLoading: true, windowTo: null }); // 最近窗口总是含今天
 
     const to = todayStr();
     const fromDate = new Date();
@@ -134,6 +151,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     const { messages } = get();
     if (messages.length === 0) return;
 
+    const gen = _syncGeneration; // 跳转会换掉整个窗口，中途返回的旧数据必须丢弃
     _loadingMore = true;
 
     try {
@@ -171,15 +189,73 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         } catch { /* stay empty */ }
       }
 
+      if (_syncGeneration !== gen) return; // cancelled by jump
+
       if (older.length === 0) {
         _noMoreData = true; // prevent further loads
       } else {
-        set({ messages: [...older, ...messages] });
+        set(s => ({ messages: [...older, ...s.messages] }));
         // Cooldown before next load — prevents onEndReached loop
         _loadMoreCooldown = setTimeout(() => { _loadMoreCooldown = null; }, 500);
       }
     } finally {
       _loadingMore = false;
+    }
+  },
+
+  // 搜索跳转后窗口停在历史日期，inverted 列表往下滚（视觉底部 = onStartReached）时
+  // 向"更新"方向补载，直到窗口重新覆盖今天。
+  loadNewerMessages: async (token: string) => {
+    const { windowTo } = get();
+    if (!windowTo || _loadingNewer || _loadNewerCooldown) return;
+
+    const gen = _syncGeneration;
+    _loadingNewer = true;
+
+    try {
+      const fromDate = new Date(windowTo + 'T12:00:00');
+      if (isNaN(fromDate.getTime())) return;
+      fromDate.setDate(fromDate.getDate() + 1);
+      const toDate = new Date(fromDate);
+      toDate.setDate(toDate.getDate() + 6);
+
+      const today = todayStr();
+      const fromStr = fromDate.toISOString().slice(0, 10);
+      let toStr = toDate.toISOString().slice(0, 10);
+      if (toStr > today) toStr = today;
+      if (fromStr > today) {
+        set({ windowTo: null });
+        return;
+      }
+
+      let newer = await getMessagesInRange(fromStr, toStr);
+
+      // SQLite empty (fresh install) → fallback to server
+      if (newer.length === 0) {
+        try {
+          const data = await apiFetch<{ messages: ChatMessage[] }>(
+            `/api/chat/messages/range?from=${fromStr}&to=${toStr}`,
+            { token },
+          );
+          if (data.messages.length > 0) {
+            await persistMessages(data.messages);
+            newer = await getMessagesInRange(fromStr, toStr);
+          }
+        } catch { /* stay empty */ }
+      }
+
+      if (_syncGeneration !== gen) return; // cancelled by jump
+
+      // 空档日（这几天没聊过）也要推进窗口，否则会卡在原地反复查同一段
+      const nextWindowTo = toStr >= today ? null : toStr;
+      if (newer.length > 0) {
+        set(s => ({ messages: [...s.messages, ...newer], windowTo: nextWindowTo }));
+      } else {
+        set({ windowTo: nextWindowTo });
+      }
+      _loadNewerCooldown = setTimeout(() => { _loadNewerCooldown = null; }, 500);
+    } finally {
+      _loadingNewer = false;
     }
   },
 
@@ -204,6 +280,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         messages: window,
         jumpTarget: { type: 'message', id: messageId },
         isLoading: false,
+        windowTo: windowToFor(targetDate),
       });
     } catch (e) {
       console.error('[jumpToMessage] error:', e);
@@ -226,6 +303,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         messages: window,
         jumpTarget: { type: 'date', date: targetDate },
         isLoading: false,
+        windowTo: windowToFor(targetDate),
       });
     } catch (e) {
       console.error('[jumpToDate] error:', e);

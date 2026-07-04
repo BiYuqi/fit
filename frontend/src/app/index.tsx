@@ -124,6 +124,7 @@ export default function ChatScreen({ isActive = true }: { isActive?: boolean }) 
     jumpTarget,
     loadRecentMessages,
     loadMoreMessages,
+    loadNewerMessages,
     jumpToMessage,
     jumpToDate,
     clearJumpTarget,
@@ -199,29 +200,46 @@ export default function ChatScreen({ isActive = true }: { isActive?: boolean }) 
   }, [jumpToDate]);
 
   // ── Respond to jumpTarget after messages window loads ──
+  // inverted 列表里 viewPosition 是 content 坐标：0 = 视觉底部，1 = 视觉顶部。
+  // 0.85 ≈ 目标消息落在屏幕上方偏下一点（微信式）。
+  const JUMP_VIEW_POSITION = 0.85;
+  // 跳转闭环状态：目标行未渲染时 scrollToIndex 失败 → onScrollToIndexFailed 滚到估算
+  // 位置逼出渲染 → 重试，直到命中或重试耗尽。记 id 不记 index——重试期间
+  // loadNewerMessages 可能往 reversed 数组前端插行，index 会漂移，每次现查。
+  const pendingJumpRef = useRef<{ id: string; retries: number } | null>(null);
+  const visibleMessagesRef = useRef(visibleMessages);
+  useEffect(() => {
+    visibleMessagesRef.current = visibleMessages;
+  }, [visibleMessages]);
+
+  const scrollToPendingJump = useCallback(() => {
+    const jump = pendingJumpRef.current;
+    if (!jump) return;
+    const idx = visibleMessagesRef.current.findIndex(m => m.id === jump.id);
+    if (idx < 0) return;
+    flatListRef.current?.scrollToIndex({ index: idx, animated: false, viewPosition: JUMP_VIEW_POSITION });
+  }, []);
+
   useEffect(() => {
     if (!jumpTarget) return;
-    let idx = -1;
+    let target: ChatMessage | undefined;
     if (jumpTarget.type === 'message') {
-      idx = visibleMessages.findIndex(m => m.id === jumpTarget.id);
+      target = visibleMessages.find(m => m.id === jumpTarget.id);
     } else {
       // visibleMessages is reverse (new→old), first chronological of date = last in array
       for (let i = visibleMessages.length - 1; i >= 0; i--) {
-        if (visibleMessages[i].date === jumpTarget.date) { idx = i; break; }
+        if (visibleMessages[i].date === jumpTarget.date) { target = visibleMessages[i]; break; }
       }
     }
     clearJumpTarget();
-    if (idx >= 0) {
-      // Phase 1: instant rough jump — forces FlatList to render target area
-      flatListRef.current?.scrollToIndex({ index: idx, animated: false, viewPosition: 0 });
-      // Phase 2: delayed precise scroll — FlatList has now measured real item heights
-      const id = setTimeout(() => {
-        flatListRef.current?.scrollToIndex({ index: idx, animated: true, viewPosition: 0 });
-      }, 400);
-      // Safety: cancel if component unmounts or new jump arrives
+    if (target) {
+      pendingJumpRef.current = { id: target.id, retries: 0 };
+      scrollToPendingJump();
+      // 定稿滚动：行高全部实测后再校准一次（首次成功时位置可能基于部分估算）
+      const id = setTimeout(scrollToPendingJump, 600);
       return () => clearTimeout(id);
     }
-  }, [jumpTarget, visibleMessages, clearJumpTarget]);
+  }, [jumpTarget, visibleMessages, clearJumpTarget, scrollToPendingJump]);
 
   const renderItem = useCallback(
     ({ item, index }: { item: ChatMessage; index: number }) => {
@@ -270,6 +288,11 @@ export default function ChatScreen({ isActive = true }: { isActive?: boolean }) 
         keyExtractor={keyExtractor}
         onEndReached={() => { if (token) loadMoreMessages(token); }}
         onEndReachedThreshold={0.3}
+        onStartReached={() => { if (token) loadNewerMessages(token); }}
+        onStartReachedThreshold={0.3}
+        // 向新方向补载会在 content 起点（视觉底部）插入行，锚定可见项防止画面跳动；
+        // 贴底 100px 内时新消息（如发送）仍自动滚出来
+        maintainVisibleContentPosition={{ minIndexForVisible: 0, autoscrollToTopThreshold: 100 }}
         style={styles.flatList}
         contentContainerStyle={[
           styles.list,
@@ -292,8 +315,16 @@ export default function ChatScreen({ isActive = true }: { isActive?: boolean }) 
         removeClippedSubviews={false}
         scrollEventThrottle={16}
         onScrollToIndexFailed={(info) => {
-          const estimatedOffset = info.index * 80;
-          flatListRef.current?.scrollToOffset({ offset: estimatedOffset, animated: true });
+          // 用实测均高估算（比固定 80px 准得多），先滚过去逼 FlatList 渲染目标附近
+          flatListRef.current?.scrollToOffset({
+            offset: info.averageItemLength * info.index,
+            animated: false,
+          });
+          const jump = pendingJumpRef.current;
+          if (jump && jump.retries < 5) {
+            jump.retries += 1;
+            setTimeout(scrollToPendingJump, 300);
+          }
         }}
         showsVerticalScrollIndicator={false}
         keyboardDismissMode="on-drag"
