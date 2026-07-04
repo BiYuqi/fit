@@ -1,0 +1,26 @@
+# T50：record 阶段采信用户自报运动消耗。
+# "打羽毛球65分钟，消耗590卡" 一句话 → 65 归 duration_min、590 归 calories_burned 且直接采信（非 MET 估算）。
+# 没给卡数时仍走 MET 估算。锁住 parser 区分时长/次数数字 vs 自报消耗卡数。
+# 注：纯运动消息的 reply 恒为"已记录。"（运动详情只进 exercise_card），故断言走 exercise_record 落库层。
+name: T50 record 阶段采信用户自报运动消耗
+turns:
+  # 同一句既有时长(65)又有消耗(590)：65→duration_min、590→calories_burned 直接采信
+  - say: "打羽毛球65分钟，消耗590卡"
+    expect:
+      intent: record
+      db:
+        exercise_record:
+          where: { type: "羽毛球" }
+          duration_min: 65
+          calories_burned: 590
+
+  # 只给时长、无卡数：回落 MET 估算（跑步 MET=8，70kg，30min → ≈280），断言明显不是用户报的 590
+  # 措辞用"我跑步了30分钟"而非裸"跑步30分钟"——后者偶发被模型读成 query，与本用例无关
+  - say: "我跑步了30分钟"
+    expect:
+      intent: record
+      db:
+        exercise_record:
+          where: { type: "跑步" }
+          duration_min: 30
+          calories_burned: { gt: 150, lt: 450 }

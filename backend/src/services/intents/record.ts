@@ -2,7 +2,7 @@ import { prisma } from "../../lib/prisma";
 import { recompute, buildContextCard } from "../summary";
 import { refreshMealCard } from "../meal-card";
 import { processItems } from "./food-item";
-import { calcExerciseCalories, resolveDuration } from "./exercise";
+import { resolveDuration, resolveExerciseCalories } from "./exercise";
 import { guessMealType, extractMealTypeFromText } from "../../lib/dates";
 import type { MealType } from "@prisma/client";
 import type { ParseResult } from "../../ai/schema";
@@ -53,7 +53,7 @@ export async function handleRecord(
   for (const ex of (parsed.exercise ?? [])) {
     // 次数型运动按 ~4s/次 估算时长，至少 1min
     const duration_min = resolveDuration(ex);
-    const calories_burned = calcExerciseCalories(ex.type, duration_min, weight_kg);
+    const { calories_burned, user_reported } = resolveExerciseCalories(ex, duration_min, weight_kg);
 
     const exRecord = await prisma.exerciseRecord.create({
       data: {
@@ -68,14 +68,16 @@ export async function handleRecord(
     });
     needsRecompute = true;
     const detail = ex.reps ? `${ex.reps}次 ≈ ${duration_min}min` : `${duration_min}min`;
-    replyParts.push(`运动 ${ex.type} ${detail}（消耗约 ${calories_burned} kcal）`);
+    // 用户自报消耗是真值，不加"约"；MET 估算才是"约"
+    const burnedText = user_reported ? `消耗 ${calories_burned} kcal` : `消耗约 ${calories_burned} kcal`;
+    replyParts.push(`运动 ${ex.type} ${detail}（${burnedText}）`);
 
     const exData = {
       user_id,
       date: dateObj,
       role: "assistant" as const,
       kind: "exercise_card",
-      payload: { exercise_id: exRecord.id, type: ex.type, duration_min, calories_burned } as object,
+      payload: { exercise_id: exRecord.id, type: ex.type, duration_min, calories_burned, user_reported } as object,
     };
     exerciseCreateFns.push(() => prisma.chatMessage.create({ data: exData }));
   }

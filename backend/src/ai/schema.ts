@@ -68,6 +68,7 @@ export const ExerciseItemSchema = z.object({
   duration_min: z.number().positive().optional(),
   reps: z.number().positive().optional(),
   intensity: z.string().optional(),
+  calories_burned: z.number().positive().optional(), // T50：用户在 record 消息里自报的消耗（"消耗590卡"），有则直接采信、跳过 MET
 });
 export type ExerciseItem = z.infer<typeof ExerciseItemSchema>;
 
@@ -239,6 +240,7 @@ const exerciseProp = {
       duration_min: { type: "number" },
       reps: { type: "number", description: "次数型运动的总次数（如俯卧撑、引体向上），与 duration_min 二选一或同时有" },
       intensity: { type: "string" },
+      calories_burned: { type: "number", description: "用户在记录时明确自报的消耗热量（\"消耗590卡\"、\"烧了500大卡\"），有则填、后端直接采信跳过 MET 估算；只描述时长/次数、没给卡数时不要填" },
     },
   },
 };

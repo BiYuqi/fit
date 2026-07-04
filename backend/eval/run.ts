@@ -37,6 +37,7 @@ interface Expect {
   db?: {
     food_record?: { where?: { food_name?: string } } & Record<string, unknown>;
     food_record_count?: number;
+    exercise_record?: { where?: { type?: string } } & Record<string, unknown>; // T50：断言运动记录字段（calories_burned/duration_min 等）
     pending_record?: { type?: string } | null; // null = 断言无 open pending
     last_card?: string; // 最新 assistant 消息的 kind
   };
@@ -181,6 +182,17 @@ async function assertTurn(userId: string, turn: Turn, resp: { intent?: string; r
   if (db?.food_record_count !== undefined) {
     const n = await prisma.foodRecord.count({ where: { user_id: userId } });
     if (n !== db.food_record_count) failures.push({ what: "food_record_count", expected: db.food_record_count, actual: n });
+  }
+  if (db?.exercise_record !== undefined) {
+    const { where, ...fields } = db.exercise_record;
+    const rec = await prisma.exerciseRecord.findFirst({
+      where: {
+        user_id: userId,
+        ...(where?.type ? { type: { contains: where.type } } : {}),
+      },
+      orderBy: { created_at: "desc" },
+    });
+    checkFields(failures, "exercise_record", fields, rec);
   }
   if (db?.pending_record !== undefined) {
     const pending = await prisma.pendingRecord.findFirst({

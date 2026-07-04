@@ -33,6 +33,19 @@ export function calcExerciseCalories(type: string, duration_min: number, weight_
   return Math.round(getMET(type) * weight_kg * (duration_min / 60));
 }
 
+// T50：用户在 record 消息里自报消耗则直接采信（用户真值，不算账），否则回落 MET 估算。
+// exercise_record 无 calories_source 字段，也不需要——它从不被后台重算，用户值写入即安全。
+export function resolveExerciseCalories(
+  ex: { type: string; duration_min?: number; reps?: number; calories_burned?: number },
+  duration_min: number,
+  weight_kg: number,
+): { calories_burned: number; user_reported: boolean } {
+  if (ex.calories_burned != null) {
+    return { calories_burned: Math.round(ex.calories_burned), user_reported: true };
+  }
+  return { calories_burned: calcExerciseCalories(ex.type, duration_min, weight_kg), user_reported: false };
+}
+
 export function resolveDuration(ex: { duration_min?: number; reps?: number }): number {
   if (ex.duration_min) return ex.duration_min;
   if (ex.reps) return Math.max(1, Math.round(ex.reps / 15));
