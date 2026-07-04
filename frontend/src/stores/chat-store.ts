@@ -2,10 +2,26 @@ import { create } from 'zustand';
 import { apiFetch } from '@/lib/api';
 import { getMessagesInRange, getMessagesAround, getMessageDateById, upsertMessages } from '@/lib/db';
 import { localDateStr, dateOnly } from '@/lib/format';
+import { mergeMessages } from '@/lib/messages';
 import type { ChatMessage, ContextCard, SendMessageResponse, ResolveResponse, UndoPrevState, FoodAliasEscape } from '@/types/chat';
 
 function todayStr() {
   return localDateStr();
+}
+
+// 写入 SQLite 时按每条消息自身的 date 分组——响应里可能混着不同归属日的消息
+// （T47 跨天修改时被刷新的 meal_card 属于昨天的线程），不能统一盖成首条的日期。
+async function persistMessages(msgs: ChatMessage[]): Promise<void> {
+  const byDate = new Map<string, ChatMessage[]>();
+  for (const m of msgs) {
+    const d = dateOnly(m.date);
+    const list = byDate.get(d);
+    if (list) list.push(m);
+    else byDate.set(d, [m]);
+  }
+  for (const [date, list] of byDate) {
+    await upsertMessages(date, list);
+  }
 }
 
 // Prevent concurrent loadMoreMessages calls + cooldown after each load
@@ -238,12 +254,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         token,
       });
       const newMsgs = res.messages as ChatMessage[];
-      const date = newMsgs[0]?.date ?? todayStr();
-      await upsertMessages(date, newMsgs);
+      await persistMessages(newMsgs);
       set(s => {
         const without = s.messages.filter(m => m.id !== tempId);
-        const existingIds = new Set(without.map(m => m.id));
-        const toAdd = newMsgs.filter(m => !existingIds.has(m.id));
         // T38：本轮打字回答了某张待确认卡片——把聊天流里那张旧卡就地标记已确认，
         // 防止用户在同一屏幕上还能再点一次（resolve 接口本身有 status=pending 防线兜底，这里是体验层同步）
         const resolvedId = res.resolved_pending_id;
@@ -254,8 +267,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
                 : m,
             )
           : without;
+        // T47：按 id upsert + created_at 重排——meal_card 原地更新后浮到聊天流末尾（卡片跟随）
         return {
-          messages: [...withResolved, ...toAdd],
+          messages: mergeMessages(withResolved, newMsgs),
           summaryCard: res.summary_card ?? s.summaryCard,
         };
       });
@@ -276,11 +290,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         token,
       });
       const newMsgs = res.messages as ChatMessage[];
-      const date = newMsgs[0]?.date ?? todayStr();
-      await upsertMessages(date, newMsgs);
+      await persistMessages(newMsgs);
       set(s => {
-        const existingIds = new Set(s.messages.map(m => m.id));
-        const toAdd = newMsgs.filter(m => !existingIds.has(m.id));
         // Look up the card's portions for unit info
         const card = s.messages.find(m => (m.payload as any)?.pending_id === pendingId);
         const portions = ((card?.payload as any)?.portions ?? []) as Array<{ label: string; grams: number; unit?: string }>;
@@ -300,16 +311,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             ? { ...m, payload: { ...(m.payload as any), ...resolution } }
             : m,
         );
-        const resolvedIdx = nextMessages.findIndex(
-          m => (m.payload as any)?.pending_id === pendingId,
-        );
-        if (resolvedIdx >= 0 && toAdd.length > 0) {
-          nextMessages.splice(resolvedIdx + 1, 0, ...toAdd);
-        } else {
-          nextMessages.push(...toAdd);
-        }
+        // T47：新消息（文本确认 + 被 bump 的 meal_card）统一按 id upsert + created_at 重排
         return {
-          messages: nextMessages,
+          messages: mergeMessages(nextMessages, newMsgs),
           summaryCard: res.summary_card ?? s.summaryCard,
         };
       });
@@ -328,7 +332,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   undo: async (messageId: string, recordId: string, prevState: UndoPrevState | undefined, token: string) => {
     set(s => ({ undoneCards: { ...s.undoneCards, [messageId]: true } }));
     try {
-      const res = await apiFetch<{ ok: boolean; summary_card: ContextCard }>(
+      const res = await apiFetch<{ ok: boolean; summary_card: ContextCard; messages?: ChatMessage[] }>(
         `/api/records/${recordId}/undo`,
         {
           method: 'POST',
@@ -336,7 +340,13 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           token,
         },
       );
-      set(s => ({ summaryCard: res.summary_card ?? s.summaryCard }));
+      // T47：撤销后后端返回刷新过的 meal_card（last_change 已清除）——原地更新并浮到末尾
+      const newMsgs = (res.messages ?? []) as ChatMessage[];
+      if (newMsgs.length > 0) await persistMessages(newMsgs);
+      set(s => ({
+        messages: newMsgs.length > 0 ? mergeMessages(s.messages, newMsgs) : s.messages,
+        summaryCard: res.summary_card ?? s.summaryCard,
+      }));
     } catch {
       set(s => {
         const next = { ...s.undoneCards };
@@ -362,23 +372,12 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         token,
       });
       const newMsgs = res.messages as ChatMessage[];
-      const date = newMsgs[0]?.date ?? todayStr();
-      await upsertMessages(date, newMsgs);
-      set(s => {
-        const existingIds = new Set(s.messages.map(m => m.id));
-        const toAdd = newMsgs.filter(m => !existingIds.has(m.id));
-        const idx = s.messages.findIndex(m => m.id === messageId);
-        const nextMessages = [...s.messages];
-        if (idx >= 0 && toAdd.length > 0) {
-          nextMessages.splice(idx + 1, 0, ...toAdd);
-        } else {
-          nextMessages.push(...toAdd);
-        }
-        return {
-          messages: nextMessages,
-          summaryCard: res.summary_card ?? s.summaryCard,
-        };
-      });
+      await persistMessages(newMsgs);
+      // T47：统一按 id upsert + created_at 重排（新候选卡时间最新，自然落在流末尾）
+      set(s => ({
+        messages: mergeMessages(s.messages, newMsgs),
+        summaryCard: res.summary_card ?? s.summaryCard,
+      }));
     } catch {
       set(s => {
         const next = { ...s.undoneCards };

@@ -5,7 +5,8 @@ import { recompute, buildContextCard } from "../summary";
 import { recordModifyCorrection } from "../trace";
 import { recordLearningEvent, resetFoodAliasStreak, upsertFoodAlias } from "../learning";
 import { processItems } from "./food-item";
-import { guessMealType } from "../../lib/dates";
+import { refreshMealCard } from "../meal-card";
+import { guessMealType, toDateOnly } from "../../lib/dates";
 import type { MealType, PortionLabel } from "@prisma/client";
 import type { ParseResult } from "../../ai/schema";
 import type { IntentCtx } from "./types";
@@ -65,6 +66,31 @@ export async function handleModify(
       data: { user_id, date: dateObj, role: "assistant", kind: "text", content },
     });
     messages.push(aiMsg);
+
+    // T47 双卡刷新：旧餐次卡少一项（只 bump 已存在的，不给 pre-T46 的餐凭空造卡）、新餐次卡多一项。
+    // 按 (餐归属日, 餐次) 去重；旧卡先 bump、新卡后 bump，新卡浮到最末。批量改无单条撤销，不动 last_change。
+    const oldKeys = new Map<string, { mealDate: string; meal_type: MealType }>();
+    const newKeys = new Map<string, { mealDate: string; meal_type: MealType }>();
+    for (const rec of recs) {
+      const mealDate = rec.date.toISOString().slice(0, 10);
+      if (rec.meal_type !== newMeal) {
+        oldKeys.set(`${mealDate}|${rec.meal_type}`, { mealDate, meal_type: rec.meal_type as MealType });
+      }
+      newKeys.set(`${mealDate}|${newMeal}`, { mealDate, meal_type: newMeal });
+    }
+    for (const k of oldKeys.values()) {
+      await refreshMealCard(messages, {
+        user_id, mealDate: k.mealDate, meal_type: k.meal_type,
+        chatDate: toDateOnly(k.mealDate), createIfMissing: false,
+      });
+    }
+    for (const k of newKeys.values()) {
+      await refreshMealCard(messages, {
+        user_id, mealDate: k.mealDate, meal_type: k.meal_type,
+        chatDate: toDateOnly(k.mealDate),
+      });
+    }
+
     tctx.ok("modify", { mealType: newMeal, tokenUsage: parseUsage, promptMessages: parseMessages });
     return { intent: "modify", reply: content, summary_card: card, messages };
   }
@@ -105,15 +131,23 @@ export async function handleModify(
     const meal_type = (target.meal_type ?? guessMealType()) as MealType;
     await tctx.setMeal(meal_type); // trace: 关联 meal + 写入 state_snapshot
 
-    const { records, replyParts, pending, needsRecompute, confirmedCreateFns, pendingCreateFns } =
+    const { records, replyParts, pending, needsRecompute, pendingCreateFns } =
       await processItems(
         parsed.items ?? [],
-        { user_id, meal_type, source, dateObj, withUndo: true },
+        { user_id, meal_type, source, dateObj },
         (idx) => tctx.itemTrace(idx),
       );
 
-    for (const fn of [...confirmedCreateFns, ...pendingCreateFns]) messages.push(await fn());
+    for (const fn of pendingCreateFns) messages.push(await fn());
     if (needsRecompute) await recompute(user_id, today);
+
+    // T47：追加并入该餐 meal_card 并 bump；last_change 无 prev_state = 撤销即删除（同 append undo 语义）
+    if (records.length > 0) {
+      await refreshMealCard(messages, {
+        user_id, mealDate: today, meal_type, chatDate: dateObj,
+        lastChange: { record_id: records[records.length - 1].id },
+      });
+    }
     const card = await buildContextCard(user_id);
     const reply = records.length > 0
       ? `已追加：${replyParts.join("，")}。`
@@ -240,21 +274,26 @@ export async function handleModify(
   });
   await recompute(user_id, today);
   const card = await buildContextCard(user_id);
-  const content = `已更新：${food.name} ${Math.round(weight_g)}g（约 ${Math.round(nutrition.calories)} kcal）`;
+  const content = `已修改，营养数据已更新：${food.name} ${Math.round(weight_g)}g（约 ${Math.round(nutrition.calories)} kcal）。`;
   const aiMsg = await prisma.chatMessage.create({
-    data: {
-      user_id, date: dateObj, role: "assistant", kind: "record_card", content,
-      payload: {
-        food_name: food.name, weight_g: Math.round(weight_g), calories: Math.round(nutrition.calories),
-        protein_g: Math.round(nutrition.protein_g), fat_g: Math.round(nutrition.fat_g),
-        carbs_g: Math.round(nutrition.carbs_g), is_estimated: food.is_estimated,
-        meal_type,
-        undo: { record_id: updated.id, prev_state }, // 撤销=还原 prev_state
-      } as object,
-      record_id: updated.id as string,
-    },
+    data: { user_id, date: dateObj, role: "assistant", kind: "text", content },
   });
   messages.push(aiMsg);
+
+  // T47：不再新建 record_card，改为原地刷新该餐 meal_card。改餐次是双卡刷新：
+  // 旧餐卡少一项（只 bump 已存在的），新餐卡多一项；撤销信息写进目标餐卡 last_change
+  // （单槽：再次修改覆盖，撤销后由 undo 接口清除）。跨天修改刷的是记录归属日那张卡。
+  const mealDate = rec.date.toISOString().slice(0, 10);
+  if (meal_type !== prev_state.meal_type) {
+    await refreshMealCard(messages, {
+      user_id, mealDate, meal_type: prev_state.meal_type as MealType,
+      chatDate: toDateOnly(mealDate), createIfMissing: false,
+    });
+  }
+  await refreshMealCard(messages, {
+    user_id, mealDate, meal_type, chatDate: toDateOnly(mealDate),
+    lastChange: { record_id: updated.id, prev_state }, // 撤销=还原 prev_state
+  });
   // 学习信号（LEARNING_SPEC §3）：predicted = 改前克数，final = 用户指定克数。
   // 只有 change.grams 时才是"克数纠正"——改食物（change.food）份量沿用旧的，不算纠正。
   if (change.grams != null) {

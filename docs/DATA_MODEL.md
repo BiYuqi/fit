@@ -118,8 +118,9 @@
 | created_at | timestamptz | |
 
 索引：`(user_id, date, created_at)`。
-卡片显示策略：**查询类卡片冻结**（payload 即当时答案）；**记录类卡片绑 record_id 实时回填**（底层记录改/删则显示更新或"已删除"）；**meal_card 实时组装 + created_at 跟随**（T46）——按 (用户, 餐归属日, 餐次) 一餐一卡，落库 payload 只存组装键 `{ meal_key: { date, meal_type }, last_change }`（`meal_key.date` 与本表 date 独立：跨天修改时餐归属日 ≠ 对话日；`last_change` T47 启用），明细 `items[]` 与营养 `totals` 在响应/GET 时从 food_record 实时组装、不落库、永不过期；内容变更时同一条消息 created_at 刷成当前时间，前端按时间重排后卡片浮到聊天流末尾（历史 record_card 消息不迁移、照旧渲染）。
-modify 的 update/append 高置信直执行：record_card 的 `payload.undo` 带 `{record_id, prev_state?}` 支持撤销（见 AI_PARSING_SPEC §8），不进 pending 流程。
+卡片显示策略：**查询类卡片冻结**（payload 即当时答案）；**记录类卡片绑 record_id 实时回填**（底层记录改/删则显示更新或"已删除"）；**meal_card 实时组装 + created_at 跟随**（T46）——按 (用户, 餐归属日, 餐次) 一餐一卡，落库 payload 只存组装键 `{ meal_key: { date, meal_type }, last_change }`（`meal_key.date` 与本表 date 独立：跨天修改时餐归属日 ≠ 对话日），明细 `items[]` 与营养 `totals` 在响应/GET 时从 food_record 实时组装、不落库、永不过期；内容变更（记录/修改/追加/删除/撤销）时同一条消息 created_at 刷成当前时间，前端按时间重排后卡片浮到聊天流末尾（历史 record_card 消息不迁移、照旧渲染）。
+`payload.last_change`（T47）：该餐最近一次 modify 的撤销信息 `{record_id, prev_state?}`（有 prev_state = update 撤销还原，无 = append 撤销删除，语义同旧 record_card 的 `payload.undo`）。单槽：再次修改覆盖、`/api/records/:id/undo` 撤销后清除；批量改餐次不写。
+modify 的 update/append 高置信直执行，不进 pending 流程（见 AI_PARSING_SPEC §8）；历史 record_card 的 `payload.undo` 继续兼容。
 
 ## ai_parse_log（解析日志）
 | 字段 | 类型 | 语义 |

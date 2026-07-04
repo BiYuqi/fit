@@ -1,6 +1,7 @@
 export type MessageKind =
   | 'text'
   | 'record_card'
+  | 'meal_card'
   | 'portion_card'
   | 'candidate_card'
   | 'clarify_card'
@@ -117,6 +118,30 @@ export type ContextCard = {
   targets: { calories: number; protein: number };
   week: { avg_deficit: number; logged_days: number };
   month: { logged_days: number; avg_in: number };
+};
+
+// T46/T47 餐食卡：一餐一卡。落库只有 meal_key/last_change，items/totals/item_count
+// 由后端在响应/GET 时从 food_record 实时组装（items: [] = 该餐已清空）。
+// 内容变更时后端刷新同一条消息的 created_at——前端按 id upsert + 按 created_at 重排（见 lib/messages.ts）。
+export type MealCardItem = {
+  record_id: string;
+  food_name: string;
+  raw_input: string | null; // 明细主显示（用户原话子句）；空时用 food_name + weight_g 兜底
+  weight_g: number;
+  calories: number;
+  protein_g: number;
+  fat_g: number;
+  carbs_g: number;
+  is_estimated: boolean;
+  portion_label: string;
+};
+
+export type MealCardPayload = {
+  meal_key: { date: string; meal_type: string };
+  last_change?: { record_id: string; prev_state?: UndoPrevState } | null; // 单槽撤销（T48 渲染项级撤销按钮）
+  items: MealCardItem[];
+  totals: { calories: number; protein_g: number; fat_g: number; carbs_g: number };
+  item_count: number;
 };
 
 export type ExerciseCardPayload = {

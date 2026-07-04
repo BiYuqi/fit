@@ -4,7 +4,7 @@
 > 用法：一次只做一个任务，按下方顺序，自测验收通过再下一个。
 > 状态：⬜待办 / 🔄进行中 / ✅完成。**任务验收通过后更新两处**：本表该行 + `tasks/Txx.md` 顶部状态行。
 
-**进度：44 / 48**　里程碑：✅ M1 命令行心跳(T07)　✅ M2 后端全通(T12)　✅ 前端可用(T19)　⬜ 可出包(T21)　✅ E 对话上下文(T23)　✅ L 学习闭环(T31)　✅ C 对话智能(T40)　⬜ G 餐食卡(T48)
+**进度：45 / 48**　里程碑：✅ M1 命令行心跳(T07)　✅ M2 后端全通(T12)　✅ 前端可用(T19)　⬜ 可出包(T21)　✅ E 对话上下文(T23)　✅ L 学习闭环(T31)　✅ C 对话智能(T40)　⬜ G 餐食卡(T48)
 
 ## 分轨
 - **基建 S**：T01
@@ -121,5 +121,5 @@ T01 → T02 → T03 → T04 → T05 → T06 → T07(✅M1)
 | ✅ | T44 | tasks/T44-query-plan.md | 查询计划：AI 填结构化查询单、后端白名单执行器确定性执行，单路径替换 T43 正则 |
 | ✅ | T45 | tasks/T45-multi-action.md | 复合动作 multi：ops 数组按序执行 record/modify，raw 子句防修饰词串台 |
 | ✅ | T46 | tasks/T46-meal-card-backend.md | 餐食卡后端：一餐一卡(日期+餐次) + food_record 实时组装 + created_at 跟随 |
-| ⬜ | T47 | tasks/T47-meal-card-refresh.md | 餐食卡原地刷新：modify/删除/撤销全路径 + 前端按 id upsert 重排序 |
+| ✅ | T47 | tasks/T47-meal-card-refresh.md | 餐食卡原地刷新：modify/删除/撤销全路径 + 前端按 id upsert 重排序 |
 | ⬜ | T48 | tasks/T48-meal-card-ui.md | MealCard 组件：折叠汇总/展开明细/项级撤销/已清空态 |

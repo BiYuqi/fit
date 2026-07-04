@@ -4,7 +4,8 @@ import { prisma } from "../lib/prisma";
 import { itemNutrition } from "../services/calc";
 import { recompute, buildContextCard } from "../services/summary";
 import { resetFoodAliasStreak } from "../services/learning";
-import type { MealType, PortionLabel } from "@prisma/client";
+import { refreshMealCard } from "../services/meal-card";
+import type { ChatMessage, MealType, PortionLabel } from "@prisma/client";
 
 // ─────────────────────────────────────────────
 // POST /api/records/:id/undo  —— 撤销 modify 的 update/append（AI_PARSING_SPEC §8）
@@ -77,7 +78,23 @@ export async function recordsRoutes(app: FastifyInstance) {
       }
       await recompute(user_id, recDate);
       const summary_card = await buildContextCard(user_id);
-      return { ok: true, summary_card };
+
+      // T47：撤销后原地刷新受影响餐卡并随响应返回；last_change 撤销已消费 → 清除。
+      // 改餐次的撤销是双卡：撤销前所在餐（卡上挂着撤销按钮的那张）先 bump，
+      // 还原后所在餐（prev_state.meal_type）后 bump 浮到最末。只 bump 已存在的卡。
+      const messages: ChatMessage[] = [];
+      const restoredMeal = (prev && "food_id" in prev ? (prev.meal_type as MealType | undefined) : undefined) ?? foodRec.meal_type;
+      await refreshMealCard(messages, {
+        user_id, mealDate: recDate, meal_type: foodRec.meal_type,
+        chatDate: foodRec.date, lastChange: null, createIfMissing: false,
+      });
+      if (restoredMeal !== foodRec.meal_type) {
+        await refreshMealCard(messages, {
+          user_id, mealDate: recDate, meal_type: restoredMeal,
+          chatDate: foodRec.date, lastChange: null, createIfMissing: false,
+        });
+      }
+      return { ok: true, summary_card, messages };
     }
 
     const exRec = await prisma.exerciseRecord.findFirst({ where: { id, user_id } });
@@ -96,7 +113,8 @@ export async function recordsRoutes(app: FastifyInstance) {
       }
       await recompute(user_id, recDate);
       const summary_card = await buildContextCard(user_id);
-      return { ok: true, summary_card };
+      // 运动撤销不涉及 meal_card；messages 恒空，字段形状与食物分支一致
+      return { ok: true, summary_card, messages: [] };
     }
 
     return reply.status(404).send({ error: { code: "not_found", message: "Record not found" } });

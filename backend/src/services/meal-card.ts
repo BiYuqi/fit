@@ -74,14 +74,29 @@ export function buildMealCardView(records: MealCardRecord[]): MealCardView {
   return { items, totals, item_count: items.length };
 }
 
-// 幂等 upsert：该餐已有 meal_card 则只刷新 created_at（bump），没有则创建。
-// mealDate 是餐归属日（YYYY-MM-DD），与 chat_message.date（对话日 chatDate）独立存——跨天修改时二者可不同。
+// last_change（T47）：卡片单槽撤销信息。prev_state 有 = update 撤销（还原），无 = append 撤销（删除），
+// 语义同 record_card 时代的 payload.undo。再次修改覆盖，撤销后清除。
+export type MealCardLastChange = { record_id: string; prev_state?: Record<string, unknown> };
+
+export interface UpsertMealCardParams {
+  user_id: string;
+  mealDate: string; // 餐归属日（YYYY-MM-DD），与 chat_message.date（对话日 chatDate）独立——跨天修改时二者可不同
+  meal_type: MealType;
+  chatDate: Date;
+  // undefined = 不动现有值；null = 清除（撤销已消费）；对象 = 写入本次修改的撤销信息
+  lastChange?: MealCardLastChange | null;
+  // false：只 bump 已存在的卡，不存在则返回 null——用于"变少"侧刷新（删除/撤销/改餐次的旧餐卡），
+  // 避免给从没有过卡的餐（pre-T46 记录）凭空造出一张卡
+  createIfMissing?: boolean;
+}
+
+// 幂等 upsert：该餐已有 meal_card 则刷新 created_at（bump，卡片跟随）+ 按需写 last_change；没有则创建。
 // isFirst：本次创建是否该用户第一张 meal_card（record 回复文本追加一次性引导提示用）。
 export async function upsertMealCardMessage(
-  params: { user_id: string; mealDate: string; meal_type: MealType; chatDate: Date },
+  params: UpsertMealCardParams,
   db: MealCardDb = prisma,
-): Promise<{ message: any; isFirst: boolean }> {
-  const { user_id, mealDate, meal_type, chatDate } = params;
+): Promise<{ message: any; isFirst: boolean } | null> {
+  const { user_id, mealDate, meal_type, chatDate, lastChange, createIfMissing = true } = params;
 
   const existing = await db.chatMessage.findFirst({
     where: {
@@ -94,12 +109,15 @@ export async function upsertMealCardMessage(
     },
   });
   if (existing) {
-    const message = await db.chatMessage.update({
-      where: { id: existing.id },
-      data: { created_at: new Date() },
-    });
+    const data: Record<string, unknown> = { created_at: new Date() };
+    if (lastChange !== undefined) {
+      data.payload = { ...(existing.payload as object), last_change: lastChange };
+    }
+    const message = await db.chatMessage.update({ where: { id: existing.id }, data });
     return { message, isFirst: false };
   }
+
+  if (!createIfMissing) return null;
 
   const hasAny = await db.chatMessage.findFirst({
     where: { user_id, kind: "meal_card" },
@@ -111,11 +129,26 @@ export async function upsertMealCardMessage(
       date: chatDate,
       role: "assistant",
       kind: "meal_card",
-      // last_change 本任务恒 null，T47 启用（modify 撤销信息）
-      payload: { meal_key: { date: mealDate, meal_type }, last_change: null } as object,
+      payload: { meal_key: { date: mealDate, meal_type }, last_change: lastChange ?? null } as object,
     },
   });
   return { message, isFirst: !hasAny };
+}
+
+// upsert + 实时组装 + 去重放入 messages（本轮响应里同一张卡只留最新组装态——multi 多 op 触同一餐时）。
+// 所有写路径（record/modify/resolve/undo）统一走这里，保证卡片排在本轮已有消息之后（卡片跟随）。
+export async function refreshMealCard(
+  messages: object[],
+  params: UpsertMealCardParams,
+  db: MealCardDb = prisma,
+): Promise<{ message: any; isFirst: boolean } | null> {
+  const upserted = await upsertMealCardMessage(params, db);
+  if (!upserted) return null;
+  const [enriched] = await enrichMealCards([upserted.message], db);
+  const dup = messages.findIndex((m) => (m as any).id === upserted.message.id);
+  if (dup >= 0) messages.splice(dup, 1);
+  messages.push(enriched);
+  return { message: enriched, isFirst: upserted.isFirst };
 }
 
 // 批量实时组装：把消息数组里 meal_card 的返回态 payload 补上 items/totals/item_count。

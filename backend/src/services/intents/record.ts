@@ -1,6 +1,6 @@
 import { prisma } from "../../lib/prisma";
 import { recompute, buildContextCard } from "../summary";
-import { upsertMealCardMessage, enrichMealCards } from "../meal-card";
+import { refreshMealCard } from "../meal-card";
 import { processItems } from "./food-item";
 import { calcExerciseCalories, resolveDuration } from "./exercise";
 import { guessMealType, extractMealTypeFromText } from "../../lib/dates";
@@ -40,13 +40,14 @@ export async function handleRecord(
   await tctx.setMeal(meal_type);
 
   // 处理食物条目（逐条走共用 helper：歧义→候选卡 / 份量不明→份量卡 / 高置信→自动入库）
-  const { records, replyParts, pending, needsRecompute: itemsNeedRecompute, confirmedCreateFns, pendingCreateFns } =
+  const { records, replyParts, pending, needsRecompute: itemsNeedRecompute, pendingCreateFns } =
     await processItems(
       parsed.items ?? [],
-      { user_id, meal_type, source, dateObj, withUndo: false, scene: parsed.scene ?? "unknown" },
+      { user_id, meal_type, source, dateObj, scene: parsed.scene ?? "unknown" },
       (idx) => tctx.itemTrace(idx),
     );
   let needsRecompute = itemsNeedRecompute;
+  const exerciseCreateFns: Array<() => Promise<any>> = [];
 
   // 处理运动条目（运动视为已确认）
   for (const ex of (parsed.exercise ?? [])) {
@@ -76,11 +77,11 @@ export async function handleRecord(
       kind: "exercise_card",
       payload: { exercise_id: exRecord.id, type: ex.type, duration_min, calories_burned } as object,
     };
-    confirmedCreateFns.push(() => prisma.chatMessage.create({ data: exData }));
+    exerciseCreateFns.push(() => prisma.chatMessage.create({ data: exData }));
   }
 
   // 按优先级写入：已确认先，待确认后
-  for (const fn of [...confirmedCreateFns, ...pendingCreateFns]) {
+  for (const fn of [...exerciseCreateFns, ...pendingCreateFns]) {
     const msg = await fn();
     messages.push(msg);
   }
@@ -90,15 +91,10 @@ export async function handleRecord(
   // 明细/总计由 enrichMealCards 从 food_record 实时组装，不落库。
   let isFirstMealCard = false;
   if (records.length > 0) {
-    const { message: cardMsg, isFirst } = await upsertMealCardMessage({
+    const refreshed = await refreshMealCard(messages, {
       user_id, mealDate: today, meal_type, chatDate: dateObj,
     });
-    isFirstMealCard = isFirst;
-    const [enrichedCard] = await enrichMealCards([cardMsg]);
-    // multi 场景同一餐可能被多个 op 触到：messages 里按 id 去重，只留最新 enrich 结果
-    const dup = messages.findIndex((m) => (m as any).id === cardMsg.id);
-    if (dup >= 0) messages.splice(dup, 1);
-    messages.push(enrichedCard);
+    isFirstMealCard = refreshed?.isFirst ?? false;
   }
 
   if (needsRecompute) await recompute(user_id, today);

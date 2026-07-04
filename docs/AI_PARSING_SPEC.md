@@ -178,24 +178,25 @@ callDeepSeekCtx(pack, messages, opts)
 {"intent":"modify","action":"update","target":["r3","r4","r5"],"change":{"meal_type":"breakfast"}}
 ```
 
-**批量改餐次**（2026-07-04 立项）：`target` 允许 ref 数组，仅用于 `update` + `change.meal_type`（"以上发的都是早餐"、"刚才那些都是晚饭"）。后端一次 `updateMany` 改完所有食物记录 + 重算，回一条汇总文本（"已把 N 条记录改为早餐：…"），不逐条出卡、无 undo（说反了再说一句改回来即可）。其他批量组合不受支持——数组会退化为取第一个 ref 走单条逻辑。
+**批量改餐次**（2026-07-04 立项）：`target` 允许 ref 数组，仅用于 `update` + `change.meal_type`（"以上发的都是早餐"、"刚才那些都是晚饭"）。后端一次 `updateMany` 改完所有食物记录 + 重算，回一条汇总文本（"已把 N 条记录改为早餐：…"），不逐条出卡、无 undo（说反了再说一句改回来即可）；受影响的新旧餐次 meal_card 全部 bump 刷新（T47，旧餐卡只刷已存在的）。其他批量组合不受支持——数组会退化为取第一个 ref 走单条逻辑。
 
 **食物记录改热量/属性修正**（T40，`change.calories` / `change.food_desc`）：
 - `change.calories`：用户直接给出食物记录的最终热量（"记录成180kcal"、"按150卡记"）。后端不重新匹配食物，直接把该值写入 `food_record.calories`，宏量素按新旧热量比例回推（不是重估），`calories_source` 置 `user_override`——同一条记录之后若被别的字段（食物/克数/属性）再次 `update`，会重新按 food×grams 计算并把 `calories_source` 落回 `computed`（该次改的不再是热量本身，旧覆盖值已经不适用）。
 - `change.food_desc`：属性修正描述（"无油"、"无糖"、"去皮"、"脱脂"）。后端拼出具体变体名「原食物名（描述）」，只信任精确同名/别名命中，否则强制重新估算（**不走** §5 的弱匹配 AI 裁决——那条链路面对"字面像但营养口径不同"的候选容易误判为同一种，导致修正静默失效），产出新估算食物条目并按新食物×原克数重算。修正后 `upsertFoodAlias(原食物名 → 新food_id)`（见 LEARNING_SPEC §7），下次同名食物直连命中修正版。
-- 两者都只走已有 `record_card` + `undo{record_id, prev_state}` 老路，不新增卡片类型；`prev_state` 带上改前的精确 `calories/protein/fat/carbs/calories_source`，撤销直接还原这些值，不按 food×grams 重算（否则会丢失 `user_override` 的用户真值）。
+- 两者的撤销信息都写进该餐 `meal_card` 的 `payload.last_change{record_id, prev_state}`（T47，单槽：再次修改覆盖、撤销后清除），不新增卡片类型；`prev_state` 带上改前的精确 `calories/protein/fat/carbs/calories_source`，撤销直接还原这些值，不按 food×grams 重算（否则会丢失 `user_override` 的用户真值）。
 - 纯口感/无关描述（"有点咸"、"挺好吃"）不算修正，不触发 `change.food_desc`，整体判 chat。
 
 ### 路由与确认（按破坏性分级，不一律弹卡）
 | action | 置信 | 行为 |
 |---|---|---|
-| **delete** | 任意 | 建 `pending_record(type=delete_confirm)` → 确认卡（kind=`delete_confirm_card`）→ `/pending/:id/resolve` 后删 → 刷新 summary |
-| **update** | 高 (>0.8) | **直接改 + 重算**，记录卡 payload 带 `undo{record_id, prev_state}` |
-| **append** | 高 | **直接入库新记录** + 重算，卡带 `undo{record_id}` |
+| **delete** | 任意 | 建 `pending_record(type=delete_confirm)` → 确认卡（kind=`delete_confirm_card`）→ `/pending/:id/resolve` 后删 → 刷新 summary + 该餐 meal_card bump（items 减一；全删光 → `items:[]` 已清空态） |
+| **update** | 高 (>0.8) | **直接改 + 重算**，文本回复「已修改，营养数据已更新：…」+ 该餐 meal_card bump，撤销信息写卡的 `last_change{record_id, prev_state}`；改餐次是**双卡刷新**（旧餐卡少一项、新餐卡多一项） |
+| **append** | 高 | **直接入库新记录** + 重算，并入该餐 meal_card 并 bump，`last_change{record_id}`（无 prev_state = 撤销即删除） |
 | update / append | 低 or 歧义 | 走现成 `portion_card` / `candidate_card`（§4），不新增卡 |
 
 > 撤销不进 pending 流程：update 撤销 = 还原 `prev_state`，append 撤销 = 删新记录；给短时间窗即可。
-> **只有 delete 需确认**；update/append 复用「自动入库 + 卡片」老路，避免打扰过头。
+> 撤销走 `/api/records/:id/undo`（由 meal_card 的 `last_change` 驱动，T48 渲染项级撤销按钮），撤销后餐卡再次 bump 且 `last_change` 清除。
+> **只有 delete 需确认**；update/append 直执行 + 卡片原地刷新，避免打扰过头。
 
 ### 纯确认词处理
 用户发极简确认词（「好」「改吧」「修改吧」「行」「ok」「确认」），若 L0 最近几轮的用户消息涉及对某条记录份量的讨论（如「不是50克吗」「应该是50g」），parser 推断 `target`（从 L1 找最近被讨论的 ref）和 `change.grams`（从讨论中提取数字），输出 `intent=modify, action=update`。推断不出具体 target 或克数则走 chat。

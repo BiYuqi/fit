@@ -8,7 +8,7 @@ import { itemNutrition } from "./calc";
 import { recompute, buildContextCard, type ContextCard } from "./summary";
 import { recordDeleteCorrection, recordResolveCorrection } from "./trace";
 import { recordLearningEvent, upsertFoodAlias, getBiases, applyBias, biasEnabled } from "./learning";
-import { upsertMealCardMessage, enrichMealCards } from "./meal-card";
+import { refreshMealCard } from "./meal-card";
 import { buildResolveLogData, type ResolveAction } from "./resolve-log";
 import type { MealType, PortionLabel, FoodRecord, ChatMessage } from "@prisma/client";
 
@@ -47,13 +47,15 @@ export async function resolvePendingRecord(params: {
   // delete_confirm：用户确认删除（AI_PARSING_SPEC §8）
   // 不额外创建 text 消息——前端的 delete_confirm_card 本身在 resolved 后会显示"已删除「xxx」"
   if (pr.type === "delete_confirm") {
+    // 被删记录的餐次/日期在删除后就查不到了，先留住给下方 meal_card 刷新用（T47）
+    let deletedRec: (FoodRecord & { food: { category: string | null } | null }) | null = null;
     if (candidates.kind === "exercise") {
       await prisma.exerciseRecord.deleteMany({ where: { id: candidates.record_id, user_id } });
     } else {
       // 学习信号（LEARNING_SPEC §3）：删除只记事件不训练。
       // 必须在 deleteMany 之前写入——learning_event.food_record_id 有外键约束，
       // 记录一旦删除就无法再插入指向它的新行（onDelete:SetNull 只对已存在的行生效）。
-      const deletedRec = await prisma.foodRecord.findFirst({
+      deletedRec = await prisma.foodRecord.findFirst({
         where: { id: candidates.record_id, user_id },
         include: { food: true },
       });
@@ -94,7 +96,19 @@ export async function resolvePendingRecord(params: {
       name: candidates.name,
       pendingId: id,
     });
-    return { ok: true, summary_card, messages: [], action };
+    // T47：食物删除后原地刷新该餐 meal_card（items 减一并 bump；全删光 → items:[] 已清空态）。
+    // 只 bump 已存在的卡（pre-T46 记录没有卡就不造）；运动删除不涉及餐卡。
+    const messages: ChatMessage[] = [];
+    if (candidates.kind !== "exercise" && deletedRec) {
+      await refreshMealCard(messages, {
+        user_id,
+        mealDate: deletedRec.date.toISOString().slice(0, 10),
+        meal_type: deletedRec.meal_type as MealType,
+        chatDate: deletedRec.date,
+        createIfMissing: false,
+      });
+    }
+    return { ok: true, summary_card, messages, action };
   }
 
   let food_id: string;
@@ -291,10 +305,8 @@ export async function resolvePendingRecord(params: {
       content: `已确认：${food.name} ${weight_g}${resolved_unit}（约 ${Math.round(nutrition.calories)} kcal）`,
     },
   });
-  const { message: cardMsg } = await upsertMealCardMessage({
-    user_id, mealDate: today, meal_type, chatDate: dateObj,
-  });
-  const [mealCardMsg] = await enrichMealCards([cardMsg]);
+  const messages: ChatMessage[] = [confirmMsg];
+  await refreshMealCard(messages, { user_id, mealDate: today, meal_type, chatDate: dateObj });
 
-  return { ok: true, record, summary_card, messages: [confirmMsg, mealCardMsg], action };
+  return { ok: true, record, summary_card, messages, action };
 }

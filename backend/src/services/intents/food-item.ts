@@ -80,7 +80,6 @@ export interface ItemCtx {
   meal_type: MealType;
   source: string;
   dateObj: Date;
-  withUndo: boolean; // append 时记录卡带 undo
   scene?: string | null; // 进食场景 takeout/canteen/home/unknown，parser 提取（T32）；append 等无场景路径缺省
   itrace?: ItemTrace; // 由 processFoodItem 内部消费，不对外暴露
 }
@@ -90,12 +89,11 @@ export interface ItemResult {
   replyPart?: string;
   needsRecompute: boolean;
   pending?: any;
-  confirmedFn?: () => Promise<any>;
   pendingFn?: () => Promise<any>;
 }
 
 export async function processFoodItem(item: FoodItem, ctx: ItemCtx): Promise<ItemResult> {
-  const { user_id, meal_type, source, dateObj, withUndo, scene, itrace } = ctx;
+  const { user_id, meal_type, source, dateObj, scene, itrace } = ctx;
   const { canonical, chosen_label, portions, food_confidence, portion_confidence, raw, is_ambiguous, ai_candidates } = item;
   const query = canonical || raw;
 
@@ -279,38 +277,14 @@ export async function processFoodItem(item: FoodItem, ctx: ItemCtx): Promise<Ite
       );
     }
 
-    const replyPart = `${food.name} ${weight_g}${unit}（约 ${Math.round(nutrition.calories)} kcal）`;
-
-    // T46：record 路径（withUndo=false）不再逐食材发 record_card——卡片生成上移到 handleRecord，
-    // processItems 结束后对本轮餐次统一挂 meal_card（一餐一卡）。
-    // modify.append（withUndo=true）在 T47 接入 meal_card 前维持原 record_card + undo，保住项级撤销。
-    if (!withUndo) {
-      return { record, replyPart, needsRecompute: true };
-    }
-
-    const payload: any = {
-      food_name: food.name, weight_g, calories: Math.round(nutrition.calories),
-      protein_g: Math.round(nutrition.protein_g), fat_g: Math.round(nutrition.fat_g),
-      carbs_g: Math.round(nutrition.carbs_g), is_estimated: food.is_estimated,
-      unit, meal_type,
-      undo: { record_id: record.id },
-    };
-    if (matchedByHabit) {
-      payload.matched_by_habit = true;
-      payload.escape = { canonical: query, portions, chosen_label, ai_candidates };
-    }
-    // 偏差修正生效时带上 from/to，供 discuss 解释与 debug（前端可不展示）
-    if (biasedChosen.grams !== rawChosen.grams) {
-      payload.bias_applied = { from: rawChosen.grams, to: biasedChosen.grams };
-    }
-
+    // T46/T47：入库不再逐食材发 record_card——卡片由调用方（record/append）统一挂该餐 meal_card，
+    // 卡片级撤销由 meal_card 的 payload.last_change 承载。
+    // matched_by_habit 的「不是它？」逃生口随 record_card 一并下线（alias 学习本身不受影响：
+    // 直连命中仍写 alias_canonical，用户自然语言改食物时照旧触发 streak 清零）。
     return {
       record,
-      replyPart,
+      replyPart: `${food.name} ${weight_g}${unit}（约 ${Math.round(nutrition.calories)} kcal）`,
       needsRecompute: true,
-      confirmedFn: () => prisma.chatMessage.create({
-        data: { user_id, date: dateObj, role: "assistant", kind: "record_card", payload, record_id: record.id as string },
-      }),
     };
   }
 
@@ -369,7 +343,6 @@ export interface ProcessItemsResult {
   replyParts: string[];
   pending: any | null;
   needsRecompute: boolean;
-  confirmedCreateFns: Array<() => Promise<any>>;
   pendingCreateFns: Array<() => Promise<any>>;
 }
 
@@ -382,7 +355,6 @@ export async function processItems(
   const replyParts: string[] = [];
   let pending: any | null = null;
   let needsRecompute = false;
-  const confirmedCreateFns: Array<() => Promise<any>> = [];
   const pendingCreateFns: Array<() => Promise<any>> = [];
 
   for (let idx = 0; idx < items.length; idx++) {
@@ -391,9 +363,8 @@ export async function processItems(
     if (r.replyPart) replyParts.push(r.replyPart);
     if (r.needsRecompute) needsRecompute = true;
     if (r.pending && !pending) pending = r.pending;
-    if (r.confirmedFn) confirmedCreateFns.push(r.confirmedFn);
     if (r.pendingFn) pendingCreateFns.push(r.pendingFn);
   }
 
-  return { records, replyParts, pending, needsRecompute, confirmedCreateFns, pendingCreateFns };
+  return { records, replyParts, pending, needsRecompute, pendingCreateFns };
 }
