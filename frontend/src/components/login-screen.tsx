@@ -9,7 +9,6 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
-  useColorScheme,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -17,6 +16,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { GradientBackground } from '@/components/gradient-background';
 import { ThemedView } from '@/components/themed-view';
 import { Colors, FontSize, Glass, Radius, Spacing } from '@/constants/theme';
+import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useAuthStore } from '@/stores/auth-store';
 
 const HAIRLINE_LIGHT = 'rgba(0,0,0,0.10)';
@@ -31,8 +31,7 @@ export function LoginScreen() {
   const [loading, setLoading] = useState(false);
   const { login, register } = useAuthStore();
 
-  const rawScheme = useColorScheme();
-  const scheme = rawScheme === 'dark' ? 'dark' : 'light';
+  const scheme = useColorScheme();
   const colors = Colors[scheme];
   const glass = Glass[scheme];
   const hairline = scheme === 'dark' ? HAIRLINE_DARK : HAIRLINE_LIGHT;

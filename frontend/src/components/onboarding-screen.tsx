@@ -8,13 +8,13 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
-  useColorScheme,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { GradientBackground } from '@/components/gradient-background';
 import { Colors, FontSize, Glass } from '@/constants/theme';
+import { useColorScheme } from '@/hooks/use-color-scheme';
 import { apiFetch } from '@/lib/api';
 import { useAuthStore } from '@/stores/auth-store';
 
@@ -111,8 +111,7 @@ export function OnboardingScreen({ onComplete, initialData }: Props) {
 
   const { token } = useAuthStore();
 
-  const rawScheme = useColorScheme();
-  const scheme = rawScheme === 'dark' ? 'dark' : 'light';
+  const scheme = useColorScheme();
   const colors = Colors[scheme];
   const glass = Glass[scheme];
   const accent = glass.tint;
