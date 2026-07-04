@@ -36,16 +36,16 @@ export async function handleQuery(ctx: IntentCtx) {
   }
 
   const { text: aiText, usage: answerUsage } = await answerQuery(text, pack, user_id, extraCtx);
-  // 只有问今天的才展示 query_card 卡片（由计划判定，非正则）；问历史的用纯文本气泡
-  const isTodayQuery = plan?.range.type === "today";
+  // query 回复一律纯文本气泡：AI 文字已自包含（数字都在正文里）。
+  // 进度卡（旧 query_card）已下线——「吃多少」/「吃了啥」意图本就不同，不该套同一顶进度卡；
+  // 今日进度看 Today 页（铁律2 事实源）。summary_card 仍随响应返回，供前端刷新 Today 用。
   const aiMsg = await prisma.chatMessage.create({
     data: {
       user_id,
       date: dateObj,
       role: "assistant",
-      kind: isTodayQuery ? "query_card" : "text",
+      kind: "text",
       content: aiText,
-      payload: isTodayQuery ? (pack.card as object) : undefined,
     },
   });
   messages.push(aiMsg);

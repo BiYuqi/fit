@@ -154,7 +154,11 @@ async function assertTurn(userId: string, turn: Turn, resp: { intent?: string; r
   }
 
   // 2) 回复红线层（结构化弱断言，不比对原文）
-  const reply = resp?.reply ?? "";
+  // 按"用户看到的渲染后文本"匹配：去掉极简 markdown 标记（**加粗**、行首项目符号），
+  // 否则加粗把数字/短语切开（如 "**2** 次"）会假阴。与前端 markdown-text 渲染同口径。
+  const reply = (resp?.reply ?? "")
+    .replace(/\*\*(.+?)\*\*/g, "$1")
+    .replace(/^[ \t]*[-·•]\s+/gm, "");
   for (const s of e.reply_contain ?? []) {
     if (!reply.includes(s)) failures.push({ what: "reply_contain", expected: s, actual: reply.slice(0, 80) });
   }

@@ -1,6 +1,6 @@
 import { useRef, useEffect, memo } from 'react';
 import { Animated, StyleSheet, View } from 'react-native';
-import { ThemedText } from '@/components/themed-text';
+import { MarkdownText } from './markdown-text';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { FontSize, Glass, Radius, Spacing } from '@/constants/theme';
 import { UserBubble } from './user-bubble';
@@ -9,7 +9,6 @@ import { MealCard } from './meal-card';
 import { PortionCard } from './portion-card';
 import { CandidateCard } from './candidate-card';
 import { ClarifyCard } from './clarify-card';
-import { QueryCard } from './query-card';
 import { ExerciseCard } from './exercise-card';
 import { DeleteConfirmCard } from './delete-confirm-card';
 import { EventLine } from './event-line';
@@ -20,7 +19,6 @@ import type {
   PortionCardPayload,
   CandidateCardPayload,
   ClarifyCardPayload,
-  ContextCard,
   ExerciseCardPayload,
   DeleteConfirmCardPayload,
   EventCardPayload,
@@ -80,7 +78,7 @@ function AiTextBubble({ content }: { content?: string | null }) {
           ...glass.shadow,
         },
       ]}>
-        <ThemedText style={styles.aiText}>{content}</ThemedText>
+        <MarkdownText content={content} baseStyle={styles.aiText} />
       </View>
     </View>
   );
@@ -114,12 +112,10 @@ export const MessageItem = memo(function MessageItem({ message, isLast }: { mess
     case 'clarify_card':
       return <ClarifyCard payload={p as ClarifyCardPayload} />;
 
+    // 进度卡已下线：query 回复一律纯文本气泡。历史里旧的 query_card 消息也降级为文本
+    // （content 自包含数字，直接显示即可），不再渲染进度卡。
     case 'query_card':
-      return p ? (
-        <QueryCard content={message.content} payload={p as unknown as ContextCard} />
-      ) : (
-        <AiTextBubble content={message.content} />
-      );
+      return <AiTextBubble content={message.content} />;
 
     case 'exercise_card':
       return p ? <ExerciseCard payload={p as unknown as ExerciseCardPayload} messageId={message.id} /> : null;
