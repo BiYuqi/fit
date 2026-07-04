@@ -1,0 +1,198 @@
+import { render, screen, fireEvent } from '@testing-library/react-native';
+import { jest } from '@jest/globals';
+import '@testing-library/jest-native/extend-expect';
+
+import { MealCard } from '../meal-card';
+import { createMockAuthStore, createMockChatStore } from '@/test/mocks';
+import type { MealCardPayload } from '@/types/chat';
+
+// ─── Module mocks (hoisted by Jest) ─────────────────────────────────────
+const mockUseAuthStore = jest.fn();
+const mockUseChatStore = jest.fn();
+
+jest.mock('@/stores/auth-store', () => ({
+  useAuthStore: (selector?: (s: unknown) => unknown) =>
+    selector ? selector(mockUseAuthStore()) : mockUseAuthStore(),
+}));
+
+jest.mock('@/stores/chat-store', () => ({
+  useChatStore: (selector?: (s: unknown) => unknown) =>
+    selector ? selector(mockUseChatStore()) : mockUseChatStore(),
+}));
+
+jest.mock('@/hooks/use-color-scheme', () => ({
+  useColorScheme: () => 'light',
+}));
+
+// ─── Helpers ─────────────────────────────────────────────────────────────
+function basePayload(overrides?: Partial<MealCardPayload>): MealCardPayload {
+  return {
+    meal_key: { date: '2026-07-04', meal_type: 'breakfast' },
+    last_change: null,
+    items: [
+      {
+        record_id: 'r1',
+        food_name: '全麦面包',
+        raw_input: '全麦面包2片',
+        weight_g: 100,
+        calories: 174,
+        protein_g: 8,
+        fat_g: 3,
+        carbs_g: 30,
+        is_estimated: false,
+        portion_label: 'medium',
+      },
+      {
+        record_id: 'r2',
+        food_name: '鸡蛋',
+        raw_input: null,
+        weight_g: 50,
+        calories: 72,
+        protein_g: 6,
+        fat_g: 5,
+        carbs_g: 1,
+        is_estimated: true,
+        portion_label: 'medium',
+      },
+    ],
+    totals: { calories: 246, protein_g: 14, fat_g: 8, carbs_g: 31 },
+    item_count: 2,
+    ...overrides,
+  };
+}
+
+function renderCard(payload: MealCardPayload, messageId = 'msg-m1') {
+  return render(<MealCard payload={payload} messageId={messageId} />);
+}
+
+// ─── Tests ───────────────────────────────────────────────────────────────
+
+describe('MealCard', () => {
+  beforeEach(() => {
+    mockUseAuthStore.mockReturnValue(createMockAuthStore());
+    mockUseChatStore.mockReturnValue(createMockChatStore());
+  });
+
+  // ── Rendering (default expanded) ────────────────────────────────────
+
+  it('renders header with meal label, item count, and total calories', () => {
+    renderCard(basePayload());
+    expect(screen.getByText(/早餐/)).toBeOnTheScreen();
+    expect(screen.getByText(/2 项/)).toBeOnTheScreen();
+    expect(screen.getByText('246')).toBeOnTheScreen();
+    expect(screen.getByText('kcal')).toBeOnTheScreen();
+  });
+
+  it('renders each item using raw_input when present', () => {
+    renderCard(basePayload());
+    expect(screen.getByText(/全麦面包2片/)).toBeOnTheScreen();
+    expect(screen.getByText('174')).toBeOnTheScreen();
+  });
+
+  it('falls back to food_name + weight_g when raw_input is missing', () => {
+    renderCard(basePayload());
+    expect(screen.getByText(/鸡蛋50g/)).toBeOnTheScreen();
+    expect(screen.getByText('72')).toBeOnTheScreen();
+  });
+
+  it('shows "估" badge for estimated items only', () => {
+    renderCard(basePayload());
+    // 鸡蛋 is_estimated: true → badge; 全麦面包 is_estimated: false → no badge attached to it
+    expect(screen.getByText(/估/)).toBeOnTheScreen();
+  });
+
+  it('renders macro totals', () => {
+    renderCard(basePayload());
+    expect(screen.getByText(/14g/)).toBeOnTheScreen();
+    expect(screen.getByText(/8g/)).toBeOnTheScreen();
+    expect(screen.getByText(/31g/)).toBeOnTheScreen();
+  });
+
+  // ── Collapse / expand ───────────────────────────────────────────────
+
+  it('collapses to header + macro summary on header press (items hidden)', () => {
+    renderCard(basePayload());
+    fireEvent.press(screen.getByText(/早餐/));
+
+    expect(screen.queryByText(/全麦面包2片/)).not.toBeOnTheScreen();
+    expect(screen.queryByText(/鸡蛋50g/)).not.toBeOnTheScreen();
+    // header + macros row still visible
+    expect(screen.getByText(/2 项/)).toBeOnTheScreen();
+    expect(screen.getByText(/14g/)).toBeOnTheScreen();
+  });
+
+  it('expands again on second header press', () => {
+    renderCard(basePayload());
+    const header = screen.getByText(/早餐/);
+    fireEvent.press(header);
+    fireEvent.press(header);
+    expect(screen.getByText(/全麦面包2片/)).toBeOnTheScreen();
+  });
+
+  // ── last_change / undo ──────────────────────────────────────────────
+
+  it('shows undo button only on the item matching last_change.record_id', () => {
+    renderCard(basePayload({ last_change: { record_id: 'r2' } }));
+    expect(screen.getByText('撤销')).toBeOnTheScreen();
+  });
+
+  it('calls undo with messageId, record_id, prev_state, token on press', () => {
+    const mockUndo = jest.fn();
+    mockUseChatStore.mockReturnValue(createMockChatStore({ undo: mockUndo }));
+    mockUseAuthStore.mockReturnValue(createMockAuthStore({ token: 'tok-abc' }));
+
+    renderCard(
+      basePayload({
+        last_change: { record_id: 'r2', prev_state: { food_id: 'f1', portion_label: 'medium', weight_g: 40 } },
+      }),
+      'msg-m2',
+    );
+
+    fireEvent.press(screen.getByText('撤销'));
+
+    expect(mockUndo).toHaveBeenCalledTimes(1);
+    expect(mockUndo).toHaveBeenCalledWith(
+      'msg-m2',
+      'r2',
+      { food_id: 'f1', portion_label: 'medium', weight_g: 40 },
+      'tok-abc',
+    );
+  });
+
+  it('shows "已撤销" and hides the button after undo', () => {
+    mockUseChatStore.mockReturnValue(createMockChatStore({ undoneCards: { 'msg-m1': true } }));
+
+    renderCard(basePayload({ last_change: { record_id: 'r2' } }));
+
+    expect(screen.getByText('已撤销')).toBeOnTheScreen();
+    expect(screen.queryByText('撤销')).not.toBeOnTheScreen();
+  });
+
+  it('does NOT call undo when already undone', () => {
+    const mockUndo = jest.fn();
+    mockUseChatStore.mockReturnValue(
+      createMockChatStore({ undo: mockUndo, undoneCards: { 'msg-m1': true } }),
+    );
+    renderCard(basePayload({ last_change: { record_id: 'r2' } }));
+    expect(mockUndo).not.toHaveBeenCalled();
+  });
+
+  it('shows no undo button anywhere when last_change is absent', () => {
+    renderCard(basePayload({ last_change: null }));
+    expect(screen.queryByText('撤销')).not.toBeOnTheScreen();
+    expect(screen.queryByText('已撤销')).not.toBeOnTheScreen();
+  });
+
+  // ── Empty meal ───────────────────────────────────────────────────────
+
+  it('shows "已清空" when items is empty', () => {
+    renderCard(basePayload({ items: [], item_count: 0, totals: { calories: 0, protein_g: 0, fat_g: 0, carbs_g: 0 } }));
+    expect(screen.getByText('已清空')).toBeOnTheScreen();
+  });
+
+  it('does not render item rows or macro totals when empty', () => {
+    renderCard(basePayload({ items: [], item_count: 0, totals: { calories: 0, protein_g: 0, fat_g: 0, carbs_g: 0 } }));
+    expect(screen.queryByText(/全麦面包/)).not.toBeOnTheScreen();
+    expect(screen.queryByText(/蛋白/)).not.toBeOnTheScreen();
+  });
+});

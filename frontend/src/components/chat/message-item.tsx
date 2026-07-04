@@ -5,6 +5,7 @@ import { useColorScheme } from '@/hooks/use-color-scheme';
 import { FontSize, Glass, Radius, Spacing } from '@/constants/theme';
 import { UserBubble } from './user-bubble';
 import { RecordCard } from './record-card';
+import { MealCard } from './meal-card';
 import { PortionCard } from './portion-card';
 import { CandidateCard } from './candidate-card';
 import { ClarifyCard } from './clarify-card';
@@ -14,6 +15,7 @@ import { DeleteConfirmCard } from './delete-confirm-card';
 import type {
   ChatMessage,
   RecordCardPayload,
+  MealCardPayload,
   PortionCardPayload,
   CandidateCardPayload,
   ClarifyCardPayload,
@@ -93,6 +95,9 @@ export const MessageItem = memo(function MessageItem({ message, isLast }: { mess
   switch (message.kind) {
     case 'record_card':
       return <RecordCard payload={p as RecordCardPayload} mealType={(p as RecordCardPayload)?.meal_type} messageId={message.id} recordId={message.record_id} />;
+
+    case 'meal_card':
+      return p ? <MealCard payload={p as unknown as MealCardPayload} messageId={message.id} /> : null;
 
     case 'portion_card': {
       const resolved = !!(p as PortionCardPayload)?.resolved;
