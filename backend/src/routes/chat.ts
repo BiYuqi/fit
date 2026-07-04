@@ -181,6 +181,40 @@ export async function chatRoutes(app: FastifyInstance) {
       return await backfillReply(await handleResolvePending(parsed, intentCtx));
     }
 
+    // ── multi（一条消息多个独立动作，T45）──────────
+    // 按用户叙述顺序逐个执行 record/modify，共享 messages 累积卡片；
+    // 每个 op 用自己的原文子句当 text（餐次提取/pending raw_input/估算上下文都按子句走，
+    // 避免"删了粽子，还吃了无油葱花饼"里后一个动作的修饰词污染前一个）。
+    // refs（r1/e1）全部按本条消息开始时的记忆包快照解析，op 之间不重建 pack。
+    if (parsed.intent === "multi") {
+      const replies: string[] = [];
+      let summary_card: object | undefined;
+      let pending: object | undefined;
+      const records: object[] = [];
+      for (const op of parsed.ops) {
+        const opCtx: IntentCtx = { ...intentCtx, text: op.raw?.trim() || text };
+        const r = op.intent === "record"
+          ? await handleRecord(op, opCtx)
+          : await handleModify(op, opCtx);
+        if (r.reply) replies.push(r.reply);
+        if (r.summary_card) summary_card = r.summary_card as object;
+        const rr = r as { pending?: object; records?: object[]; record?: object };
+        if (rr.pending) pending = rr.pending;
+        if (rr.records) records.push(...rr.records);
+        else if (rr.record) records.push(rr.record);
+      }
+      // 各 op 的 handler 内部会各自 finalize trace（last-write-wins），这里收口成 multi
+      tctx.ok("multi", { tokenUsage: parseUsage, promptMessages: parseMessages });
+      return await backfillReply({
+        intent: "multi",
+        reply: replies.join("\n"),
+        records: records.length ? records : undefined,
+        pending,
+        summary_card,
+        messages,
+      });
+    }
+
     // ── record ─────────────────────────────────
     return await backfillReply(await handleRecord(parsed, intentCtx));
   } catch (err: any) {

@@ -91,7 +91,9 @@ const styles = StyleSheet.create({
     gap: 7,
   },
   title: {
-    flex: 1,
+    // 不能用 flex:1：卡片是 alignSelf:flex-start（内容定宽），行内唯一子元素若靠父容器分配宽度，
+    // resolved 态（无图标/按钮撑宽）会被 Yoga 解析成 0 宽，整卡塌成空壳
+    flexShrink: 1,
     fontSize: FontSize.base,
     fontWeight: '600',
   },

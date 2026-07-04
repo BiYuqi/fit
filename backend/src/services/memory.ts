@@ -269,6 +269,17 @@ export async function buildMemoryPack(user_id: string): Promise<MemoryPack> {
           name: it.canonical || it.raw || "",
           portion: it.chosen_label || "",
         }));
+      } else if (log.intent === "multi" && Array.isArray(pj?.ops)) {
+        // T45 复合动作：拍平所有 record op 的食物作指代锚点
+        const items = pj.ops
+          .filter((op: any) => op?.intent === "record" && Array.isArray(op.items))
+          .flatMap((op: any) => op.items);
+        if (items.length > 0) {
+          turn.foods = items.map((it: any) => ({
+            name: it.canonical || it.raw || "",
+            portion: it.chosen_label || "",
+          }));
+        }
       } else if (log.intent === "resolve" && pj?.food_name) {
         // 卡片点选轮（T37）：parsed_json 是 ResolveAction，food_name 作指代锚点
         turn.foods = [{ name: pj.food_name, portion: pj.portion_label ?? "" }];

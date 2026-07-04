@@ -146,3 +146,52 @@ test("ParseResultSchema 解析 modify.append 的 items 同样归一化", () => {
     assert.equal(custom?.grams, 80);
   }
 });
+
+// T45：multi 意图（一条消息多个独立动作）与批量 target
+
+test("modify target 支持单 ref 字符串与 ref 数组（批量改餐次）", () => {
+  const single = ParseResultSchema.parse({ intent: "modify", action: "delete", target: "r1" });
+  if (single.intent === "modify") assert.equal(single.target, "r1");
+  const batch = ParseResultSchema.parse({
+    intent: "modify", action: "update", target: ["r1", "r2", "r3"],
+    change: { meal_type: "breakfast" },
+  });
+  if (batch.intent === "modify") assert.deepEqual(batch.target, ["r1", "r2", "r3"]);
+  assert.throws(() => ParseResultSchema.parse({ intent: "modify", action: "update", target: [] }));
+});
+
+test("multi 合法解析：delete + record 两个 op，record items 同样归一化（2026-07-04 粽子葱花饼现场）", () => {
+  const parsed = ParseResultSchema.parse({
+    intent: "multi",
+    ops: [
+      { intent: "modify", action: "delete", target: "r7", raw: "把刚才吃的粽子删除了" },
+      {
+        intent: "record", meal_type: "breakfast", raw: "早晨还吃了30克葱花饼，无油的",
+        items: [makeItem({ canonical: "葱花饼（无油）", quantity_expr: "30克", chosen_label: "custom" })],
+      },
+    ],
+  });
+  assert.equal(parsed.intent, "multi");
+  if (parsed.intent === "multi") {
+    assert.equal(parsed.ops.length, 2);
+    const rec = parsed.ops[1];
+    if (rec.intent === "record") {
+      const custom = rec.items?.[0].portions.find((p) => p.label === "custom");
+      assert.equal(custom?.grams, 30); // T42 归一化在 op 内同样生效
+    }
+  }
+});
+
+test("multi 拒绝：ops 少于 2 个、或 op 是 record/modify 之外的意图", () => {
+  assert.throws(() => ParseResultSchema.parse({
+    intent: "multi",
+    ops: [{ intent: "modify", action: "delete", target: "r1" }],
+  }));
+  assert.throws(() => ParseResultSchema.parse({
+    intent: "multi",
+    ops: [
+      { intent: "modify", action: "delete", target: "r1" },
+      { intent: "query" },
+    ],
+  }));
+});

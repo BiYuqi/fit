@@ -10,13 +10,66 @@ import type { MealType, PortionLabel } from "@prisma/client";
 import type { ParseResult } from "../../ai/schema";
 import type { IntentCtx } from "./types";
 
+const MEAL_ZH: Record<string, string> = { breakfast: "早餐", lunch: "午餐", dinner: "晚餐", snack: "加餐" };
+
 export async function handleModify(
   parsed: Extract<ParseResult, { intent: "modify" }>,
   ctx: IntentCtx,
 ) {
   const { user_id, text, source, today, dateObj, pack, messages, tctx, parseUsage, parseMessages } = ctx;
 
-  const target = pack.recent_records.find((r) => r.ref === parsed.target);
+  // target 可为 ref 数组（批量改餐次"以上发的都是早餐"）；其余场景等价单条
+  const refs = Array.isArray(parsed.target) ? parsed.target : [parsed.target];
+
+  // ── 批量改餐次：多 target + update + change.meal_type → 一次改完，汇总一条回复 ──
+  // （schema/prompt 约定数组只用于批量改餐次；其他批量组合不受支持，走下方单条逻辑取第一条）
+  if (refs.length > 1 && parsed.action === "update" && parsed.change?.meal_type) {
+    const newMeal = parsed.change.meal_type as MealType;
+    const foodRefs = refs
+      .map((ref) => pack.recent_records.find((r) => r.ref === ref))
+      .filter((r): r is NonNullable<typeof r> => !!r && r.kind === "food");
+    const recs = await prisma.foodRecord.findMany({
+      where: { id: { in: foodRefs.map((r) => r.record_id) }, user_id },
+      include: { food: true },
+    });
+    if (recs.length === 0) {
+      const aiMsg = await prisma.chatMessage.create({
+        data: { user_id, date: dateObj, role: "assistant", kind: "text", content: "没找到要改餐次的那些记录，可以说得具体一点吗？" },
+      });
+      messages.push(aiMsg);
+      const card = await buildContextCard(user_id);
+      tctx.partial("modify", { tokenUsage: parseUsage, promptMessages: parseMessages });
+      return { intent: "modify", reply: aiMsg.content, summary_card: card, messages };
+    }
+
+    await prisma.foodRecord.updateMany({
+      where: { id: { in: recs.map((r) => r.id) }, user_id },
+      data: { meal_type: newMeal },
+    });
+    await recompute(user_id, today);
+    for (const rec of recs) {
+      await recordModifyCorrection({
+        traceId: tctx.traceId,
+        recordId: rec.id,
+        foodId: rec.food_id,
+        foodName: rec.food.name,
+        prevState: { meal_type: rec.meal_type },
+        newState: { meal_type: newMeal },
+        isFoodChange: false,
+        modifyConfidence: (parsed as any).modify_confidence,
+      });
+    }
+    const card = await buildContextCard(user_id);
+    const content = `已把 ${recs.length} 条记录改为${MEAL_ZH[newMeal]}：${recs.map((r) => r.food.name).join("、")}。`;
+    const aiMsg = await prisma.chatMessage.create({
+      data: { user_id, date: dateObj, role: "assistant", kind: "text", content },
+    });
+    messages.push(aiMsg);
+    tctx.ok("modify", { mealType: newMeal, tokenUsage: parseUsage, promptMessages: parseMessages });
+    return { intent: "modify", reply: content, summary_card: card, messages };
+  }
+
+  const target = pack.recent_records.find((r) => r.ref === refs[0]);
   if (!target) {
     const aiMsg = await prisma.chatMessage.create({
       data: { user_id, date: dateObj, role: "assistant", kind: "text", content: "没找到要修改的那条记录，可以说得具体一点吗？" },

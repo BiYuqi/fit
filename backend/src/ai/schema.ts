@@ -83,32 +83,44 @@ export const ModifyChangeSchema = z.object({
 });
 export type ModifyChange = z.infer<typeof ModifyChangeSchema>;
 
+// ---------- 单意图变体（record / modify 同时是 multi 的 op 单元，T45） ----------
+export const RecordVariantSchema = z.object({
+  intent: z.literal("record"),
+  raw: z.string().optional(),                   // multi 时该动作对应的原文子句（餐次提取/兜底估算按子句而非全文）
+  meal_type: MealTypeSchema.optional(),
+  scene: SceneSchema.optional(),                // 原话提不出场景时 AI 填 unknown 或省略
+  items: z.array(FoodItemSchema).optional(),
+  exercise: z.array(ExerciseItemSchema).optional(),
+}).refine(
+  (v) => (v.items && v.items.length > 0) || (v.exercise && v.exercise.length > 0),
+  { message: "record 意图至少需要 items 或 exercise 之一" },
+);
+
+export const ModifyVariantSchema = z.object({
+  intent: z.literal("modify"),
+  raw: z.string().optional(),                   // multi 时该动作对应的原文子句
+  action: ModifyActionSchema,
+  // 引用记忆包 recent_records.ref（如 r1/e1）。批量改餐次（"以上都是早餐"）时为 ref 数组
+  target: z.union([z.string(), z.array(z.string()).min(1)]),
+  change: ModifyChangeSchema.optional(),         // action=update 时
+  items: z.array(FoodItemSchema).optional(),     // action=append 时
+  modify_confidence: z.number().min(0).max(1).optional(),
+});
+
+// multi 的动作单元：只允许 record / modify（query/chat/discuss 不进 ops，见 parser 提示词）
+export const MultiOpSchema = z.discriminatedUnion("intent", [RecordVariantSchema, ModifyVariantSchema]);
+export type MultiOp = z.infer<typeof MultiOpSchema>;
+
 // ---------- 完整解析结果 ----------
 export const ParseResultSchema = z.discriminatedUnion("intent", [
-  z.object({
-    intent: z.literal("record"),
-    meal_type: MealTypeSchema.optional(),
-    scene: SceneSchema.optional(),              // 原话提不出场景时 AI 填 unknown 或省略
-    items: z.array(FoodItemSchema).optional(),
-    exercise: z.array(ExerciseItemSchema).optional(),
-  }).refine(
-    (v) => (v.items && v.items.length > 0) || (v.exercise && v.exercise.length > 0),
-    { message: "record 意图至少需要 items 或 exercise 之一" },
-  ),
+  RecordVariantSchema,
   z.object({
     intent: z.literal("query"),
   }),
   z.object({
     intent: z.literal("chat"),
   }),
-  z.object({
-    intent: z.literal("modify"),
-    action: ModifyActionSchema,
-    target: z.string(),                          // 引用记忆包 recent_records.ref（如 r1/e1）
-    change: ModifyChangeSchema.optional(),       // action=update 时
-    items: z.array(FoodItemSchema).optional(),   // action=append 时
-    modify_confidence: z.number().min(0).max(1).optional(),
-  }),
+  ModifyVariantSchema,
   z.object({
     intent: z.literal("discuss"),
     target: z.string(),                          // 引用记忆包 recent_records.ref（如 r1/e1）
@@ -118,11 +130,142 @@ export const ParseResultSchema = z.discriminatedUnion("intent", [
     // 用户打字回答【待确认】卡片（T38）：份量档位/食物名(string) 或自定义克数({grams})
     choice: z.union([z.string().min(1), z.object({ grams: z.number().positive() })]),
   }),
+  z.object({
+    intent: z.literal("multi"),                  // T45：一条消息多个独立动作，按序执行
+    ops: z.array(MultiOpSchema).min(2).max(4),
+  }),
 ]);
 export type ParseResult = z.infer<typeof ParseResultSchema>;
 
 // ---------- Tool call schema (DeepSeek strict mode) ----------
 export const PARSE_TOOL_NAME = "parse_user_input";
+
+// 共享属性定义（T45）：顶层单意图与 multi.ops 的动作单元引用同一份，改一处两边生效
+const actionProp = {
+  type: "string",
+  enum: ["update", "delete", "append"],
+  description: "仅 intent=modify 必填。update=改份量/改食物; delete=删一条; append=在某餐追加新食物",
+};
+const targetProp = {
+  description: "intent=modify 或 discuss 时必填。引用【今日已记录】里的 ref（如 r1、e1），指明操作/讨论的是哪条记录。仅 modify+update 改餐次且用户明显指多条时（'以上都是早餐'、'刚才发的都是晚饭'）填 ref 数组，其余场景一律填单个字符串",
+  anyOf: [
+    { type: "string" },
+    { type: "array", items: { type: "string" } },
+  ],
+};
+const changeProp = {
+  type: "object",
+  additionalProperties: false,
+  description: "仅 action=update 填。改份量填 portion_label+grams（grams 为该食物该档的估算净重）；改食物填 food（新标准名）；改餐次填 meal_type（如'粽子是中午吃的'→lunch，克数食物都不动、不要顺手填 grams）；改运动消耗填 calories_burned（用户用穿戴设备数据纠正）；用户直接指定食物记录最终热量填 calories（用户真值，如'记录成180kcal'）；营养口径的属性修正填 food_desc（如'无油'）",
+  properties: {
+    portion_label: { type: "string", enum: ["small", "medium", "large", "custom"] },
+    grams: { type: "number" },
+    food: { type: "string" },
+    meal_type: { type: "string", enum: ["breakfast", "lunch", "dinner", "snack"] },
+    calories_burned: { type: "number" },
+    calories: { type: "number", description: "食物记录的最终热量(kcal)，用户亲口给出的数值（用户真值，不是AI估算），如'记录成180kcal'、'按150卡记'。填这个时通常不要同时填 grams/portion_label（除非用户也确实说了新克数）" },
+    food_desc: { type: "string", description: "食物属性修正描述，影响营养口径的（如'无油'、'无糖'、'去皮'、'脱脂'）。只填修正词本身，不要重复食物名；纯口感/无关描述（'有点咸'、'挺好吃'）不要填这个，应整体判 chat" },
+  },
+};
+const modifyConfidenceProp = {
+  type: "number",
+  description: "仅 intent=modify 填。对「改哪条+怎么改」整体把握度 0~1",
+};
+const mealTypeProp = {
+  type: "string",
+  enum: ["breakfast", "lunch", "dinner", "snack"],
+  description: "仅 intent=record 且能判断时填写",
+};
+const sceneProp = {
+  type: "string",
+  enum: ["takeout", "canteen", "home", "unknown"],
+  description: "仅 intent=record 填。进食场景，只从用户原话提取：点外卖/叫的/点了个→takeout；食堂/单位餐厅→canteen；自己做/煮/在家做的→home；原话没有场景线索→unknown，不要猜",
+};
+const itemsProp = {
+  type: "array",
+  description: "食物条目列表，intent=record 时必填",
+  items: {
+    type: "object",
+    required: [
+      "raw", "canonical", "quantity_expr", "portions",
+      "chosen_label", "food_confidence", "portion_confidence", "is_ambiguous",
+    ],
+    additionalProperties: false,
+    properties: {
+      raw: { type: "string", description: "用户原始表达" },
+      canonical: { type: "string", description: "归一后标准食物名（中文，供数据库匹配）" },
+      quantity_expr: { type: "string", description: "原始份量表达，如'一碗'、'半个'" },
+      portions: {
+        type: "array",
+        description: "小/中/大三档份量估算，含单位和克数(ml)",
+        items: {
+          type: "object",
+          required: ["label", "grams"],
+          additionalProperties: false,
+          properties: {
+            label: { type: "string", enum: ["small", "medium", "large", "custom"] },
+            grams: { type: "number" },
+            unit: { type: "string", enum: ["g", "ml"], description: "固体食物用g，液体/饮品用ml" },
+          },
+        },
+      },
+      chosen_label: {
+        type: "string",
+        enum: ["small", "medium", "large", "custom"],
+        description: "根据 quantity_expr 选定的档位",
+      },
+      food_confidence: { type: "number", description: "食物识别置信度 0~1" },
+      portion_confidence: { type: "number", description: "份量估算置信度 0~1" },
+      is_ambiguous: { type: "boolean", description: "食物名称是否有歧义（如'煎饼'可指煎饼果子/鸡蛋煎饼等多种，'粥'可指多种粥），true时需用户澄清" },
+      ai_candidates: {
+        type: "array",
+        description: "is_ambiguous=true时，列出该泛称最可能指的具体食物名（标准中文名，最多3个，按可能性降序），供用户选择。例如'煎饼'→['煎饼果子','鸡蛋煎饼','酱香饼']",
+        items: { type: "string" },
+      },
+    },
+  },
+};
+const exerciseProp = {
+  type: "array",
+  description: "运动条目，有运动记录时填写。持续型运动（跑步/球类）填 duration_min，次数型运动（俯卧撑/引体向上/深蹲）填 reps，两者可同时有",
+  items: {
+    type: "object",
+    required: ["type"],
+    additionalProperties: false,
+    properties: {
+      type: { type: "string" },
+      duration_min: { type: "number" },
+      reps: { type: "number", description: "次数型运动的总次数（如俯卧撑、引体向上），与 duration_min 二选一或同时有" },
+      intensity: { type: "string" },
+    },
+  },
+};
+
+// multi 的动作单元（T45）：与顶层同构的 record/modify 子集，另带 raw 原文子句
+const opSchema = {
+  type: "object",
+  required: ["intent"],
+  additionalProperties: false,
+  properties: {
+    intent: {
+      type: "string",
+      enum: ["record", "modify"],
+      description: "该动作的类型，只允许 record 或 modify",
+    },
+    raw: {
+      type: "string",
+      description: "该动作对应的原文子句，照抄用户原话，不要改写不要遗漏修饰词",
+    },
+    action: actionProp,
+    target: targetProp,
+    change: changeProp,
+    modify_confidence: modifyConfidenceProp,
+    meal_type: mealTypeProp,
+    scene: sceneProp,
+    items: itemsProp,
+    exercise: exerciseProp,
+  },
+};
 
 export const parseToolSchema = {
   type: "function" as const,
@@ -138,36 +281,13 @@ export const parseToolSchema = {
       properties: {
         intent: {
           type: "string",
-          enum: ["record", "query", "chat", "modify", "discuss", "resolve_pending"],
-          description: "record=记录饮食/运动; query=查询自己的饮食/运动数据(任意日期/区间/某食物次数/总结回顾); modify=改/删/追加已记录的食物; discuss=针对某条已有记录提问/质疑(不动数据); resolve_pending=打字回答上下文里的【待确认】卡片; chat=其他闲聊/营养咨询",
+          enum: ["record", "query", "chat", "modify", "discuss", "resolve_pending", "multi"],
+          description: "record=记录饮食/运动; query=查询自己的饮食/运动数据(任意日期/区间/某食物次数/总结回顾); modify=改/删/追加已记录的食物; discuss=针对某条已有记录提问/质疑(不动数据); resolve_pending=打字回答上下文里的【待确认】卡片; multi=一条消息同时包含多个独立动作(如 删某条+记录新食物)，动作放 ops 按序执行; chat=其他闲聊/营养咨询",
         },
-        action: {
-          type: "string",
-          enum: ["update", "delete", "append"],
-          description: "仅 intent=modify 必填。update=改份量/改食物; delete=删一条; append=在某餐追加新食物",
-        },
-        target: {
-          type: "string",
-          description: "intent=modify 或 discuss 时必填。引用【今日已记录】里的 ref（如 r1、e1），指明操作/讨论的是哪条记录",
-        },
-        change: {
-          type: "object",
-          additionalProperties: false,
-          description: "仅 action=update 填。改份量填 portion_label+grams（grams 为该食物该档的估算净重）；改食物填 food（新标准名）；改餐次填 meal_type（如'粽子是中午吃的'→lunch，克数食物都不动、不要顺手填 grams）；改运动消耗填 calories_burned（用户用穿戴设备数据纠正）；用户直接指定食物记录最终热量填 calories（用户真值，如'记录成180kcal'）；营养口径的属性修正填 food_desc（如'无油'）",
-          properties: {
-            portion_label: { type: "string", enum: ["small", "medium", "large", "custom"] },
-            grams: { type: "number" },
-            food: { type: "string" },
-            meal_type: { type: "string", enum: ["breakfast", "lunch", "dinner", "snack"] },
-            calories_burned: { type: "number" },
-            calories: { type: "number", description: "食物记录的最终热量(kcal)，用户亲口给出的数值（用户真值，不是AI估算），如'记录成180kcal'、'按150卡记'。填这个时通常不要同时填 grams/portion_label（除非用户也确实说了新克数）" },
-            food_desc: { type: "string", description: "食物属性修正描述，影响营养口径的（如'无油'、'无糖'、'去皮'、'脱脂'）。只填修正词本身，不要重复食物名；纯口感/无关描述（'有点咸'、'挺好吃'）不要填这个，应整体判 chat" },
-          },
-        },
-        modify_confidence: {
-          type: "number",
-          description: "仅 intent=modify 填。对「改哪条+怎么改」整体把握度 0~1",
-        },
+        action: actionProp,
+        target: targetProp,
+        change: changeProp,
+        modify_confidence: modifyConfidenceProp,
         choice: {
           description: "仅 intent=resolve_pending 必填。回答的是份量档位/食物名就填字符串（'small'/'medium'/'large'/具体食物名）；回答的是精确克数就填 {grams:数字}",
           anyOf: [
@@ -180,74 +300,14 @@ export const parseToolSchema = {
             },
           ],
         },
-        meal_type: {
-          type: "string",
-          enum: ["breakfast", "lunch", "dinner", "snack"],
-          description: "仅 intent=record 且能判断时填写",
-        },
-        scene: {
-          type: "string",
-          enum: ["takeout", "canteen", "home", "unknown"],
-          description: "仅 intent=record 填。进食场景，只从用户原话提取：点外卖/叫的/点了个→takeout；食堂/单位餐厅→canteen；自己做/煮/在家做的→home；原话没有场景线索→unknown，不要猜",
-        },
-        items: {
+        meal_type: mealTypeProp,
+        scene: sceneProp,
+        items: itemsProp,
+        exercise: exerciseProp,
+        ops: {
           type: "array",
-          description: "食物条目列表，intent=record 时必填",
-          items: {
-            type: "object",
-            required: [
-              "raw", "canonical", "quantity_expr", "portions",
-              "chosen_label", "food_confidence", "portion_confidence", "is_ambiguous",
-            ],
-            additionalProperties: false,
-            properties: {
-              raw: { type: "string", description: "用户原始表达" },
-              canonical: { type: "string", description: "归一后标准食物名（中文，供数据库匹配）" },
-              quantity_expr: { type: "string", description: "原始份量表达，如'一碗'、'半个'" },
-              portions: {
-                type: "array",
-                description: "小/中/大三档份量估算，含单位和克数(ml)",
-                items: {
-                  type: "object",
-                  required: ["label", "grams"],
-                  additionalProperties: false,
-                  properties: {
-                    label: { type: "string", enum: ["small", "medium", "large", "custom"] },
-                    grams: { type: "number" },
-                    unit: { type: "string", enum: ["g", "ml"], description: "固体食物用g，液体/饮品用ml" },
-                  },
-                },
-              },
-              chosen_label: {
-                type: "string",
-                enum: ["small", "medium", "large", "custom"],
-                description: "根据 quantity_expr 选定的档位",
-              },
-              food_confidence: { type: "number", description: "食物识别置信度 0~1" },
-              portion_confidence: { type: "number", description: "份量估算置信度 0~1" },
-              is_ambiguous: { type: "boolean", description: "食物名称是否有歧义（如'煎饼'可指煎饼果子/鸡蛋煎饼等多种，'粥'可指多种粥），true时需用户澄清" },
-              ai_candidates: {
-                type: "array",
-                description: "is_ambiguous=true时，列出该泛称最可能指的具体食物名（标准中文名，最多3个，按可能性降序），供用户选择。例如'煎饼'→['煎饼果子','鸡蛋煎饼','酱香饼']",
-                items: { type: "string" },
-              },
-            },
-          },
-        },
-        exercise: {
-          type: "array",
-          description: "运动条目，有运动记录时填写。持续型运动（跑步/球类）填 duration_min，次数型运动（俯卧撑/引体向上/深蹲）填 reps，两者可同时有",
-          items: {
-            type: "object",
-            required: ["type"],
-            additionalProperties: false,
-            properties: {
-              type: { type: "string" },
-              duration_min: { type: "number" },
-              reps: { type: "number", description: "次数型运动的总次数（如俯卧撑、引体向上），与 duration_min 二选一或同时有" },
-              intensity: { type: "string" },
-            },
-          },
+          description: "仅 intent=multi 必填。2~4 个动作，按用户叙述顺序排列；每个动作的结构与对应单意图完全一致（record 填 items/meal_type/scene，modify 填 action/target/change），另加 raw 填该动作对应的原文子句",
+          items: opSchema,
         },
       },
     },

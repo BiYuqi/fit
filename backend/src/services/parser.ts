@@ -16,6 +16,7 @@ export const SYSTEM_PROMPT = `你是一个减脂 App 的饮食助手，帮助用
 - modify：改/删/追加【今日已记录】里的某条记录
 - discuss：针对某条已有记录提问/质疑（不动数据，只解释）
 - resolve_pending：打字回答上下文里的【待确认】卡片（份量/候选食物），而不是点卡
+- multi：一条消息同时包含多个互不隶属的动作（如 删某条已有记录 + 记录新食物）
 - chat：其他营养咨询、闲聊
 
 关键判断规则：
@@ -43,6 +44,7 @@ modify 意图（改 / 删 / 追加已记录的食物或运动）：
   - 改食物份量（"换成50克"、"那个面少一点"）→ change.portion_label + change.grams。
   - 改食物名（"不对，是牛肉拉面"）→ change.food 填新标准名（同份量沿用旧的，不填 grams）。
   - 改餐次（"粽子是中午吃的，你改下"、"那个是晚饭吃的"）→ change.meal_type 填新餐次，**克数食物都不动，不要顺手填 grams/food**。
+  - **批量改餐次**（"以上发的都是早餐"、"刚才那些都是晚饭"、"今天记的全是午餐"）→ target 填 ref **数组**，把用户所指的每一条都列进去（如 ["r3","r4","r5"]），change.meal_type 填新餐次。"以上/刚才发的"通常指最近一次消息产生的所有记录（含点卡确认的），"全部/所有"指今天全部记录。只有批量改餐次可用数组，其他修改一律单条。
   - 改运动消耗（"改成400"、"应该是350卡"），且 target 指向运动记录（ref 以 e 开头）→ change.calories_burned，填用户给出的数字。用户拿穿戴设备数据纠正 AI 的 MET 估算时常见。
   - 用户直接给出食物记录的最终热量（"记录成180kcal"、"按150卡记"、"这个算200大卡"），且 target 指向食物记录（ref 以 r 开头）→ change.calories，填用户给出的数字。这是**用户真值**，不是 AI 估算，不要因为"AI 不该算账"就回避——用户报的数字直接采信入库。
   - 食物属性修正，影响营养口径的（"无油款"、"不是油煎的"、"是无糖的"、"去皮的"、"脱脂的"）→ change.food_desc 填修正描述本身（如"无油"），不要顺手填 food/grams。**纯口感/无关描述（"有点咸"、"挺好吃"）不算修正，不要用这条**，整体判 chat。
@@ -51,6 +53,14 @@ modify 意图（改 / 删 / 追加已记录的食物或运动）：
 - **纯确认词处理**：若当前消息是极简确认（"好"、"改吧"、"修改吧"、"行"、"ok"、"是"、"确认"），且【最近对话】最后几轮的用户消息涉及对某条记录数值的讨论（如"不是50克吗"、"应该是50g"、"改成400"、"记录成180kcal"），则推断 target（从【今日已记录】ref 找最近被讨论的那条）和 change 内容（从讨论中提取数字，视 target 类型填 grams、calories_burned 或 calories），输出 intent=modify, action=update。若推断不出具体 target 或数值，走 chat。
 - 区分 append 与 record：点名某餐追加新食物（"早餐再加个蛋"）→ modify.append；无明确餐次的再次食用（"再来一碗"）→ record。
 - modify_confidence 给「改哪条+怎么改」的整体把握度。
+
+multi 意图（一条消息包含多个互不隶属的动作，T45）：
+- 消息同时包含两个及以上独立动作——修改/删除某条已有记录 + 记录新食物/运动，或针对不同记录的多个修改——单一意图装不下时用 multi，ops 按用户叙述顺序列出（2~4 个）。
+- 每个 op 的结构与对应单意图完全一致（record 填 items/meal_type/scene；modify 填 action/target/change），另加 raw：**照抄**该动作对应的原文子句，不要改写、不要遗漏修饰词。
+- **修饰词跟着自己的动作走**："把刚才吃的粽子删除了，我记得早晨还吃了30克葱花饼，无油的"——"无油的"说的是葱花饼（record op 的 canonical 取"葱花饼（无油）"），不是粽子。绝不能把后一个动作的属性安到前一个动作头上。
+  该例 ops=[{intent:"modify",action:"delete",target:"粽子那条的ref",raw:"把刚才吃的粽子删除了"},{intent:"record",meal_type:"breakfast",items:[葱花饼（无油）30g custom],raw:"我记得早晨还吃了30克葱花饼，无油的"}]。
+- 只有 record 和 modify 能进 ops。动作里夹着闲聊/评论（"删了吧，今天好累"）→ 忽略闲聊部分按单动作走；夹着查询（"删了粽子，另外我今天吃了多少"）→ 只执行动作，查询部分不进 ops（用户会单独再问）。
+- 单个动作的消息**绝不要**用 multi；一句话报多个食物（"吃了A和B"）是一个 record 的多个 items，也不是 multi。
 
 resolve_pending 意图（打字回答【待确认】卡片，不是点卡）：
 - 仅当上下文里存在【待确认】行，且当前消息明显是在回答它时才用此意图；否则（哪怕消息里出现"中份""小份"这类词）一律按原意图正常路由（record/query/chat 等），无【待确认】时绝不能用 resolve_pending。
@@ -94,7 +104,8 @@ meal_type 必须从文本中提取，有明确时间词时不得省略：
 - 下午茶/下午/加餐/零食 → snack
 - 晚上/晚饭/晚餐/傍晚/evening → dinner
 - 无时间词但是对刚才那餐的**续报**（"还有X"、"另外还吃了Y"、"再加上Z"，且【最近对话】里用户刚记录过某餐）→ meal_type 跟随那一餐（如上一句"中午还吃了疙瘩汤"，接着"还有粽子"→ lunch）。
-- 无时间词且无上下文可判时省略 meal_type，由后端按当前时间推断。
+- **续报仅限续报口吻**（"还有/另外/再/也"开头的补充）。"今天吃了X"、"我吃了A、B、C"这类**完整汇报**不是续报——即使【最近对话】里刚聊过某餐，也**不得**继承那一餐的餐次。
+- 无时间词、又不是续报 → 省略 meal_type，由后端按当前时间推断。宁可省略，不要猜。
 
 scene（进食场景）只从用户原话提取，不要靠常识猜：
 - 点外卖/叫了个/点了份（"点了个外卖麻辣香锅"、"叫的黄焖鸡"）→ takeout
@@ -183,6 +194,10 @@ export async function parseUserInput(
         delete obj.meal_type;
       }
     }
+    // 防御：target 数组只允许 modify 用（批量改餐次），discuss 误返回数组时取第一个
+    if (obj.intent === "discuss" && Array.isArray(obj.target)) {
+      obj.target = obj.target[0];
+    }
     // 防御（T38）：resolve_pending 缺 choice 或 choice 形态不对，降级为 chat——
     // 由 chat.ts 兜底路由（此时既没有可 resolve 的选择，硬当 resolve_pending 只会白白吃掉一轮）
     if (obj.intent === "resolve_pending") {
@@ -193,6 +208,27 @@ export async function parseUserInput(
       if (!validChoice) {
         obj.intent = "chat";
         delete obj.choice;
+      }
+    }
+    // 防御（T45）：multi 的 ops 清洗——空壳 op 剔除；只剩 1 个拍平成单意图；全无降级 chat。
+    // 硬拒会触发 pro 重试链，两个模型都犯错时整条消息兜底 chat 丢动作，比拍平更糟。
+    if (obj.intent === "multi") {
+      const ops = (Array.isArray(obj.ops) ? (obj.ops as Array<Record<string, unknown>>) : []).filter((op) => {
+        if (!op || typeof op !== "object") return false;
+        if (op.intent === "record") {
+          return (Array.isArray(op.items) && op.items.length > 0) ||
+                 (Array.isArray(op.exercise) && op.exercise.length > 0);
+        }
+        if (op.intent === "modify") return !!op.action && !!op.target;
+        return false;
+      });
+      if (ops.length === 0) {
+        obj.intent = "chat";
+        delete obj.ops;
+      } else if (ops.length === 1) {
+        raw = { ...ops[0] };                       // 拍平：单动作按对应单意图走
+      } else {
+        obj.ops = ops.slice(0, 4);
       }
     }
   }

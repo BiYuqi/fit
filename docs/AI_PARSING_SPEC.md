@@ -11,7 +11,7 @@
 - **模型升级策略（在 T05+T06 完成后实现）**：flash 默认；若任一 item `food_confidence < 0.5` 或 zod 校验失败，自动用 pro 重试一次，不再降级。前端永不指定模型。
 
 ## 2. 意图路由
-每条消息先判：`record`（记录饮食/运动）/ `query`（查自己的饮食/运动数据：任意日期/区间、某食物次数、总结回顾类，见 §11）/ `modify`（改/删/追加已有记录，见 §8）/ `discuss`（针对某条已有记录提问/质疑，不动数据，见 §9）/ `resolve_pending`（打字回答上下文里的【待确认】卡片，见 §10）/ `chat`（其余闲聊/营养问题）。可与解析在同一次调用完成。
+每条消息先判：`record`（记录饮食/运动）/ `query`（查自己的饮食/运动数据：任意日期/区间、某食物次数、总结回顾类，见 §11）/ `modify`（改/删/追加已有记录，见 §8）/ `discuss`（针对某条已有记录提问/质疑，不动数据，见 §9）/ `resolve_pending`（打字回答上下文里的【待确认】卡片，见 §10）/ `multi`（一条消息多个互不隶属的动作，见 §12）/ `chat`（其余闲聊/营养问题）。可与解析在同一次调用完成。
 
 ## 3. record 解析协议
 DeepSeek 输出（strict tool schema，zod 同构校验）：
@@ -175,7 +175,10 @@ callDeepSeekCtx(pack, messages, opts)
 {"intent":"modify","action":"update","target":"r1","change":{"food_desc":"无油"}}
 {"intent":"modify","action":"append","target":"r1","items":[ /* 蛋,结构同 §3 items */ ]}
 {"intent":"modify","action":"delete","target":"r1"}
+{"intent":"modify","action":"update","target":["r3","r4","r5"],"change":{"meal_type":"breakfast"}}
 ```
+
+**批量改餐次**（2026-07-04 立项）：`target` 允许 ref 数组，仅用于 `update` + `change.meal_type`（"以上发的都是早餐"、"刚才那些都是晚饭"）。后端一次 `updateMany` 改完所有食物记录 + 重算，回一条汇总文本（"已把 N 条记录改为早餐：…"），不逐条出卡、无 undo（说反了再说一句改回来即可）。其他批量组合不受支持——数组会退化为取第一个 ref 走单条逻辑。
 
 **食物记录改热量/属性修正**（T40，`change.calories` / `change.food_desc`）：
 - `change.calories`：用户直接给出食物记录的最终热量（"记录成180kcal"、"按150卡记"）。后端不重新匹配食物，直接把该值写入 `food_record.calories`，宏量素按新旧热量比例回推（不是重估），`calories_source` 置 `user_override`——同一条记录之后若被别的字段（食物/克数/属性）再次 `update`，会重新按 food×grams 计算并把 `calories_source` 落回 `computed`（该次改的不再是热量本身，旧覆盖值已经不适用）。
@@ -264,3 +267,23 @@ callDeepSeekCtx(pack, messages, opts)
 **失败兜底**：planner flash+pro 均失败 → `answerQuery` 无 extraCtx 直接回答，提示词保证对上下文没覆盖的数据如实说"没有记录"，不编造、不 500。失败与升级都记 trace（`decision` event，`meta.stage="query_plan"`）——失败率是"计划 schema 是否够用"的观察指标。
 
 **跟进细问**（"具体吃了什么"不带日期词）：planner 走 `callDeepSeekCtx`，从 L0【最近对话】沿用上一轮查询的日期，无需正则。
+
+## 12. multi 意图：复合动作（T45）
+
+一条消息包含多个互不隶属的动作时（"把刚才吃的粽子删除了，我记得早晨还吃了30克葱花饼，无油的"），单意图协议装不下。2026-07-04 真实翻车：两个动作被缝合成一个 modify——"无油"安到了粽子头上（触发属性修正重估）、删除丢失、葱花饼没记。
+
+**协议**（strict tool schema + zod 同构）：
+```json
+{"intent":"multi","ops":[
+  {"intent":"modify","action":"delete","target":"r7","raw":"把刚才吃的粽子删除了"},
+  {"intent":"record","meal_type":"breakfast","raw":"我记得早晨还吃了30克葱花饼，无油的",
+   "items":[ /* 葱花饼（无油）,结构同 §3 items */ ]}
+]}
+```
+
+- `ops` 只允许 `record` / `modify`（2~4 个），按用户叙述顺序执行；`query`/`chat`/`discuss` 不进 ops（动作里夹闲聊则忽略闲聊，夹查询则只执行动作）。
+- 每个 op 另带 `raw`：该动作对应的**原文子句**（照抄）。后端把 `raw` 当该 op 的 text 用——餐次关键词提取、pending 的 raw_input、估算上下文都按子句走，防止动作间修饰词互相污染（"无油"只属于葱花饼那个子句）。
+- `target`（r*/e*）一律按消息开始时的 L1 快照解析，op 之间**不重建**记忆包；执行是顺序循环调用单意图 handler，卡片逐个累积在同一 `messages` 里，回复按换行拼接。
+- 破坏性分级不变（§8）：ops 里的 delete 照常出确认卡等用户点，record/update 照常高置信自动入库 + 撤销、低置信出份量/候选卡。
+- 防御（parser 归一化，与 §3 record 空壳降级同段）：空壳 op（record 无 items/exercise、modify 缺 action/target）剔除；只剩 1 个拍平成对应单意图；全无降级 chat——硬拒会触发 pro 重试链，两个模型都犯错时整条消息兜底 chat 丢掉全部动作，比拍平更糟。
+- 一句话报多个食物（"吃了A和B"）是**一个** record 的多个 items，不是 multi；单动作消息绝不用 multi。

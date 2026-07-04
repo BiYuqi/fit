@@ -128,7 +128,7 @@ export type ExerciseCardPayload = {
 };
 
 export type SendMessageResponse = {
-  intent: 'record' | 'query' | 'chat' | 'modify' | 'discuss' | 'resolve_pending';
+  intent: 'record' | 'query' | 'chat' | 'modify' | 'discuss' | 'resolve_pending' | 'multi';
   reply: string;
   record?: unknown;
   pending?: unknown;

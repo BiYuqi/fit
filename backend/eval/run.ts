@@ -122,10 +122,13 @@ function checkFields(failures: Failure[], label: string, expected: Record<string
   for (const [k, v] of Object.entries(expected)) {
     if (k === "where") continue;
     const a = actual[k];
-    // 比较器形态 { lt } / { gt }：AI 估算值不确定，只能断言方向（如"比原值低"），断言不了具体数
-    if (v && typeof v === "object" && ("lt" in v || "gt" in v)) {
-      const cmp = v as { lt?: number; gt?: number };
-      const ok = (cmp.lt === undefined || Number(a) < cmp.lt) && (cmp.gt === undefined || Number(a) > cmp.gt);
+    // 比较器形态 { lt } / { gt } / { ne }：AI 估算值不确定，只能断言方向（如"比原值低"）
+    // 或排除（如"不是被继承的那个餐次"），断言不了具体值
+    if (v && typeof v === "object" && ("lt" in v || "gt" in v || "ne" in v)) {
+      const cmp = v as { lt?: number; gt?: number; ne?: unknown };
+      const ok = (cmp.lt === undefined || Number(a) < cmp.lt)
+        && (cmp.gt === undefined || Number(a) > cmp.gt)
+        && (cmp.ne === undefined || String(a) !== String(cmp.ne));
       if (!ok) failures.push({ what: `${label}.${k}`, expected: cmp, actual: a });
       continue;
     }

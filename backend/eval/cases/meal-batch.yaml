@@ -1,0 +1,36 @@
+# 2026-07-04 真实翻车对话：
+# 1) 上文刚聊过某餐，接着发"今天吃了A、B、C"（完整汇报、无时间词）→ 被错误继承成那一餐；
+# 2) "以上发的都是早餐" → modify 单 target 只改了第一条，其余没动。
+name: 餐次继承收紧 + 批量改餐次（2026-07-04 真实翻车对话）
+turns:
+  # 造"最近聊过晚餐"的上下文（明确克数自动入库）
+  - say: "晚上吃了200克米饭"
+    expect:
+      intent: record
+      db:
+        food_record: { where: { food_name: "米饭" }, meal_type: dinner }
+
+  # 完整汇报口吻 + 无时间词：不得继承上文的 dinner，应省略交后端按时间推断。
+  # 注意：本地时间 17:00–22:00 跑 eval 时，时间推断本身就是 dinner，ne 断言会误红——白天跑没问题。
+  - say: "今天吃了一个水煮蛋，一个鸡蛋白，150克水煮青菜"
+    expect:
+      intent: record
+      db:
+        food_record: { where: { food_name: "水煮蛋" }, meal_type: { ne: dinner } }
+        food_record_count: 4
+
+  # 批量改餐次：三条都要改，不能只改第一条（旧 bug：schema 单 target 只改了水煮蛋）。
+  # 断言最后一条（青菜）被改到位——旧行为下它必然没被改。
+  - say: "以上发的都是早餐"
+    expect:
+      intent: modify
+      reply_contain: ["早餐"]
+      db:
+        food_record: { where: { food_name: "青菜" }, meal_type: breakfast }
+
+  # 只读回看：turn1 的米饭（明确说了晚上）不该被"以上"误伤
+  - say: "今天晚饭吃了什么"
+    expect:
+      intent: query
+      db:
+        food_record: { where: { food_name: "米饭" }, meal_type: dinner }

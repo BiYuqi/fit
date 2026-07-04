@@ -13,8 +13,8 @@ export function toDateOnly(date: string): Date {
 // Use UTC+8 (Asia/Shanghai) local hour to avoid server UTC offset
 export function guessMealType(): MealType {
   const h = new Date(Date.now() + 8 * 3600 * 1000).getUTCHours();
-  if (h >= 5 && h < 10) return "breakfast";
-  if (h >= 10 && h < 15) return "lunch";
+  if (h >= 5 && h < 11) return "breakfast";
+  if (h >= 11 && h < 15) return "lunch";
   if (h >= 17 && h < 22) return "dinner";
   return "snack";
 }
