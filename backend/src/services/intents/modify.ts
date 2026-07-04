@@ -6,6 +6,7 @@ import { recordModifyCorrection } from "../trace";
 import { recordLearningEvent, resetFoodAliasStreak, upsertFoodAlias } from "../learning";
 import { processItems } from "./food-item";
 import { refreshMealCard } from "../meal-card";
+import { executeDelete } from "../delete-record";
 import { guessMealType, toDateOnly } from "../../lib/dates";
 import type { MealType, PortionLabel } from "@prisma/client";
 import type { ParseResult } from "../../ai/schema";
@@ -106,24 +107,43 @@ export async function handleModify(
     return { intent: "modify", reply: aiMsg.content, summary_card: card, messages };
   }
 
-  // delete → 确认卡（破坏性，需确认）
+  // delete → 免确认直删 + 可撤销事件行（T49：不再走 pending 确认卡）
   if (parsed.action === "delete") {
-    const pr = await prisma.pendingRecord.create({
+    const result = await executeDelete({
+      user_id,
+      kind: target.kind === "exercise" ? "exercise" : "food",
+      record_id: target.record_id,
+      skipLog: true, // chat.ts 已为本轮统一写 ai_parse_log + 回填 reply_summary
+    });
+    if (!result.ok) {
+      const aiMsg = await prisma.chatMessage.create({
+        data: { user_id, date: dateObj, role: "assistant", kind: "text", content: "这条记录好像已经不在了。" },
+      });
+      messages.push(aiMsg);
+      const card = await buildContextCard(user_id);
+      tctx.partial("modify", { tokenUsage: parseUsage, promptMessages: parseMessages });
+      return { intent: "modify", reply: aiMsg.content, summary_card: card, messages };
+    }
+    const content = `已删除 ${result.name} · -${result.calories} kcal`;
+    const eventMsg = await prisma.chatMessage.create({
       data: {
-        user_id, type: "delete_confirm", raw_input: text,
-        candidates: { record_id: target.record_id, kind: target.kind, name: target.name } as object,
+        user_id, date: dateObj, role: "assistant", kind: "event",
+        payload: {
+          event_type: "deleted", text: content, record_id: target.record_id,
+          undo: { prev_state: result.snapshot }, undone: false,
+        } as object,
       },
     });
-    const aiMsg = await prisma.chatMessage.create({
-      data: {
-        user_id, date: dateObj, role: "assistant", kind: "delete_confirm_card",
-        payload: { pending_id: pr.id, record_id: target.record_id, name: target.name, meal_type: target.meal_type, calories: target.calories } as object,
-      },
-    });
-    messages.push(aiMsg);
-    const card = await buildContextCard(user_id);
-    tctx.ok("modify", { tokenUsage: parseUsage, promptMessages: parseMessages }); // trace 结束（correction 在用户确认时由 resolve 写）
-    return { intent: "modify", reply: `确认删除「${target.name}」吗？`, pending: pr, summary_card: card, messages };
+    messages.push(eventMsg);
+    // 卡片跟随：事件行先落，受影响餐卡（少一项）后 bump 浮到最末；只 bump 已存在的卡
+    if (result.mealInfo) {
+      await refreshMealCard(messages, {
+        user_id, mealDate: result.mealInfo.mealDate, meal_type: result.mealInfo.meal_type,
+        chatDate: dateObj, createIfMissing: false,
+      });
+    }
+    tctx.ok("modify", { tokenUsage: parseUsage, promptMessages: parseMessages });
+    return { intent: "modify", reply: content, summary_card: result.summary_card, messages };
   }
 
   // append → 在 target 所属餐追加新食物（继承 meal_type），高置信直入库 + 撤销
@@ -274,9 +294,30 @@ export async function handleModify(
   });
   await recompute(user_id, today);
   const card = await buildContextCard(user_id);
-  const content = `已修改，营养数据已更新：${food.name} ${Math.round(weight_g)}g（约 ${Math.round(nutrition.calories)} kcal）。`;
+
+  // T49：回执降级为居中事件行（带 delta），撤销走 meal_card 项级 last_change，事件行本身不带 undo
+  const oldCal = Math.round(prev_state.calories);
+  const newCal = Math.round(nutrition.calories);
+  const delta = newCal - oldCal;
+  const deltaStr = delta !== 0 ? `（${delta > 0 ? "+" : ""}${delta} kcal）` : "";
+  let subject: string;
+  if (change.food || change.food_desc) {
+    subject = `${originalFoodName} → ${food.name}`;
+  } else if (change.grams != null || change.portion_label) {
+    subject = `${food.name} ${Math.round(prev_state.weight_g)}g → ${Math.round(weight_g)}g`;
+  } else if (change.meal_type) {
+    subject = `${food.name} 改到${MEAL_ZH[meal_type]}`;
+  } else if (change.calories != null) {
+    subject = `${food.name} 热量改为 ${newCal}kcal`;
+  } else {
+    subject = food.name;
+  }
+  const content = `已修改：${subject}${deltaStr}`;
   const aiMsg = await prisma.chatMessage.create({
-    data: { user_id, date: dateObj, role: "assistant", kind: "text", content },
+    data: {
+      user_id, date: dateObj, role: "assistant", kind: "event",
+      payload: { event_type: "modified", text: content, record_id: updated.id, undone: false } as object,
+    },
   });
   messages.push(aiMsg);
 

@@ -7,7 +7,8 @@ export type MessageKind =
   | 'clarify_card'
   | 'query_card'
   | 'exercise_card'
-  | 'delete_confirm_card';
+  | 'delete_confirm_card'
+  | 'event';
 
 export type ChatMessage = {
   id: string;
@@ -63,6 +64,17 @@ export type RecordCardPayload = {
   matched_by_habit?: boolean; // 用户食物直连（streak≥2）自动匹配，见 LEARNING_SPEC §6 §7
   escape?: FoodAliasEscape; // 「不是它？」逃生口所需数据
   bias_applied?: { from: number; to: number }; // 份量偏差修正 AI原估→实记（T31，前端可不展示，discuss/debug 用）
+};
+
+// T49：回执降级为居中小字事件行。text 由后端组装好（铁律1：数字来自后端）。
+// undo 仅 event_type=deleted 时有（record 已被真删除，需按快照重建，走 /api/chat/events/:id/undo）；
+// modified 事件的撤销走 meal_card 项级 last_change（同一条 undo 链路，谁可见用谁），不在这里带 undo。
+export type EventCardPayload = {
+  event_type: 'deleted' | 'modified';
+  text: string;
+  record_id?: string;
+  undo?: { prev_state: Record<string, unknown> };
+  undone: boolean;
 };
 
 export type DeleteConfirmCardPayload = {

@@ -10,19 +10,12 @@ turns:
         food_record: { where: { food_name: "粽子" }, meal_type: breakfast, weight_g: 50 }
         food_record_count: 1
 
-  # 两个动作各自执行：删除出确认卡（破坏性需确认，粽子暂时还在），葱花饼直接入库；
+  # 两个动作各自执行：删除免确认直接执行（T49，粽子当场消失），葱花饼直接入库；
   # "无油"必须跟着葱花饼走，不能污染粽子
   - say: "把刚才吃的粽子删除了，我记得早晨还吃了30克葱花饼，无油的"
     expect:
       intent: multi
       db:
         food_record: { where: { food_name: "葱花饼" }, meal_type: breakfast, weight_g: 30 }
-        food_record_count: 2
-        pending_record: { type: delete_confirm }
-
-  # 点确认删除 → 粽子消失，只剩葱花饼
-  - resolve: { choice: confirm }
-    expect:
-      db:
         food_record_count: 1
         pending_record: null

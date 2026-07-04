@@ -144,7 +144,9 @@ export const PARSE_TOOL_NAME = "parse_user_input";
 const actionProp = {
   type: "string",
   enum: ["update", "delete", "append"],
-  description: "仅 intent=modify 必填。update=改份量/改食物; delete=删一条; append=在某餐追加新食物",
+  description: "仅 intent=modify 必填。update=改份量/改食物（含量词减量，见下）; delete=删整条记录; append=在某餐追加新食物。" +
+    "量词减量不是删除（T49）：用户只想去掉部分数量（'删掉一个'/'少一个'/'其实只吃了一个'），且该记录份量明显对应多份（如'2个李子'记了60g）→ 判 update，" +
+    "change.grams 填按比例减去后的新克数（60g 删一个→30g），不要判 delete；只有清空整条（'把X删了'，无量词限定）才判 delete",
 };
 const targetProp = {
   description: "intent=modify 或 discuss 时必填。引用【今日已记录】里的 ref（如 r1、e1），指明操作/讨论的是哪条记录。仅 modify+update 改餐次且用户明显指多条时（'以上都是早餐'、'刚才发的都是晚饭'）填 ref 数组，其余场景一律填单个字符串",

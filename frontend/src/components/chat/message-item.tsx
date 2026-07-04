@@ -12,6 +12,7 @@ import { ClarifyCard } from './clarify-card';
 import { QueryCard } from './query-card';
 import { ExerciseCard } from './exercise-card';
 import { DeleteConfirmCard } from './delete-confirm-card';
+import { EventLine } from './event-line';
 import type {
   ChatMessage,
   RecordCardPayload,
@@ -22,6 +23,7 @@ import type {
   ContextCard,
   ExerciseCardPayload,
   DeleteConfirmCardPayload,
+  EventCardPayload,
 } from '@/types/chat';
 
 export function ThinkingBubble() {
@@ -126,6 +128,9 @@ export const MessageItem = memo(function MessageItem({ message, isLast }: { mess
       const resolved = !!(p as DeleteConfirmCardPayload)?.resolved;
       return <DeleteConfirmCard payload={p as DeleteConfirmCardPayload} isResolved={resolved} />;
     }
+
+    case 'event':
+      return p ? <EventLine payload={p as unknown as EventCardPayload} messageId={message.id} /> : null;
 
     case 'text':
     default:

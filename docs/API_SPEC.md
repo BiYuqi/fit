@@ -36,17 +36,23 @@ resp:
   "intent": "record|query|chat|modify|discuss|resolve_pending",
   "reply": "已记录 牛肉面+鸡蛋，约 620 kcal",
   "record": { /* food_record，若高置信自动入库；modify.update / resolve_pending 返回落库或更新后的记录 */ },
-  "pending": { "id": "...", "type": "portion_choice|food_choice|clarify|delete_confirm", "candidates": [ ... ] },
+  "pending": { "id": "...", "type": "portion_choice|food_choice|clarify", "candidates": [ ... ] },
   "summary_card": { /* 见 AI_PARSING_SPEC 上下文卡结构 */ },
   "messages": [ /* 本轮的 chat_message（用户气泡 + AI 卡片），供前端直接渲染并入本地缓存。T46 起可含已存在 id 的消息（meal_card 原地更新，created_at 已刷新）——语义 = 原地更新，前端须按 id upsert 并按 created_at 重排，不得当新消息追加 */ ],
   "resolved_pending_id": "...（仅 resolve_pending 命中时返回，前端据此把聊天流里那张旧卡就地标已确认）"
 }
 ```
 `record` 与 `pending` 互斥；query/chat 时二者均无。
-modify 行为（AI_PARSING_SPEC §8；卡片语义 T47 起为 meal_card 原地刷新）：
-- `delete` → 返回 `pending(type=delete_confirm)` + `delete_confirm_card`，**需用户确认**后才删（走 resolve）；确认后 resolve 响应的 messages 带被刷新的该餐 meal_card（items 减一；全删光 → `items: []`）。
-- `update` → 直接改 food_record + 重算，返回文本回复「已修改，营养数据已更新：…」+ 该餐 meal_card（bump，`payload.last_change = { record_id, prev_state }`）；改餐次是双卡刷新（旧餐卡少一项、新餐卡多一项，旧餐卡只刷已存在的）。
+modify 行为（AI_PARSING_SPEC §8；卡片语义 T47 起为 meal_card 原地刷新，回执语义 T49 起为居中事件行）：
+- `delete` → **免确认直接执行**（T49，不再经 pending/delete_confirm_card）：messages 带一条 `event`（`event_type=deleted`，`payload.undo.prev_state` 是被删记录完整快照，供 `/api/chat/events/:id/undo` 撤销）+ 被刷新的该餐 meal_card（items 减一；全删光 → `items: []`）。量词减量（"删除一个 X"，该记录份量对应多份）判为 `update` 而非 `delete`，见 AI_PARSING_SPEC §8。
+- `update` → 直接改 food_record + 重算，messages 带一条 `event`（`event_type=modified`，`payload.text` 是带 delta 的文案如"已修改：米饭 100g → 200g（+130 kcal）"，不带 `undo`）+ 该餐 meal_card（bump，`payload.last_change = { record_id, prev_state }`，撤销走这里）；改餐次是双卡刷新（旧餐卡少一项、新餐卡多一项，旧餐卡只刷已存在的）。
 - `append` → 在 target 所属餐新增记录 + 重算，并入该餐 meal_card 并 bump，`last_change = { record_id }`（无 prev_state = 撤销即删除）；低置信走 portion/candidate 卡。
+
+`event.payload`（T49）：
+```json
+{ "event_type": "deleted|modified", "text": "已删除 李子 · -38 kcal", "record_id": "...", "undo": { "prev_state": {...} }, "undone": false }
+```
+前端渲染为居中小字（非气泡），`undo` 存在且 `undone=false` 时带内联撤销按钮；`event_type=deleted` 撤销调 `/api/chat/events/:id/undo`，`event_type=modified` 没有 `undo`（撤销走该餐 meal_card 的 `last_change`）。存量 `delete_confirm_card`/纯文本回执按原样回放（不迁移）。
 
 `record_card.payload` 基础字段：`{ food_name, weight_g, unit, calories, protein_g, fat_g, carbs_g, is_estimated, meal_type }`。`meal_type` 为该记录餐次（breakfast/lunch/dinner/snack），前端卡片据此显示"午餐 · 80g"；历史消息可能缺失，缺失时前端不显示餐次（不得兜底成某个具体餐次）。
 > T46 起 record / resolve 入库不再逐食材发 record_card，改为该餐的 `meal_card`（modify.append 在 T47 接入前仍发 record_card）；历史 record_card 照旧渲染。
@@ -77,6 +83,7 @@ resolve_pending 行为（AI_PARSING_SPEC §10，T38）：用户打字回答【�
 req: `{ choice }`（选中的候选标识，或自定义克数 `{ grams }`；`delete_confirm` 传 `{ choice: "confirm" }`）
 行为：据选择建 food_record / 删记录（delete_confirm）、刷新 daily_summary、补写对应 chat_message。
 resp: `{ record?, summary_card, messages }`。落库确认时（T46）messages = 文本确认 + 该餐 meal_card（可能是已存在 id 的原地更新，见上）。
+> `delete_confirm` 分支（T49 起）只服务存量未 resolve 的旧卡片；免确认删除不再产生新的 `pending(type=delete_confirm)`，见上方 modify.delete 行为与 `event`。
 
 ### POST /api/records/:id/undo
 撤销 modify 的 update/append（见 AI_PARSING_SPEC §8），由 `meal_card.payload.last_change` 驱动（历史 `record_card.payload.undo` 仍兼容）。
@@ -84,6 +91,11 @@ req: `{ prev_state? }`——带 `prev_state{food_id,portion_label,weight_g,meal_
 `calories/protein/fat/carbs/calories_source`（T40）若齐全，直接还原这些精确值，不按 food×grams 重算——`change.calories`（用户真值覆盖）产生的记录，重算值会不同于落库值，必须精确还原。
 行为：还原/删记录后重算 daily_summary；若该记录 `alias_canonical` 非空，联动清零对应用户食物直连的 streak（见 LEARNING_SPEC §7）。
 resp: `{ ok, summary_card, messages }`（T47 新增 messages）——受影响餐次刷新后的 meal_card（改餐次撤销为双卡；只刷已存在的卡，`last_change` 已清除；运动撤销 `messages: []`），前端按 id upsert + created_at 重排。
+
+### POST /api/chat/events/:message_id/undo（T49）
+撤销 modify 的 delete 免确认删除。message_id 是那条 `kind=event`（`event_type=deleted`）的 chat_message id；prev_state 从该消息自身的 `payload.undo.prev_state` 读取，请求体为空。
+行为：按快照重建记录（**新 id**，食物/运动记录同理）→ 重算 daily_summary → 食物记录额外刷新受影响的该餐 meal_card → 更新事件消息 `payload`（`undone: true`，清 `undo`）。恢复不产生新的 learning_event（delete 信号保留，恢复不算新信号）。幂等：`payload.undone` 已为 `true` 时直接返回当前状态，不重复重建。
+resp: `{ ok, summary_card, messages }`——`messages` 含更新后的事件消息（+ 食物场景下刷新的 meal_card），前端按 id upsert。
 
 ### POST /api/learning/alias/reset
 「不是它？」逃生口（见 LEARNING_SPEC §6 §7）。用户食物直连（streak≥2）自动匹配错了时调用。

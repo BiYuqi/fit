@@ -42,7 +42,8 @@ iOS 26 Liquid Glass / Apple Intelligence：毛玻璃卡片、柔和半透明层�
 - 追问卡 clarify_card：`是不是：[火锅] [外卖混合] [其他描述]`
 - 查询回答卡 query_card：如"今天还可以吃 720 kcal" + 剩余额度进度条 + 一句建议
 - 运动卡 exercise_card：如"已记录跑步 5km，消耗约 320 kcal"
-- 删除确认卡 delete_confirm_card：如"确认删除「牛肉面」？约 600 kcal" + `[取消] [确认删除]`（破坏性，红色确认）。确认→`/pending/:id/resolve {choice:"confirm"}` 删除并出"已删除"；取消→消卡。
+- 删除确认卡 delete_confirm_card：如"确认删除「牛肉面」？约 600 kcal" + `[取消] [确认删除]`（破坏性，红色确认）。**T49 起不再产生新的删除确认卡**（改为免确认直删 + 事件行，见 §3.2）；仅存量未 resolve 的旧卡片仍可点确认/取消，见历史回放。
+- 系统事件行 event：居中小字回执（非气泡），见 §3.2
 - 语音录制态：波形 + 时长 + `[取消] [完成并发送]`
 - 加号附件菜单：相机 / 照片 / 文件（v1 可仅占位）
 
@@ -50,9 +51,9 @@ iOS 26 Liquid Glass / Apple Intelligence：毛玻璃卡片、柔和半透明层�
 - 高置信 → 直接出 record_card。
 - 中/低置信 → 出 portion/candidate/clarify 卡。portion_card 点选后**替换为确认后的 record_card**；candidate_card 点选食物后**先出 portion_card 确认份量**，再出 record_card（两步串行，见 AI_PARSING_SPEC §4；一步化为暂定候选，见 FEATURE_CANDIDATES）。
 - **Pending 卡片过期**：portion_card / candidate_card 超过 **5 分钟**未操作即显示"已过期"，不可再交互。防止旧消息的 pending 卡片被误触后在新日期产生记录。
-- modify 修改（见 AI_PARSING_SPEC §8）：
-  - 删除 → delete_confirm_card，**必须确认**后才删（破坏性）。
-  - 改份量/改食物（update）、追加（append）→ 直接出 record_card，卡上带「撤销」轻按钮（payload.undo 存在时）；点撤销→`/records/:id/undo`（带 prev_state 还原 / 不带删除），卡片转「已撤销」灰态。撤销非破坏性、不弹确认。
+- modify 修改（见 AI_PARSING_SPEC §8，回执降噪 T49）：
+  - 删除 → **免确认直接执行**，聊天流只多一条居中小字事件行「已删除 X · -N kcal」+ 内联「撤销」；该餐 meal_card 原地少一项。点撤销→`/api/chat/events/:message_id/undo`（按事件行自带的快照重建新记录），事件行转「已撤销」灰态，再点无效（幂等）。
+  - 改份量/改食物（update）、追加（append）→ 直接改/入库，不再出文本气泡；update 多一条事件行「已修改：X …→…（±N kcal）」（不带撤销按钮），append 无独立气泡（并入该餐卡）；两者的撤销都在该餐 meal_card 对应项上（`last_change` 驱动的项级「撤销」按钮，同一条 undo 链路，卡上可见即可用）。撤销非破坏性、不弹确认。
 - 空状态（当天还没记）→ 友好引导（如"早上好，今天吃了什么？"），不是全白。
 
 **导航与过渡（原生 App，`app-tabs.tsx`）**：
@@ -85,6 +86,24 @@ iOS 26 Liquid Glass / Apple Intelligence：毛玻璃卡片、柔和半透明层�
 - **项级撤销**：`payload.last_change` 指向最近一次修改/追加的那一项，仅该项右侧显示「撤销」按钮（其余项不出现按钮）；点击调已有 `/records/:id/undo` 链路，`prev_state` 有值=还原、无值=删除（同 record_card 撤销语义）；撤销后该项进灰态，按钮变"已撤销"。`last_change` 为空时卡片不出现任何撤销按钮。
 - **空餐态**：该餐所有食物被删光（`items: []`）→ 整卡灰化显示"已清空"，不再显示明细/宏量素行。
 - **数据来源**：卡片不做任何求和，`items`/`totals` 均由后端每次实时组装好（铁律 1）；前端只管渲染。
+
+### 3.2 系统事件行 event（聊天降噪 N，T49）
+
+modify 的操作回执从全尺寸气泡降级为**居中小字事件行**，视觉量级同"时间分隔符"（如"—— 今天 ——"），不是卡片/气泡：整行水平居中、灰色小字（同 textSecondary）、无背景无边框，不左对齐、不带头像/badge。
+
+```
+        已删除 李子 · -38 kcal · 撤销
+```
+
+```
+        已修改：米饭 100g → 200g（+130 kcal）
+```
+
+- 文案 = `payload.text`，后端已组装好（数字来自后端，铁律 1），前端不再拼接。
+- 内联「撤销」：仅 `payload.undo` 存在且 `payload.undone=false` 时，紧跟文案后以下划线小字展示（如"· 撤销"）；点击调 `/api/chat/events/:message_id/undo`。`event_type=modified` 不带 `undo`——撤销走该餐 meal_card 的项级按钮（§3.1「项级撤销」，同一条 undo 链路，谁可见用谁）。
+- 撤销后：`payload.undone=true`，行内「撤销」替换为灰色斜体「已撤销」，不可再点（幂等）。
+- 一次操作只产一条事件行（不再是"用户消息→确认卡→点确认→已删除回执"四条消息）。
+- 历史回放：T49 之前产生的 `delete_confirm_card` / modify 纯文本回执原样渲染，不迁移不删除（铁律 3）。
 
 ## 4. Today
 毛玻璃卡片：环形完成度(如62%) + **今日缺口(视觉重点，如 -420 kcal)** + 摄入/目标；营养素区(蛋白/脂肪/碳水 已摄入/目标，进度条)；底部一行均衡提示(如"今天蔬菜偏少…")。数据来自 `GET /daily/today`。

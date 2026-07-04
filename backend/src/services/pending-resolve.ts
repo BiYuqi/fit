@@ -6,9 +6,10 @@ import { todayStr, toDateOnly, guessMealType } from "../lib/dates";
 import { matchFood } from "./matcher";
 import { itemNutrition } from "./calc";
 import { recompute, buildContextCard, type ContextCard } from "./summary";
-import { recordDeleteCorrection, recordResolveCorrection } from "./trace";
+import { recordResolveCorrection } from "./trace";
 import { recordLearningEvent, upsertFoodAlias, getBiases, applyBias, biasEnabled } from "./learning";
 import { refreshMealCard } from "./meal-card";
+import { executeDelete } from "./delete-record";
 import { buildResolveLogData, type ResolveAction } from "./resolve-log";
 import type { MealType, PortionLabel, FoodRecord, ChatMessage } from "@prisma/client";
 
@@ -44,71 +45,44 @@ export async function resolvePendingRecord(params: {
   const meal_type = (candidates.meal_type ?? guessMealType()) as MealType;
   const source: string = candidates.source ?? "text";
 
-  // delete_confirm：用户确认删除（AI_PARSING_SPEC §8）
-  // 不额外创建 text 消息——前端的 delete_confirm_card 本身在 resolved 后会显示"已删除「xxx」"
+  // delete_confirm：存量兼容——T49 起新增删除不再走 pending 流程（见 modify.ts 直删 + executeDelete），
+  // 这个分支只为历史上未 resolve 的卡片保留。不额外创建 event/text 消息——前端的
+  // delete_confirm_card 本身在 resolved 后会显示"已删除「xxx」"。
   if (pr.type === "delete_confirm") {
-    // 被删记录的餐次/日期在删除后就查不到了，先留住给下方 meal_card 刷新用（T47）
-    let deletedRec: (FoodRecord & { food: { category: string | null } | null }) | null = null;
-    if (candidates.kind === "exercise") {
-      await prisma.exerciseRecord.deleteMany({ where: { id: candidates.record_id, user_id } });
-    } else {
-      // 学习信号（LEARNING_SPEC §3）：删除只记事件不训练。
-      // 必须在 deleteMany 之前写入——learning_event.food_record_id 有外键约束，
-      // 记录一旦删除就无法再插入指向它的新行（onDelete:SetNull 只对已存在的行生效）。
-      deletedRec = await prisma.foodRecord.findFirst({
-        where: { id: candidates.record_id, user_id },
-        include: { food: true },
-      });
-      if (deletedRec) {
-        await recordLearningEvent({
-          user_id,
-          food_record_id: deletedRec.id,
-          food_id: deletedRec.food_id,
-          category: deletedRec.food?.category ?? null,
-          predicted_grams: deletedRec.weight_g,
-          final_grams: deletedRec.weight_g,
-          predicted_label: deletedRec.portion_label,
-          final_label: deletedRec.portion_label,
-          signal_type: "delete",
-          scene: deletedRec.scene,
-        });
-      }
-      await prisma.foodRecord.deleteMany({ where: { id: candidates.record_id, user_id } });
-    }
+    const result = await executeDelete({
+      user_id,
+      kind: (candidates.kind as "food" | "exercise") ?? "food",
+      record_id: candidates.record_id,
+      skipLog,
+    });
     await prisma.pendingRecord.update({ where: { id }, data: { status: "resolved" } });
+
     const action: ResolveAction = {
       action: "delete_confirm",
       name: candidates.name,
       record_id: candidates.record_id,
       kind: candidates.kind ?? "food",
     };
-    // T37：删除确认进 L0——下一轮 AI 知道这条已经删了
-    if (!skipLog) {
-      await prisma.aiParseLog.create({ data: buildResolveLogData(user_id, action) });
+
+    if (!result.ok) {
+      // 记录在存量 pending 卡片等待期间已被别的路径删掉——直接返回当前状态，不重复处理
+      const summary_card = await buildContextCard(user_id);
+      return { ok: true, summary_card, messages: [], action };
     }
-    await recompute(user_id, today);
-    const summary_card = await buildContextCard(user_id);
-    // Trace: correction event（用户确认删除）
-    recordDeleteCorrection({
-      userId: user_id,
-      recordId: candidates.record_id,
-      kind: candidates.kind,
-      name: candidates.name,
-      pendingId: id,
-    });
+
     // T47：食物删除后原地刷新该餐 meal_card（items 减一并 bump；全删光 → items:[] 已清空态）。
     // 只 bump 已存在的卡（pre-T46 记录没有卡就不造）；运动删除不涉及餐卡。
     const messages: ChatMessage[] = [];
-    if (candidates.kind !== "exercise" && deletedRec) {
+    if (result.mealInfo) {
       await refreshMealCard(messages, {
         user_id,
-        mealDate: deletedRec.date.toISOString().slice(0, 10),
-        meal_type: deletedRec.meal_type as MealType,
-        chatDate: deletedRec.date,
+        mealDate: result.mealInfo.mealDate,
+        meal_type: result.mealInfo.meal_type,
+        chatDate: toDateOnly(result.mealInfo.mealDate),
         createIfMissing: false,
       });
     }
-    return { ok: true, summary_card, messages, action };
+    return { ok: true, summary_card: result.summary_card, messages, action };
   }
 
   let food_id: string;

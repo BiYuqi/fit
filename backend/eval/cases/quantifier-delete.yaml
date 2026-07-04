@@ -1,0 +1,35 @@
+# T49：量词删除语义——"删除一个X"（只去掉部分数量）应是减量 update，不是整条 delete；
+# 只有明确清空整条（无量词限定）才是 delete。同时验证 T49 起删除免确认、无 pending_record 残留。
+name: 量词删除语义——"删除一个X"减量 update vs "把X删了"整条 delete
+turns:
+  - say: "早上吃了2个鸡蛋"
+    expect:
+      intent: record
+      db:
+        food_record: { where: { food_name: "鸡蛋" }, meal_type: breakfast }
+        food_record_count: 1
+
+  # 只删一个：记录应保留、份量减半（约定"一个鸡蛋"≈60g，2个≈120g，删一个后≈60g）——判 update 不是 delete
+  - say: "删除一个鸡蛋"
+    expect:
+      intent: modify
+      db:
+        food_record: { where: { food_name: "鸡蛋" }, weight_g: { gt: 40, lt: 80 } }
+        food_record_count: 1
+        pending_record: null
+
+  - say: "中午吃了2根香蕉"
+    expect:
+      intent: record
+      db:
+        food_record: { where: { food_name: "香蕉" }, meal_type: lunch }
+        food_record_count: 2
+
+  # 明确整条删除（无量词限定）：T49 起免确认直接执行，记录彻底消失，无 pending 残留
+  - say: "把香蕉删了"
+    expect:
+      intent: modify
+      reply_contain: ["香蕉"]
+      db:
+        food_record_count: 1
+        pending_record: null

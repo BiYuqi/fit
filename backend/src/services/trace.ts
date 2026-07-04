@@ -380,7 +380,7 @@ export async function recordDeleteCorrection(opts: {
   recordId: string;
   kind: string;
   name: string;
-  pendingId: string;
+  pendingId?: string; // T49：免确认直删无 pendingRecord，省略即可
 }): Promise<void> {
   // 独立 trace——delete 确认是用户操作，不在 chat request 的 trace 生命周期内
   const traceId = await createTrace({
@@ -413,7 +413,7 @@ export async function recordDeleteCorrection(opts: {
     stateBefore: corrSb,
     stateAfter: createEmptyState(),
     inputState: {
-      source: "pending_resolve",
+      source: opts.pendingId ? "pending_resolve" : "direct_delete",
       pending_id: opts.pendingId,
       type: "delete_confirm",
       name: opts.name,

@@ -71,6 +71,7 @@ type ChatStore = {
   send: (text: string, token: string) => Promise<void>;
   resolve: (pendingId: string, choice: string | { grams: number }, token: string) => Promise<void>;
   undo: (messageId: string, recordId: string, prevState: UndoPrevState | undefined, token: string) => Promise<void>;
+  undoEvent: (messageId: string, token: string) => Promise<void>;
   resetAlias: (messageId: string, recordId: string, escape: FoodAliasEscape, token: string) => Promise<void>;
 };
 
@@ -432,6 +433,21 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         return { undoneCards: next };
       });
     }
+  },
+
+  // T49：删除事件行「撤销」——记录已被真删除，后端按事件消息自带的快照重建（新 id）。
+  // 幂等：接口内部按 payload.undone 短路，这里不需要额外的本地乐观态防重复点击（disabled 靠组件自己的 loading）。
+  undoEvent: async (messageId: string, token: string) => {
+    const res = await apiFetch<{ ok: boolean; summary_card: ContextCard; messages: ChatMessage[] }>(
+      `/api/chat/events/${messageId}/undo`,
+      { method: 'POST', body: '{}', token },
+    );
+    const newMsgs = res.messages ?? [];
+    if (newMsgs.length > 0) await persistMessages(newMsgs);
+    set(s => ({
+      messages: newMsgs.length > 0 ? mergeMessages(s.messages, newMsgs) : s.messages,
+      summaryCard: res.summary_card ?? s.summaryCard,
+    }));
   },
 
   // 「不是它？」逃生口：用户食物直连自动匹配错了，撤销该记录 + 清零 streak + 重发候选卡

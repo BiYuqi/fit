@@ -111,7 +111,7 @@
 | user_id | uuid FK | |
 | date | date | 归属对话日（线程分组用） |
 | role | enum(user/assistant) | 谁发的 |
-| kind | text | text / record_card / meal_card / portion_card / candidate_card / clarify_card / query_card / exercise_card / delete_confirm_card |
+| kind | text | text / record_card / meal_card / portion_card / candidate_card / clarify_card / query_card / exercise_card / delete_confirm_card / event |
 | content | text? | 文本内容 |
 | payload | jsonb? | 卡片数据（候选、份量、营养等） |
 | record_id | uuid? | 记录类卡片关联的 food_record（用于实时回填/删除联动显示） |
@@ -121,6 +121,20 @@
 卡片显示策略：**查询类卡片冻结**（payload 即当时答案）；**记录类卡片绑 record_id 实时回填**（底层记录改/删则显示更新或"已删除"）；**meal_card 实时组装 + created_at 跟随**（T46）——按 (用户, 餐归属日, 餐次) 一餐一卡，落库 payload 只存组装键 `{ meal_key: { date, meal_type }, last_change }`（`meal_key.date` 与本表 date 独立：跨天修改时餐归属日 ≠ 对话日），明细 `items[]` 与营养 `totals` 在响应/GET 时从 food_record 实时组装、不落库、永不过期；内容变更（记录/修改/追加/删除/撤销）时同一条消息 created_at 刷成当前时间，前端按时间重排后卡片浮到聊天流末尾（历史 record_card 消息不迁移、照旧渲染）。
 `payload.last_change`（T47）：该餐最近一次 modify 的撤销信息 `{record_id, prev_state?}`（有 prev_state = update 撤销还原，无 = append 撤销删除，语义同旧 record_card 的 `payload.undo`）。单槽：再次修改覆盖、`/api/records/:id/undo` 撤销后清除；批量改餐次不写。
 modify 的 update/append 高置信直执行，不进 pending 流程（见 AI_PARSING_SPEC §8）；历史 record_card 的 `payload.undo` 继续兼容。
+
+`kind=event`（T49）：系统回执降级为居中小字事件行（视觉同时间分隔符量级，非气泡），前端渲染见 DESIGN_SPEC §3。payload：
+```json
+{
+  "event_type": "deleted | modified",
+  "text": "已删除 李子 · -38 kcal",   // 后端组装好的展示文案（铁律1：数字来自后端）
+  "record_id": "...",               // deleted 时是已被删除记录的旧 id，仅供展示/追溯，不可再查
+  "undo": { "prev_state": { ... } }, // 仅 event_type=deleted 时有：被删记录完整快照，供 /api/chat/events/:id/undo 按快照重建（新 id）
+  "undone": false
+}
+```
+`event_type=modified`（modify 的 update 高置信直执行的回执，delta 文案）不带 `undo`——撤销走该餐 meal_card 的 `payload.last_change`（同一条 undo 链路，卡片项级撤销按钮可见即可用，见 T47）。
+`event_type=deleted`（modify 的 delete，T49 起免确认直接执行）带 `undo.prev_state`——记录已被真删除，没有 meal_card 项可依附撤销按钮，撤销必须由事件行自身发起、按快照重建新记录。
+存量（T49 之前）产生的 `delete_confirm_card` / 旧 modify.update 的纯文本回执按原样回放，不迁移（铁律 3）；对应的 `pending_record.type=delete_confirm` 分支在服务端保留，仅供这些存量卡片点击 resolve，不再有新增来源。
 
 ## ai_parse_log（解析日志）
 | 字段 | 类型 | 语义 |
@@ -140,7 +154,7 @@ modify 的 update/append 高置信直执行，不进 pending 流程（见 AI_PAR
 |---|---|---|
 | id | uuid PK | |
 | user_id | uuid FK | |
-| type | text | food_choice/portion_choice/clarify/delete_confirm（删除前确认，见 AI_PARSING_SPEC §8） |
+| type | text | food_choice/portion_choice/clarify/delete_confirm（T49 起删除免确认直接执行，delete_confirm 只为存量卡片保留，不再有新增，见 AI_PARSING_SPEC §8） |
 | raw_input | text | |
 | candidates | jsonb | 候选（含克数估算） |
 | status | text | pending/resolved/discarded |

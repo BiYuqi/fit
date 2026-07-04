@@ -162,8 +162,10 @@ callDeepSeekCtx(pack, messages, opts)
 
 `action` 三选一：
 - **update**：改已有记录的份量/食物/餐次/热量/属性。如「牛肉面换大份」「不对，是牛肉拉面」「粽子是中午吃的」（改餐次 `change.meal_type`，数值不动）「记录成180kcal」（`change.calories`，T40）「无油款」（`change.food_desc`，T40）
-- **delete**：删一条。如「早餐那个蛋删了」
+- **delete**：删整条记录。如「早餐那个蛋删了」「把李子删了」（无量词限定，判整条清空）
 - **append**：在 `target` 所属**那一餐里新增**记录（继承 `meal_type`/时段），新项走正常匹配 + 份量流程。如「早餐再加个蛋」
+
+**量词减量不是整条删除**（T49）：用户只想去掉部分数量（"删掉一个"、"少一个"、"其实只吃了一个"），且 L1 里该记录的份量明显对应多份/多个（如"2个李子"记了60g）→ 判 `action=update`，`change.grams` 填按比例减去这部分后的新克数（60g 删一个→30g），不判 `delete`。份量本就是单份或说不清具体几份时无法换算 → 仍按 `delete` 处理（安全兜底，宁可整条删）。
 
 > `append` 与 `update` 的界：「牛肉面再加点」=同食物加量(update)；「早餐再加个蛋」=新项(append)。由 `action` 区分。
 
@@ -186,17 +188,16 @@ callDeepSeekCtx(pack, messages, opts)
 - 两者的撤销信息都写进该餐 `meal_card` 的 `payload.last_change{record_id, prev_state}`（T47，单槽：再次修改覆盖、撤销后清除），不新增卡片类型；`prev_state` 带上改前的精确 `calories/protein/fat/carbs/calories_source`，撤销直接还原这些值，不按 food×grams 重算（否则会丢失 `user_override` 的用户真值）。
 - 纯口感/无关描述（"有点咸"、"挺好吃"）不算修正，不触发 `change.food_desc`，整体判 chat。
 
-### 路由与确认（按破坏性分级，不一律弹卡）
+### 路由与确认（T49 起：免确认直删 + 事件行回执，不再弹确认卡）
 | action | 置信 | 行为 |
 |---|---|---|
-| **delete** | 任意 | 建 `pending_record(type=delete_confirm)` → 确认卡（kind=`delete_confirm_card`）→ `/pending/:id/resolve` 后删 → 刷新 summary + 该餐 meal_card bump（items 减一；全删光 → `items:[]` 已清空态） |
-| **update** | 高 (>0.8) | **直接改 + 重算**，文本回复「已修改，营养数据已更新：…」+ 该餐 meal_card bump，撤销信息写卡的 `last_change{record_id, prev_state}`；改餐次是**双卡刷新**（旧餐卡少一项、新餐卡多一项） |
+| **delete** | 任意 | **免确认直接删除**（学习信号先写 → 删 → 重算）→ 一条 `event`（`event_type=deleted`，居中小字「已删除 X · -N kcal」+ 内联撤销）+ 该餐 meal_card bump（items 减一；全删光 → `items:[]` 已清空态） |
+| **update** | 高 (>0.8) | **直接改 + 重算**，一条 `event`（`event_type=modified`，居中小字带 delta，如「已修改：米饭 100g → 200g（+130 kcal）」，不带 undo）+ 该餐 meal_card bump，撤销信息写卡的 `last_change{record_id, prev_state}`；改餐次是**双卡刷新**（旧餐卡少一项、新餐卡多一项） |
 | **append** | 高 | **直接入库新记录** + 重算，并入该餐 meal_card 并 bump，`last_change{record_id}`（无 prev_state = 撤销即删除） |
 | update / append | 低 or 歧义 | 走现成 `portion_card` / `candidate_card`（§4），不新增卡 |
 
-> 撤销不进 pending 流程：update 撤销 = 还原 `prev_state`，append 撤销 = 删新记录；给短时间窗即可。
-> 撤销走 `/api/records/:id/undo`（由 meal_card 的 `last_change` 驱动，T48 渲染项级撤销按钮），撤销后餐卡再次 bump 且 `last_change` 清除。
-> **只有 delete 需确认**；update/append 直执行 + 卡片原地刷新，避免打扰过头。
+> delete 撤销 = 按事件消息自带的 `payload.undo.prev_state` 快照重建记录（**新 id**），走 `POST /api/chat/events/:message_id/undo`；update 撤销 = 还原该餐 meal_card 的 `last_change.prev_state`（走 `/api/records/:id/undo`）；append 撤销 = 删新记录（同一接口，无 prev_state）。
+> **T49 起没有 action 需要确认卡**：delete 免确认直执行，update/append 沿用 T47 起的直执行 + 卡片原地刷新；存量（T49 之前）未 resolve 的 `pending(type=delete_confirm)` 仍可点旧的 `delete_confirm_card` 确认/取消，但不再有新增来源。
 
 ### 纯确认词处理
 用户发极简确认词（「好」「改吧」「修改吧」「行」「ok」「确认」），若 L0 最近几轮的用户消息涉及对某条记录份量的讨论（如「不是50克吗」「应该是50g」），parser 推断 `target`（从 L1 找最近被讨论的 ref）和 `change.grams`（从讨论中提取数字），输出 `intent=modify, action=update`。推断不出具体 target 或克数则走 chat。
@@ -285,6 +286,6 @@ callDeepSeekCtx(pack, messages, opts)
 - `ops` 只允许 `record` / `modify`（2~4 个），按用户叙述顺序执行；`query`/`chat`/`discuss` 不进 ops（动作里夹闲聊则忽略闲聊，夹查询则只执行动作）。
 - 每个 op 另带 `raw`：该动作对应的**原文子句**（照抄）。后端把 `raw` 当该 op 的 text 用——餐次关键词提取、pending 的 raw_input、估算上下文都按子句走，防止动作间修饰词互相污染（"无油"只属于葱花饼那个子句）。
 - `target`（r*/e*）一律按消息开始时的 L1 快照解析，op 之间**不重建**记忆包；执行是顺序循环调用单意图 handler，卡片逐个累积在同一 `messages` 里，回复按换行拼接。
-- 破坏性分级不变（§8）：ops 里的 delete 照常出确认卡等用户点，record/update 照常高置信自动入库 + 撤销、低置信出份量/候选卡。
+- 路由与确认不变（§8）：ops 里的 delete 照常免确认直删 + 事件行撤销，record/update 照常高置信自动入库 + 撤销、低置信出份量/候选卡。
 - 防御（parser 归一化，与 §3 record 空壳降级同段）：空壳 op（record 无 items/exercise、modify 缺 action/target）剔除；只剩 1 个拍平成对应单意图；全无降级 chat——硬拒会触发 pro 重试链，两个模型都犯错时整条消息兜底 chat 丢掉全部动作，比拍平更糟。
 - 一句话报多个食物（"吃了A和B"）是**一个** record 的多个 items，不是 multi；单动作消息绝不用 multi。
