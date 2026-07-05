@@ -120,8 +120,8 @@
 | created_at | timestamptz | |
 
 索引：`(user_id, date, created_at)`。
-卡片显示策略：**查询类卡片冻结**（payload 即当时答案）；**meal_card 实时组装 + created_at 跟随**（T46）——按 (用户, 餐归属日, 餐次) 一餐一卡，落库 payload 只存组装键 `{ meal_key: { date, meal_type }, last_change }`（`meal_key.date` 与本表 date 独立：跨天修改时餐归属日 ≠ 对话日），明细 `items[]` 与营养 `totals` 在响应/GET 时从 food_record 实时组装、不落库、永不过期；内容变更（记录/修改/追加/删除/撤销）时同一条消息 created_at 刷成当前时间，前端按时间重排后卡片浮到聊天流末尾。
-`payload.last_change`（T47）：该餐最近一次 modify 的撤销信息 `{record_id, prev_state?}`（有 prev_state = update 撤销还原，无 = append 撤销删除）。单槽：再次修改覆盖、`/api/records/:id/undo` 撤销后清除；批量改餐次不写。
+卡片显示策略：**查询类卡片冻结**（payload 即当时答案）；**meal_card 实时组装 + created_at 跟随**（T46）——按 (用户, 餐归属日, 餐次) 一餐一卡，落库 payload 只存组装键 `{ meal_key: { date, meal_type }, last_changes }`（`meal_key.date` 与本表 date 独立：跨天修改时餐归属日 ≠ 对话日），明细 `items[]` 与营养 `totals` 在响应/GET 时从 food_record 实时组装、不落库、永不过期；内容变更（记录/修改/追加/删除/撤销）时同一条消息 created_at 刷成当前时间，前端按时间重排后卡片浮到聊天流末尾。
+`payload.last_changes`（T47 单槽 `last_change` → T53 升级为**按 record_id 存的数组**）：该餐每条记录各自的撤销信息 `[{record_id, prev_state?}]`（有 prev_state = update 撤销还原，无 = append 撤销删除）。一轮 multi 批量改 N 条，N 条各留独立撤销态、互不覆盖；同 record_id 再次修改覆盖该条、`/api/records/:id/undo` 撤销后只清该条；enrich 时剪掉已不在 items 里的陈旧撤销态（删除/移餐后自然清理）；批量改餐次不写。旧 payload 的单槽 `last_change` 读时兼容包成单元素数组。
 modify 的 update/append 高置信直执行，不进 pending 流程（见 AI_PARSING_SPEC §8）。
 
 `kind=event`（T49）：系统回执降级为居中小字事件行（视觉同时间分隔符量级，非气泡），前端渲染见 DESIGN_SPEC §3。payload：
@@ -134,7 +134,7 @@ modify 的 update/append 高置信直执行，不进 pending 流程（见 AI_PAR
   "undone": false
 }
 ```
-`event_type=modified`（modify 的 update 高置信直执行的回执，delta 文案）不带 `undo`——撤销走该餐 meal_card 的 `payload.last_change`（同一条 undo 链路，卡片项级撤销按钮可见即可用，见 T47）。
+`event_type=modified`（modify 的 update 高置信直执行的回执，delta 文案）不带 `undo`——撤销走该餐 meal_card 的 `payload.last_changes`（同一条 undo 链路，卡片项级撤销按钮可见即可用，见 T47/T53）。
 `event_type=deleted`（modify 的 delete，T49 起免确认直接执行）带 `undo.prev_state`——记录已被真删除，没有 meal_card 项可依附撤销按钮，撤销必须由事件行自身发起、按快照重建新记录。
 存量（T49 之前）产生的 `delete_confirm_card` / 旧 modify.update 的纯文本回执按原样回放，不迁移（铁律 3）；对应的 `pending_record.type=delete_confirm` 分支在服务端保留，仅供这些存量卡片点击 resolve，不再有新增来源。
 

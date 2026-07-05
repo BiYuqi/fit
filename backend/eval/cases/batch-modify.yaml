@@ -1,0 +1,42 @@
+# 2026-07-05 真机翻车（T53 立项现场，AItrace 实锤）：
+# "玉米改为180克，瘦肉改为50克" 被判 modify + target 数组["r14","r13"] + 单个 change{grams:180}——
+# 数组只能配一个 change，瘦肉→50 从模型输出那刻就丢了，后端静默取 refs[0] 只改了玉米。
+# 正解：每样改不同值走 multi（每条一个 modify op）。本用例覆盖 单条 / 两条 / 三条 批量改。
+name: 批量修改——一句改多样各改不同值走 multi（T53，2026-07-05 真机翻车）
+turns:
+  # 先把三样记进晚餐（一条 record 多 items，显式克数应高置信直入库、不出确认卡）
+  - say: "晚餐吃了140克黏玉米，80克瘦肉，135克死面饼"
+    expect:
+      intent: record
+      db:
+        food_record_count: 3
+        pending_record: null
+
+  # ── 三食物批量改：必须 multi，三条各自落对（缺陷1+2 核心）──
+  - say: "玉米改成180克，瘦肉改成50克，死面饼改成100克"
+    expect:
+      intent: multi
+      db:
+        food_record:
+          - { where: { food_name: "玉米" }, weight_g: 180 }
+          - { where: { food_name: "肉" }, weight_g: 50 }
+          - { where: { food_name: "面饼" }, weight_g: 100 }
+        food_record_count: 3
+
+  # ── 单条改（回归：老路不坏，仍走单 modify）──
+  - say: "玉米再改成160克"
+    expect:
+      intent: modify
+      db:
+        food_record: { where: { food_name: "玉米" }, weight_g: 160 }
+        food_record_count: 3
+
+  # ── 两食物批量改（截图原场景回放）：multi，两条都对 ──
+  - say: "瘦肉改成70克，玉米改成150克"
+    expect:
+      intent: multi
+      db:
+        food_record:
+          - { where: { food_name: "肉" }, weight_g: 70 }
+          - { where: { food_name: "玉米" }, weight_g: 150 }
+        food_record_count: 3

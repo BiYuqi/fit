@@ -282,7 +282,7 @@ export async function processFoodItem(item: FoodItem, ctx: ItemCtx): Promise<Ite
     }
 
     // 入库不逐食材发卡——卡片由调用方（record/append）统一挂该餐 meal_card，
-    // 卡片级撤销由 meal_card 的 payload.last_change 承载。
+    // 卡片级撤销由 meal_card 的 payload.last_changes 承载（T53 项级）。
     // alias 学习不受影响：直连命中仍写 alias_canonical，用户自然语言改食物时照旧触发 streak 清零。
     return {
       record,

@@ -134,6 +134,38 @@ test("change 可省略 calories/food_desc，不影响其余字段解析（向后
   }
 });
 
+test("change 里可选字段填显式 null → 剥掉当没填，不硬拒（T53：防 food_desc:null 抛错丢动作）", () => {
+  // 大样本鲁棒性测试实锤：模型改份量时偶发 change:{grams,portion_label,food_desc:null}，
+  // strict optional 会拒 null → 整条解析抛错。剥 null 后正常解析、food_desc 视为未填。
+  const parsed = ParseResultSchema.parse({
+    intent: "modify", action: "update", target: "r1",
+    change: { grams: 250, portion_label: "custom", food_desc: null, food: null, meal_type: null },
+  });
+  assert.equal(parsed.intent, "modify");
+  if (parsed.intent === "modify") {
+    assert.equal(parsed.change?.grams, 250);
+    assert.equal(parsed.change?.food_desc, undefined);
+    assert.equal(parsed.change?.food, undefined);
+    assert.equal(parsed.change?.meal_type, undefined);
+  }
+});
+
+test("multi 的 op 里 change 含 null 可选字段同样剥离（T53 大样本现场：米饭改250牛奶改350）", () => {
+  const parsed = ParseResultSchema.parse({
+    intent: "multi",
+    ops: [
+      { intent: "modify", action: "update", target: "r1", raw: "米饭改成250", change: { grams: 250, portion_label: "custom", food_desc: null } },
+      { intent: "modify", action: "update", target: "r2", raw: "牛奶改成350", change: { grams: 350, portion_label: "custom", food_desc: null } },
+    ],
+  });
+  assert.equal(parsed.intent, "multi");
+  if (parsed.intent === "multi") {
+    assert.equal(parsed.ops.length, 2);
+    assert.equal((parsed.ops[0] as any).change.grams, 250);
+    assert.equal((parsed.ops[0] as any).change.food_desc, undefined);
+  }
+});
+
 test("ParseResultSchema 解析 modify.append 的 items 同样归一化", () => {
   const parsed = ParseResultSchema.parse({
     intent: "modify",

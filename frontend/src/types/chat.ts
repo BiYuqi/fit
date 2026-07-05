@@ -125,9 +125,14 @@ export type MealCardItem = {
   portion_label: string;
 };
 
+export type MealCardLastChange = { record_id: string; prev_state?: UndoPrevState };
+
 export type MealCardPayload = {
   meal_key: { date: string; meal_type: string };
-  last_change?: { record_id: string; prev_state?: UndoPrevState } | null; // 单槽撤销（T48 渲染项级撤销按钮）
+  // T53：项级撤销——按 record_id 存多条，批量改的每条各自独立可撤销。
+  // last_change 是 T53 前的单槽形态，历史卡兼容读（见 meal-card.tsx 归一）。
+  last_changes?: MealCardLastChange[];
+  last_change?: MealCardLastChange | null;
   items: MealCardItem[];
   totals: { calories: number; protein_g: number; fat_g: number; carbs_g: number };
   item_count: number;

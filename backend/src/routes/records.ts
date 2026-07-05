@@ -79,19 +79,19 @@ export async function recordsRoutes(app: FastifyInstance) {
       await recompute(user_id, recDate);
       const summary_card = await buildContextCard(user_id);
 
-      // T47：撤销后原地刷新受影响餐卡并随响应返回；last_change 撤销已消费 → 清除。
-      // 改餐次的撤销是双卡：撤销前所在餐（卡上挂着撤销按钮的那张）先 bump，
-      // 还原后所在餐（prev_state.meal_type）后 bump 浮到最末。只 bump 已存在的卡。
+      // T47/T53：撤销后原地刷新受影响餐卡并随响应返回；本条撤销态已消费 → 只 clear 这一条
+      // （批量改时同卡其他记录的撤销态保留）。改餐次的撤销是双卡：撤销前所在餐（卡上挂着撤销
+      // 按钮的那张）先 bump，还原后所在餐（prev_state.meal_type）后 bump 浮到最末。只 bump 已存在的卡。
       const messages: ChatMessage[] = [];
       const restoredMeal = (prev && "food_id" in prev ? (prev.meal_type as MealType | undefined) : undefined) ?? foodRec.meal_type;
       await refreshMealCard(messages, {
         user_id, mealDate: recDate, meal_type: foodRec.meal_type,
-        chatDate: foodRec.date, lastChange: null, createIfMissing: false,
+        chatDate: foodRec.date, lastChange: { op: "clear", record_id: id }, createIfMissing: false,
       });
       if (restoredMeal !== foodRec.meal_type) {
         await refreshMealCard(messages, {
           user_id, mealDate: recDate, meal_type: restoredMeal,
-          chatDate: foodRec.date, lastChange: null, createIfMissing: false,
+          chatDate: foodRec.date, lastChange: { op: "clear", record_id: id }, createIfMissing: false,
         });
       }
       return { ok: true, summary_card, messages };

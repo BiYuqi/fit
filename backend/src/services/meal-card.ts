@@ -80,23 +80,42 @@ export function buildMealCardView(records: MealCardRecord[]): MealCardView {
   return { items, totals, item_count: items.length };
 }
 
-// last_change（T47）：卡片单槽撤销信息。prev_state 有 = update 撤销（还原），无 = append 撤销（删除）。
-// 再次修改覆盖，撤销后清除。
+// 撤销信息（T47/T53）：一条记录的撤销态。prev_state 有 = update 撤销（还原），无 = append 撤销（删除）。
 export type MealCardLastChange = { record_id: string; prev_state?: Record<string, unknown> };
+
+// T53：撤销态从单槽 last_change 升级为按 record_id 存多条 last_changes——一轮 multi 批量改 N 条，
+// N 条各自独立可撤销、互不覆盖。写入用指令式：set 按 record_id 合并/替换该条、clear 只删该条，其余保留。
+export type LastChangeInstr =
+  | { op: "set"; change: MealCardLastChange }
+  | { op: "clear"; record_id: string };
+
+// 读现有撤销态：新 payload 用 last_changes 数组；旧 payload（T53 前）单槽 last_change 兼容包成单元素数组。
+export function readLastChanges(payload: unknown): MealCardLastChange[] {
+  const p = payload as any;
+  if (Array.isArray(p?.last_changes)) return p.last_changes as MealCardLastChange[];
+  if (p?.last_change) return [p.last_change as MealCardLastChange];
+  return [];
+}
+
+function applyLastChange(existing: MealCardLastChange[], instr: LastChangeInstr): MealCardLastChange[] {
+  if (instr.op === "clear") return existing.filter((c) => c.record_id !== instr.record_id);
+  // set：同 record_id 的旧撤销态被本次覆盖（一条记录只留最近一次修改的还原点），其余不动
+  return [...existing.filter((c) => c.record_id !== instr.change.record_id), instr.change];
+}
 
 export interface UpsertMealCardParams {
   user_id: string;
   mealDate: string; // 餐归属日（YYYY-MM-DD），与 chat_message.date（对话日 chatDate）独立——跨天修改时二者可不同
   meal_type: MealType;
   chatDate: Date;
-  // undefined = 不动现有值；null = 清除（撤销已消费）；对象 = 写入本次修改的撤销信息
-  lastChange?: MealCardLastChange | null;
+  // undefined = 不动现有撤销态；set/clear 指令 = 按 record_id 增量更新 last_changes（见 LastChangeInstr）
+  lastChange?: LastChangeInstr;
   // false：只 bump 已存在的卡，不存在则返回 null——用于"变少"侧刷新（删除/撤销/改餐次的旧餐卡），
   // 避免给从没有过卡的餐（pre-T46 记录）凭空造出一张卡
   createIfMissing?: boolean;
 }
 
-// 幂等 upsert：该餐已有 meal_card 则刷新 created_at（bump，卡片跟随）+ 按需写 last_change；没有则创建。
+// 幂等 upsert：该餐已有 meal_card 则刷新 created_at（bump，卡片跟随）+ 按 lastChange 指令增量更新 last_changes；没有则创建。
 // isFirst：本次创建是否该用户第一张 meal_card（record 回复文本追加一次性引导提示用）。
 export async function upsertMealCardMessage(
   params: UpsertMealCardParams,
@@ -117,7 +136,9 @@ export async function upsertMealCardMessage(
   if (existing) {
     const data: Record<string, unknown> = { created_at: new Date() };
     if (lastChange !== undefined) {
-      data.payload = { ...(existing.payload as object), last_change: lastChange };
+      const nextChanges = applyLastChange(readLastChanges(existing.payload), lastChange);
+      const { last_change: _legacy, ...rest } = (existing.payload as any) ?? {}; // 抹掉旧单槽键
+      data.payload = { ...rest, last_changes: nextChanges };
     }
     const message = await db.chatMessage.update({ where: { id: existing.id }, data });
     return { message, isFirst: false };
@@ -129,13 +150,14 @@ export async function upsertMealCardMessage(
     where: { user_id, kind: "meal_card" },
     select: { id: true },
   });
+  const initChanges = lastChange?.op === "set" ? [lastChange.change] : [];
   const message = await db.chatMessage.create({
     data: {
       user_id,
       date: chatDate,
       role: "assistant",
       kind: "meal_card",
-      payload: { meal_key: { date: mealDate, meal_type }, last_change: lastChange ?? null } as object,
+      payload: { meal_key: { date: mealDate, meal_type }, last_changes: initChanges } as object,
     },
   });
   return { message, isFirst: !hasAny };
@@ -190,6 +212,11 @@ export async function enrichMealCards<
     const mk = (m.payload as any)?.meal_key;
     const view = mk ? views.get(`${m.user_id}|${mk.date}|${mk.meal_type}`) : undefined;
     if (!view) return m;
-    return { ...m, payload: { ...(m.payload as any), ...view } };
+    // T53：撤销态剪枝——只保留仍在本卡 items 里的记录（删除/移餐后陈旧撤销态自然清理），
+    // 同时把旧 payload 的单槽 last_change 归一成 last_changes 数组（读兼容）。
+    const itemIds = new Set(view.items.map((it) => it.record_id));
+    const last_changes = readLastChanges(m.payload).filter((c) => itemIds.has(c.record_id));
+    const { last_change: _legacy, ...rest } = (m.payload as any);
+    return { ...m, payload: { ...rest, ...view, last_changes } };
   });
 }

@@ -35,7 +35,10 @@ interface Expect {
   reply_contain_any?: string[]; // 至少一个子串出现
   reply_forbid?: string[];      // 正则，命中即失败（只读路径禁谎称等红线）
   db?: {
-    food_record?: { where?: { food_name?: string } } & Record<string, unknown>;
+    // 单条断言，或多条（T53 批量改：一句改多样，逐条断言每条落对）
+    food_record?:
+      | ({ where?: { food_name?: string } } & Record<string, unknown>)
+      | Array<{ where?: { food_name?: string } } & Record<string, unknown>>;
     food_record_count?: number;
     exercise_record?: { where?: { type?: string } } & Record<string, unknown>; // T50：断言运动记录字段（calories_burned/duration_min 等）
     pending_record?: { type?: string } | null; // null = 断言无 open pending
@@ -174,16 +177,20 @@ async function assertTurn(userId: string, turn: Turn, resp: { intent?: string; r
   // 3) 落库层（事实表，核心断言）
   const db = e.db;
   if (db?.food_record !== undefined) {
-    const { where, ...fields } = db.food_record;
-    const rec = await prisma.foodRecord.findFirst({
-      where: {
-        user_id: userId,
-        ...(where?.food_name ? { food: { name: { contains: where.food_name } } } : {}),
-      },
-      include: { food: true },
-      orderBy: { created_at: "desc" },
-    });
-    checkFields(failures, "food_record", fields, rec ? { ...rec, food_name: rec.food?.name } : null);
+    const specs = Array.isArray(db.food_record) ? db.food_record : [db.food_record];
+    for (const spec of specs) {
+      const { where, ...fields } = spec;
+      const rec = await prisma.foodRecord.findFirst({
+        where: {
+          user_id: userId,
+          ...(where?.food_name ? { food: { name: { contains: where.food_name } } } : {}),
+        },
+        include: { food: true },
+        orderBy: { created_at: "desc" },
+      });
+      const label = where?.food_name ? `food_record(${where.food_name})` : "food_record";
+      checkFields(failures, label, fields, rec ? { ...rec, food_name: rec.food?.name } : null);
+    }
   }
   if (db?.food_record_count !== undefined) {
     const n = await prisma.foodRecord.count({ where: { user_id: userId } });

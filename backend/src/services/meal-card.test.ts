@@ -122,7 +122,7 @@ test("upsert isFirst：仅用户第一张 meal_card 为 true（首次引导提�
   assert.equal(otherMeal.isFirst, false);
 });
 
-test("upsert 落库 payload 只存组装键：meal_key + last_change:null，无明细快照", async () => {
+test("upsert 落库 payload 只存组装键：meal_key + last_changes:[]，无明细快照", async () => {
   const db = fakeDb();
   const { message } = must(await upsertMealCardMessage(
     { user_id: "u1", mealDate: "2026-07-04", meal_type: "lunch", chatDate: new Date("2026-07-04T00:00:00.000Z") },
@@ -130,31 +130,62 @@ test("upsert 落库 payload 只存组装键：meal_key + last_change:null，无�
   ));
   assert.deepEqual(message.payload, {
     meal_key: { date: "2026-07-04", meal_type: "lunch" },
-    last_change: null,
+    last_changes: [],
   });
 });
 
-// ═══ T47：last_change 单槽撤销信息 + createIfMissing ═══
+// ═══ T47/T53：last_changes 项级撤销信息（按 record_id 多条独立）+ createIfMissing ═══
 
-test("last_change：写入 → 再次修改覆盖 → null 清除；undefined 不动现有值", async () => {
+test("last_changes：set 写入 → 同 record_id 覆盖 → clear 只删该条；undefined 不动", async () => {
   const db = fakeDb();
   const base = { user_id: "u1", mealDate: "2026-07-04", meal_type: "lunch" as const, chatDate: new Date("2026-07-04T00:00:00.000Z") };
 
-  const c1 = must(await upsertMealCardMessage({ ...base, lastChange: { record_id: "r1", prev_state: { weight_g: 100 } } }, db));
-  assert.deepEqual(c1.message.payload.last_change, { record_id: "r1", prev_state: { weight_g: 100 } });
+  const c1 = must(await upsertMealCardMessage({ ...base, lastChange: { op: "set", change: { record_id: "r1", prev_state: { weight_g: 100 } } } }, db));
+  assert.deepEqual(c1.message.payload.last_changes, [{ record_id: "r1", prev_state: { weight_g: 100 } }]);
 
-  // 再次修改覆盖（单槽）
-  const c2 = must(await upsertMealCardMessage({ ...base, lastChange: { record_id: "r2" } }, db));
-  assert.deepEqual(c2.message.payload.last_change, { record_id: "r2" });
-  assert.deepEqual(c2.message.payload.meal_key, { date: "2026-07-04", meal_type: "lunch" }, "组装键不被覆盖");
+  // 同 record_id 再次修改：覆盖该条（一条记录只留最近还原点），不新增
+  const c2 = must(await upsertMealCardMessage({ ...base, lastChange: { op: "set", change: { record_id: "r1", prev_state: { weight_g: 150 } } } }, db));
+  assert.deepEqual(c2.message.payload.last_changes, [{ record_id: "r1", prev_state: { weight_g: 150 } }]);
 
-  // undefined：纯 bump，不动 last_change
+  // undefined：纯 bump，不动 last_changes
   const c3 = must(await upsertMealCardMessage(base, db));
-  assert.deepEqual(c3.message.payload.last_change, { record_id: "r2" });
+  assert.deepEqual(c3.message.payload.last_changes, [{ record_id: "r1", prev_state: { weight_g: 150 } }]);
+  assert.deepEqual(c3.message.payload.meal_key, { date: "2026-07-04", meal_type: "lunch" }, "组装键不被覆盖");
 
-  // null：撤销已消费 → 清除
-  const c4 = must(await upsertMealCardMessage({ ...base, lastChange: null }, db));
-  assert.equal(c4.message.payload.last_change, null);
+  // clear：撤销 r1 已消费 → 只删 r1
+  const c4 = must(await upsertMealCardMessage({ ...base, lastChange: { op: "clear", record_id: "r1" } }, db));
+  assert.deepEqual(c4.message.payload.last_changes, []);
+});
+
+test("last_changes：批量改多条各留独立撤销态，clear 一条不影响其余（T53 核心）", async () => {
+  const db = fakeDb();
+  const base = { user_id: "u1", mealDate: "2026-07-04", meal_type: "dinner" as const, chatDate: new Date("2026-07-04T00:00:00.000Z") };
+
+  // multi 三条批量改：三条撤销态各自并存
+  await upsertMealCardMessage({ ...base, lastChange: { op: "set", change: { record_id: "rA", prev_state: { weight_g: 10 } } } }, db);
+  await upsertMealCardMessage({ ...base, lastChange: { op: "set", change: { record_id: "rB", prev_state: { weight_g: 20 } } } }, db);
+  const c3 = must(await upsertMealCardMessage({ ...base, lastChange: { op: "set", change: { record_id: "rC", prev_state: { weight_g: 30 } } } }, db));
+  assert.equal(c3.message.payload.last_changes.length, 3);
+  assert.deepEqual(c3.message.payload.last_changes.map((c: any) => c.record_id), ["rA", "rB", "rC"]);
+
+  // 撤销 rB：只 rB 消失，rA/rC 撤销态原封不动
+  const c4 = must(await upsertMealCardMessage({ ...base, lastChange: { op: "clear", record_id: "rB" } }, db));
+  assert.deepEqual(c4.message.payload.last_changes.map((c: any) => c.record_id), ["rA", "rC"]);
+  assert.deepEqual(c4.message.payload.last_changes.find((c: any) => c.record_id === "rA").prev_state, { weight_g: 10 });
+});
+
+test("last_changes：读兼容旧 payload 单槽 last_change（T53 前的历史卡）", async () => {
+  const db = fakeDb();
+  // 手工塞一条 T53 前形态的卡（payload 用单槽 last_change）
+  db.rows.push({
+    id: "legacy", user_id: "u1", kind: "meal_card", created_at: new Date(),
+    payload: { meal_key: { date: "2026-07-04", meal_type: "lunch" }, last_change: { record_id: "old", prev_state: { weight_g: 99 } } },
+  });
+  const base = { user_id: "u1", mealDate: "2026-07-04", meal_type: "lunch" as const, chatDate: new Date("2026-07-04T00:00:00.000Z") };
+  // set 新一条：旧单槽被读兼容成数组，新旧并存，旧单槽键被抹掉
+  const c = must(await upsertMealCardMessage({ ...base, lastChange: { op: "set", change: { record_id: "new" } } }, db));
+  assert.equal(c.message.payload.last_change, undefined, "旧单槽键已抹除");
+  assert.deepEqual(c.message.payload.last_changes.map((x: any) => x.record_id), ["old", "new"]);
 });
 
 test("createIfMissing:false：无卡时返回 null 且不建卡（删除/撤销不给 pre-T46 的餐造卡）", async () => {
@@ -230,11 +261,34 @@ test("enrichMealCards 空餐（记录全删光）返回 items:[]，totals 全 0"
   const db = fakeDb([]);
   const cardMsg = {
     id: "m1", kind: "meal_card", user_id: "u1",
-    payload: { meal_key: { date: "2026-07-04", meal_type: "lunch" }, last_change: null },
+    payload: { meal_key: { date: "2026-07-04", meal_type: "lunch" }, last_changes: [] },
   };
   const [card] = await enrichMealCards([cardMsg], db);
 
   assert.deepEqual((card.payload as any).items, []);
   assert.equal((card.payload as any).item_count, 0);
   assert.deepEqual((card.payload as any).totals, { calories: 0, protein_g: 0, fat_g: 0, carbs_g: 0 });
+});
+
+test("enrichMealCards：剪掉已不在 items 里的陈旧撤销态 + 归一旧 last_change（T53）", async () => {
+  const db = fakeDb([rec({ id: "r1" })]); // 只剩 r1 在库
+  const cardMsg = {
+    id: "m1", kind: "meal_card", user_id: "u1",
+    payload: {
+      meal_key: { date: "2026-07-04", meal_type: "lunch" },
+      // r1 仍在，rGone 已被删/移餐 → 应剪掉
+      last_changes: [{ record_id: "r1", prev_state: { weight_g: 100 } }, { record_id: "rGone", prev_state: { weight_g: 5 } }],
+    },
+  };
+  const [card] = await enrichMealCards([cardMsg], db);
+  assert.deepEqual((card.payload as any).last_changes.map((c: any) => c.record_id), ["r1"], "陈旧撤销态被剪");
+
+  // 旧单槽 last_change 归一成 last_changes 数组
+  const legacyMsg = {
+    id: "m2", kind: "meal_card", user_id: "u1",
+    payload: { meal_key: { date: "2026-07-04", meal_type: "lunch" }, last_change: { record_id: "r1", prev_state: { weight_g: 100 } } },
+  };
+  const [legacy] = await enrichMealCards([legacyMsg], db);
+  assert.deepEqual((legacy.payload as any).last_changes, [{ record_id: "r1", prev_state: { weight_g: 100 } }]);
+  assert.equal((legacy.payload as any).last_change, undefined, "旧单槽键抹除");
 });

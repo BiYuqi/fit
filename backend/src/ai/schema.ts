@@ -77,15 +77,28 @@ export const ExerciseItemSchema = z.object({
 export type ExerciseItem = z.infer<typeof ExerciseItemSchema>;
 
 // ---------- 修改变更（modify.update 用） ----------
-export const ModifyChangeSchema = z.object({
-  portion_label: PortionLabelSchema.optional(),
-  grams: z.number().positive().optional(),          // 改份量时 AI 估算的新克数
-  food: z.string().optional(),                      // 改食物时的新标准名
-  meal_type: MealTypeSchema.optional(),             // 改餐次（"粽子是中午吃的"），数值不动
-  calories_burned: z.number().positive().optional(), // 改运动消耗时的新热量值（用户用穿戴设备数据纠正 AI 估算）
-  calories: z.number().positive().optional(),        // T40：食物记录改热量，用户亲口给出的数字（用户真值），不由 AI 算
-  food_desc: z.string().min(1).optional(),           // T40：食物属性修正描述（如"无油"），影响营养口径，触发重估
-});
+// T53 护栏：模型偶发给用不到的可选字段填显式 null（如改份量时 change.food_desc:null），
+// strict optional 会硬拒 → 整条解析抛错触发 pro 重试链、双模型都 null 时丢掉修改。
+// 校验前先剥掉所有 null 值键（等价于"没填"），避免因一个多余 null 丢整个动作。
+export const ModifyChangeSchema = z.preprocess(
+  (v) => {
+    if (v && typeof v === "object" && !Array.isArray(v)) {
+      const o: Record<string, unknown> = {};
+      for (const [k, val] of Object.entries(v as Record<string, unknown>)) if (val !== null) o[k] = val;
+      return o;
+    }
+    return v;
+  },
+  z.object({
+    portion_label: PortionLabelSchema.optional(),
+    grams: z.number().positive().optional(),          // 改份量时 AI 估算的新克数
+    food: z.string().optional(),                      // 改食物时的新标准名
+    meal_type: MealTypeSchema.optional(),             // 改餐次（"粽子是中午吃的"），数值不动
+    calories_burned: z.number().positive().optional(), // 改运动消耗时的新热量值（用户用穿戴设备数据纠正 AI 估算）
+    calories: z.number().positive().optional(),        // T40：食物记录改热量，用户亲口给出的数字（用户真值），不由 AI 算
+    food_desc: z.string().min(1).optional(),           // T40：食物属性修正描述（如"无油"），影响营养口径，触发重估
+  }),
+);
 export type ModifyChange = z.infer<typeof ModifyChangeSchema>;
 
 // ---------- 单意图变体（record / modify 同时是 multi 的 op 单元，T45） ----------

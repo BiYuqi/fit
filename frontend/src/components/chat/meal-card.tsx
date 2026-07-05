@@ -7,7 +7,7 @@ import { FontSize, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { useChatStore } from '@/stores/chat-store';
 import { useAuthStore } from '@/stores/auth-store';
-import type { MealCardPayload } from '@/types/chat';
+import type { MealCardPayload, UndoPrevState } from '@/types/chat';
 
 const MEAL_LABEL: Record<string, string> = {
   breakfast: '早餐',
@@ -24,25 +24,25 @@ const MACRO_COLORS = {
 
 export function MealCard({
   payload,
-  messageId,
 }: {
   payload: MealCardPayload;
-  messageId: string;
+  messageId?: string; // 父组件仍传，T53 后组件内不再用（撤销态按 record_id）
 }) {
   const colors = useTheme();
   const [expanded, setExpanded] = useState(true);
-  const { undo, undoneCards } = useChatStore();
+  const { undo, undoneRecords } = useChatStore();
   const { token } = useAuthStore();
 
   const meal = MEAL_LABEL[payload.meal_key?.meal_type ?? ''] ?? '';
   const isEmpty = payload.items.length === 0;
-  const lastChange = payload.last_change;
-  // 单槽撤销：同一时刻至多一项带 last_change，撤销态挂在 messageId 上即等价挂在该项上
-  const isUndone = !!undoneCards[messageId];
+  // T53：项级撤销——按 record_id 存多条，批量改的每条各自独立可撤销。
+  // 读兼容 T53 前的单槽 last_change（历史卡）：包成单元素数组。
+  const lastChanges =
+    payload.last_changes ?? (payload.last_change ? [payload.last_change] : []);
 
-  const handleUndo = () => {
-    if (!lastChange || isUndone || !token) return;
-    undo(messageId, lastChange.record_id, lastChange.prev_state, token);
+  const handleUndo = (recordId: string, prevState?: UndoPrevState) => {
+    if (undoneRecords[recordId] || !token) return;
+    undo(recordId, prevState, token);
   };
 
   return (
@@ -80,8 +80,9 @@ export function MealCard({
           <>
             {expanded &&
               payload.items.map((item) => {
-                const showUndo = !!lastChange && lastChange.record_id === item.record_id;
-                const itemUndone = showUndo && isUndone;
+                const itemChange = lastChanges.find((c) => c.record_id === item.record_id);
+                const showUndo = !!itemChange;
+                const itemUndone = showUndo && !!undoneRecords[item.record_id];
                 // 主显示（T52）：有可数份数 → `食物名 ×N（Ng）`；否则 `食物名 Ng`
                 const itemLabel =
                   item.count != null
@@ -111,7 +112,7 @@ export function MealCard({
                         ) : (
                           <TouchableOpacity
                             style={styles.undoBtn}
-                            onPress={handleUndo}
+                            onPress={() => handleUndo(item.record_id, itemChange?.prev_state)}
                             activeOpacity={0.6}
                           >
                             <SymbolView

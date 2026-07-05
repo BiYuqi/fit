@@ -37,21 +37,20 @@ function exerciseEmoji(type: string): string {
 
 export function ExerciseCard({
   payload,
-  messageId,
 }: {
   payload: ExerciseCardPayload;
-  messageId: string;
+  messageId?: string; // 父组件仍传，T53 后组件内不再用（撤销态按 record_id）
 }) {
   const colors = useTheme();
 
-  const { undo, undoneCards } = useChatStore();
+  const { undo, undoneRecords } = useChatStore();
   const { token } = useAuthStore();
   const undoInfo = payload.undo;
-  const isUndone = !!(undoInfo && undoneCards[messageId]);
+  const isUndone = !!(undoInfo && undoneRecords[undoInfo.record_id]);
 
   const handleUndo = () => {
     if (!undoInfo || isUndone || !token) return;
-    undo(messageId, undoInfo.record_id, undoInfo.prev_state, token);
+    undo(undoInfo.record_id, undoInfo.prev_state, token);
   };
 
   return (

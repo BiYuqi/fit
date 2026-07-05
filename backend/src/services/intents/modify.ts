@@ -69,7 +69,7 @@ export async function handleModify(
     messages.push(aiMsg);
 
     // T47 双卡刷新：旧餐次卡少一项（只 bump 已存在的，不给 pre-T46 的餐凭空造卡）、新餐次卡多一项。
-    // 按 (餐归属日, 餐次) 去重；旧卡先 bump、新卡后 bump，新卡浮到最末。批量改无单条撤销，不动 last_change。
+    // 按 (餐归属日, 餐次) 去重；旧卡先 bump、新卡后 bump，新卡浮到最末。批量改无单条撤销，不动 last_changes。
     const oldKeys = new Map<string, { mealDate: string; meal_type: MealType }>();
     const newKeys = new Map<string, { mealDate: string; meal_type: MealType }>();
     for (const rec of recs) {
@@ -94,6 +94,22 @@ export async function handleModify(
 
     tctx.ok("modify", { mealType: newMeal, tokenUsage: parseUsage, promptMessages: parseMessages });
     return { intent: "modify", reply: content, summary_card: card, messages };
+  }
+
+  // ── 缺陷2 护栏（T53）：target 数组但不是批量改餐次（每样改不同值这种）──
+  // 数组只能配一个 change，表达不了"A改X、B改Y"，模型本应走 multi（每样一个 modify op）。
+  // 绝不静默取 refs[0] 只改第一条、其余无声吞掉（会算错数据且无法恢复）——不动数据，让失败可见。
+  if (refs.length > 1) {
+    const aiMsg = await prisma.chatMessage.create({
+      data: {
+        user_id, date: dateObj, role: "assistant", kind: "text",
+        content: "一次改多样、每样数值不同的话，我这么一起改容易改错。麻烦分别说一下，比如「玉米改成180克」「瘦肉改成50克」。",
+      },
+    });
+    messages.push(aiMsg);
+    const card = await buildContextCard(user_id);
+    tctx.partial("modify", { tokenUsage: parseUsage, promptMessages: parseMessages });
+    return { intent: "modify", reply: aiMsg.content, summary_card: card, messages };
   }
 
   const target = pack.recent_records.find((r) => r.ref === refs[0]);
@@ -161,11 +177,12 @@ export async function handleModify(
     for (const fn of pendingCreateFns) messages.push(await fn());
     if (needsRecompute) await recompute(user_id, today);
 
-    // T47：追加并入该餐 meal_card 并 bump；last_change 无 prev_state = 撤销即删除（同 append undo 语义）
+    // T47：追加并入该餐 meal_card 并 bump；无 prev_state = 撤销即删除（同 append undo 语义）。
+    // T53：撤销态按 record_id set 进 last_changes 数组，不覆盖同卡其他记录的撤销态。
     if (records.length > 0) {
       await refreshMealCard(messages, {
         user_id, mealDate: today, meal_type, chatDate: dateObj,
-        lastChange: { record_id: records[records.length - 1].id },
+        lastChange: { op: "set", change: { record_id: records[records.length - 1].id } },
       });
     }
     const card = await buildContextCard(user_id);
@@ -295,7 +312,7 @@ export async function handleModify(
   await recompute(user_id, today);
   const card = await buildContextCard(user_id);
 
-  // T49：回执降级为居中事件行（带 delta），撤销走 meal_card 项级 last_change，事件行本身不带 undo
+  // T49：回执降级为居中事件行（带 delta），撤销走 meal_card 项级 last_changes，事件行本身不带 undo
   const oldCal = Math.round(prev_state.calories);
   const newCal = Math.round(nutrition.calories);
   const delta = newCal - oldCal;
@@ -322,7 +339,7 @@ export async function handleModify(
   messages.push(aiMsg);
 
   // 修改走原地刷新该餐 meal_card。改餐次是双卡刷新：
-  // 旧餐卡少一项（只 bump 已存在的），新餐卡多一项；撤销信息写进目标餐卡 last_change
+  // 旧餐卡少一项（只 bump 已存在的），新餐卡多一项；撤销信息写进目标餐卡 last_changes（按 record_id）
   // （单槽：再次修改覆盖，撤销后由 undo 接口清除）。跨天修改刷的是记录归属日那张卡。
   const mealDate = rec.date.toISOString().slice(0, 10);
   if (meal_type !== prev_state.meal_type) {
@@ -333,7 +350,8 @@ export async function handleModify(
   }
   await refreshMealCard(messages, {
     user_id, mealDate, meal_type, chatDate: toDateOnly(mealDate),
-    lastChange: { record_id: updated.id, prev_state }, // 撤销=还原 prev_state
+    // T53：撤销=还原 prev_state，按 record_id set 进 last_changes（批量改时各条互不覆盖）
+    lastChange: { op: "set", change: { record_id: updated.id, prev_state } },
   });
   // 学习信号（LEARNING_SPEC §3）：predicted = 改前克数，final = 用户指定克数。
   // 只有 change.grams 时才是"克数纠正"——改食物（change.food）份量沿用旧的，不算纠正。

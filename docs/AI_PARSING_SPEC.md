@@ -183,23 +183,24 @@ callDeepSeekCtx(pack, messages, opts)
 {"intent":"modify","action":"update","target":["r3","r4","r5"],"change":{"meal_type":"breakfast"}}
 ```
 
-**批量改餐次**（2026-07-04 立项）：`target` 允许 ref 数组，仅用于 `update` + `change.meal_type`（"以上发的都是早餐"、"刚才那些都是晚饭"）。后端一次 `updateMany` 改完所有食物记录 + 重算，回一条汇总文本（"已把 N 条记录改为早餐：…"），不逐条出卡、无 undo（说反了再说一句改回来即可）；受影响的新旧餐次 meal_card 全部 bump 刷新（T47，旧餐卡只刷已存在的）。其他批量组合不受支持——数组会退化为取第一个 ref 走单条逻辑。
+**批量改餐次**（2026-07-04 立项）：`target` 允许 ref 数组，**仅用于 `update` + `change.meal_type`**（"以上发的都是早餐"、"刚才那些都是晚饭"）——因为一个 `change` 只能表达一件事，多条套同一个改动才成立。后端一次 `updateMany` 改完所有食物记录 + 重算，回一条汇总文本（"已把 N 条记录改为早餐：…"），不逐条出卡、无 undo（说反了再说一句改回来即可）；受影响的新旧餐次 meal_card 全部 bump 刷新（T47，旧餐卡只刷已存在的）。
+**每条改不同值一律走 multi，不用数组**（T53，2026-07-05 真机翻车立项）："玉米改180、瘦肉改50" 是两个独立修改，数组配单个 change 装不下两个不同值。parser 提示词已明确此边界（§12）；后端**护栏**：`target` 是数组但 change 不是 meal_type（不受支持的批量组合）→ **不再静默取第一个 ref 只改一条**（会算错且无法恢复），改为不动数据、回一句"分别说"提示，让失败可见。
 
 **食物记录改热量/属性修正**（T40，`change.calories` / `change.food_desc`）：
 - `change.calories`：用户直接给出食物记录的最终热量（"记录成180kcal"、"按150卡记"）。后端不重新匹配食物，直接把该值写入 `food_record.calories`，宏量素按新旧热量比例回推（不是重估），`calories_source` 置 `user_override`——同一条记录之后若被别的字段（食物/克数/属性）再次 `update`，会重新按 food×grams 计算并把 `calories_source` 落回 `computed`（该次改的不再是热量本身，旧覆盖值已经不适用）。
 - `change.food_desc`：属性修正描述（"无油"、"无糖"、"去皮"、"脱脂"）。后端拼出具体变体名「原食物名（描述）」，只信任精确同名/别名命中，否则强制重新估算（**不走** §5 的弱匹配 AI 裁决——那条链路面对"字面像但营养口径不同"的候选容易误判为同一种，导致修正静默失效），产出新估算食物条目并按新食物×原克数重算。修正后 `upsertFoodAlias(原食物名 → 新food_id)`（见 LEARNING_SPEC §7），下次同名食物直连命中修正版。
-- 两者的撤销信息都写进该餐 `meal_card` 的 `payload.last_change{record_id, prev_state}`（T47，单槽：再次修改覆盖、撤销后清除），不新增卡片类型；`prev_state` 带上改前的精确 `calories/protein/fat/carbs/calories_source`，撤销直接还原这些值，不按 food×grams 重算（否则会丢失 `user_override` 的用户真值）。
+- 两者的撤销信息都写进该餐 `meal_card` 的 `payload.last_changes`（T47 单槽→T53 按 record_id 数组：批量改每条各留独立撤销态、同 record_id 覆盖、撤销后只清该条），不新增卡片类型；`prev_state` 带上改前的精确 `calories/protein/fat/carbs/calories_source`，撤销直接还原这些值，不按 food×grams 重算（否则会丢失 `user_override` 的用户真值）。
 - 纯口感/无关描述（"有点咸"、"挺好吃"）不算修正，不触发 `change.food_desc`，整体判 chat。
 
 ### 路由与确认（T49 起：免确认直删 + 事件行回执，不再弹确认卡）
 | action | 置信 | 行为 |
 |---|---|---|
 | **delete** | 任意 | **免确认直接删除**（学习信号先写 → 删 → 重算）→ 一条 `event`（`event_type=deleted`，居中小字「已删除 X · -N kcal」+ 内联撤销）+ 该餐 meal_card bump（items 减一；全删光 → `items:[]` 已清空态） |
-| **update** | 高 (>0.8) | **直接改 + 重算**，一条 `event`（`event_type=modified`，居中小字带 delta，如「已修改：米饭 100g → 200g（+130 kcal）」，不带 undo）+ 该餐 meal_card bump，撤销信息写卡的 `last_change{record_id, prev_state}`；改餐次是**双卡刷新**（旧餐卡少一项、新餐卡多一项） |
-| **append** | 高 | **直接入库新记录** + 重算，并入该餐 meal_card 并 bump，`last_change{record_id}`（无 prev_state = 撤销即删除） |
+| **update** | 高 (>0.8) | **直接改 + 重算**，一条 `event`（`event_type=modified`，居中小字带 delta，如「已修改：米饭 100g → 200g（+130 kcal）」，不带 undo）+ 该餐 meal_card bump，撤销信息写卡的 `last_changes`（按 record_id，批量改各条独立，T53）；改餐次是**双卡刷新**（旧餐卡少一项、新餐卡多一项） |
+| **append** | 高 | **直接入库新记录** + 重算，并入该餐 meal_card 并 bump，`last_changes` 追加一条 `{record_id}`（无 prev_state = 撤销即删除） |
 | update / append | 低 or 歧义 | 走现成 `portion_card` / `candidate_card`（§4），不新增卡 |
 
-> delete 撤销 = 按事件消息自带的 `payload.undo.prev_state` 快照重建记录（**新 id**），走 `POST /api/chat/events/:message_id/undo`；update 撤销 = 还原该餐 meal_card 的 `last_change.prev_state`（走 `/api/records/:id/undo`）；append 撤销 = 删新记录（同一接口，无 prev_state）。
+> delete 撤销 = 按事件消息自带的 `payload.undo.prev_state` 快照重建记录（**新 id**），走 `POST /api/chat/events/:message_id/undo`；update 撤销 = 还原该餐 meal_card 对应 record_id 的 `last_changes` 项的 `prev_state`（走 `/api/records/:id/undo`）；append 撤销 = 删新记录（同一接口，无 prev_state）。
 > **T49 起没有 action 需要确认卡**：delete 免确认直执行，update/append 沿用 T47 起的直执行 + 卡片原地刷新；存量（T49 之前）未 resolve 的 `pending(type=delete_confirm)` 仍可点旧的 `delete_confirm_card` 确认/取消，但不再有新增来源。
 
 ### 纯确认词处理

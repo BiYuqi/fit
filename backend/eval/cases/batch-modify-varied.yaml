@@ -1,0 +1,43 @@
+# T53 泛化验证：换一批食物 + 多种动词说法 + 2/3/4 样 + 混克数/毫升，验模型判 multi 不是只对某一句管用。
+name: 批量修改·泛化——不同食物/说法/条数都要走 multi（T53 覆盖广度）
+turns:
+  # 早餐 4 样，混克数/毫升
+  - say: "早餐吃了150克米饭，一个水煮蛋，100克西兰花，250毫升牛奶"
+    expect:
+      intent: record
+      db:
+        food_record_count: 4
+        pending_record: null
+
+  # ── 三样，三种不同动词（调成/改为/变成），混克数+毫升 ──
+  - say: "米饭调成200克，西兰花改为150克，牛奶变成300毫升"
+    expect:
+      intent: multi
+      db:
+        food_record:
+          - { where: { food_name: "米饭" }, weight_g: 200 }
+          - { where: { food_name: "西兰花" }, weight_g: 150 }
+          - { where: { food_name: "牛奶" }, weight_g: 300 }
+        food_record_count: 4
+
+  # ── 四样一起改（"换成/改到/调到/弄成"混说）──
+  - say: "米饭换成180克，鸡蛋改到60克，西兰花调到120克，牛奶弄成200毫升"
+    expect:
+      intent: multi
+      db:
+        food_record:
+          - { where: { food_name: "米饭" }, weight_g: 180 }
+          - { where: { food_name: "蛋" }, weight_g: 60 }
+          - { where: { food_name: "西兰花" }, weight_g: 120 }
+          - { where: { food_name: "牛奶" }, weight_g: 200 }
+        food_record_count: 4
+
+  # ── 两样，口语化省略"克"（"米饭250、牛奶350"）──
+  - say: "米饭改成250，牛奶改成350"
+    expect:
+      intent: multi
+      db:
+        food_record:
+          - { where: { food_name: "米饭" }, weight_g: 250 }
+          - { where: { food_name: "牛奶" }, weight_g: 350 }
+        food_record_count: 4

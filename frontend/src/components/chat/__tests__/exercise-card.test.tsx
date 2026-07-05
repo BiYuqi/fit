@@ -112,8 +112,7 @@ describe('ExerciseCard', () => {
 
     expect(mockUndo).toHaveBeenCalledTimes(1);
     expect(mockUndo).toHaveBeenCalledWith(
-      'msg-1',                                        // messageId
-      'ex-1',                                         // record_id
+      'ex-1',                                         // record_id（T53：撤销态按 record_id）
       { calories_burned: 325, kind: 'exercise' },     // prev_state
       'tok-123',                                      // token
     );
@@ -121,7 +120,7 @@ describe('ExerciseCard', () => {
 
   it('shows "已撤销" and hides undo button after undo', () => {
     mockUseChatStore.mockReturnValue(
-      createMockChatStore({ undoneCards: { 'msg-1': true } }),
+      createMockChatStore({ undoneRecords: { 'ex-1': true } }),
     );
 
     renderCard(basePayload({
@@ -153,7 +152,7 @@ describe('ExerciseCard', () => {
 
   it('applies undone styling and shows "已撤销" text', () => {
     mockUseChatStore.mockReturnValue(
-      createMockChatStore({ undoneCards: { 'msg-1': true } }),
+      createMockChatStore({ undoneRecords: { 'ex-1': true } }),
     );
 
     renderCard(

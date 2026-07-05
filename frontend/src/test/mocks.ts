@@ -30,7 +30,7 @@ export interface ChatStoreState {
   messages: unknown[];
   summaryCard: ContextCard | null;
   loading: boolean;
-  undoneCards: Record<string, boolean>;
+  undoneRecords: Record<string, boolean>;
   jumpTarget: { type: string; id?: string; date?: string } | null;
   undo: ReturnType<typeof jest.fn>;
   undoEvent: ReturnType<typeof jest.fn>;
@@ -48,7 +48,7 @@ export function createMockChatStore(overrides: Partial<ChatStoreState> = {}): Ch
     messages: [],
     summaryCard: null,
     loading: false,
-    undoneCards: {},
+    undoneRecords: {},
     jumpTarget: null,
     undo: jest.fn(),
     undoEvent: jest.fn(),

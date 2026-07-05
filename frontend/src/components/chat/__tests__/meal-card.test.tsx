@@ -28,7 +28,7 @@ jest.mock('@/hooks/use-color-scheme', () => ({
 function basePayload(overrides?: Partial<MealCardPayload>): MealCardPayload {
   return {
     meal_key: { date: '2026-07-04', meal_type: 'breakfast' },
-    last_change: null,
+    last_changes: [],
     items: [
       {
         record_id: 'r1',
@@ -133,56 +133,65 @@ describe('MealCard', () => {
     expect(screen.getByText(/全麦面包 ×2（100g）/)).toBeOnTheScreen();
   });
 
-  // ── last_change / undo ──────────────────────────────────────────────
+  // ── last_changes / 项级独立撤销（T53）──────────────────────────────
 
-  it('shows undo button only on the item matching last_change.record_id', () => {
-    renderCard(basePayload({ last_change: { record_id: 'r2' } }));
+  it('shows undo button only on items present in last_changes', () => {
+    renderCard(basePayload({ last_changes: [{ record_id: 'r2' }] }));
     expect(screen.getByText('撤销')).toBeOnTheScreen();
+    expect(screen.getAllByText('撤销')).toHaveLength(1);
   });
 
-  it('calls undo with messageId, record_id, prev_state, token on press', () => {
+  it('批量改多条：每条各显示独立撤销按钮（T53 核心）', () => {
+    renderCard(basePayload({ last_changes: [{ record_id: 'r1' }, { record_id: 'r2' }] }));
+    expect(screen.getAllByText('撤销')).toHaveLength(2);
+  });
+
+  it('calls undo with record_id, prev_state, token on press', () => {
     const mockUndo = jest.fn();
     mockUseChatStore.mockReturnValue(createMockChatStore({ undo: mockUndo }));
     mockUseAuthStore.mockReturnValue(createMockAuthStore({ token: 'tok-abc' }));
 
     renderCard(
       basePayload({
-        last_change: { record_id: 'r2', prev_state: { food_id: 'f1', portion_label: 'medium', weight_g: 40 } },
+        last_changes: [{ record_id: 'r2', prev_state: { food_id: 'f1', portion_label: 'medium', weight_g: 40 } }],
       }),
-      'msg-m2',
     );
 
     fireEvent.press(screen.getByText('撤销'));
 
     expect(mockUndo).toHaveBeenCalledTimes(1);
     expect(mockUndo).toHaveBeenCalledWith(
-      'msg-m2',
       'r2',
       { food_id: 'f1', portion_label: 'medium', weight_g: 40 },
       'tok-abc',
     );
   });
 
-  it('shows "已撤销" and hides the button after undo', () => {
-    mockUseChatStore.mockReturnValue(createMockChatStore({ undoneCards: { 'msg-m1': true } }));
-
-    renderCard(basePayload({ last_change: { record_id: 'r2' } }));
+  it('撤销串扰：三条批量改，一条已撤销只影响那一条', () => {
+    // r1/r2 都可撤销，r2 已进入 undoneRecords → 只有 r2 显示"已撤销"，r1 仍显示"撤销"
+    mockUseChatStore.mockReturnValue(createMockChatStore({ undoneRecords: { r2: true } }));
+    renderCard(basePayload({ last_changes: [{ record_id: 'r1' }, { record_id: 'r2' }] }));
 
     expect(screen.getByText('已撤销')).toBeOnTheScreen();
-    expect(screen.queryByText('撤销')).not.toBeOnTheScreen();
+    expect(screen.getAllByText('撤销')).toHaveLength(1); // 只剩 r1
   });
 
-  it('does NOT call undo when already undone', () => {
+  it('does NOT call undo when that record already undone', () => {
     const mockUndo = jest.fn();
     mockUseChatStore.mockReturnValue(
-      createMockChatStore({ undo: mockUndo, undoneCards: { 'msg-m1': true } }),
+      createMockChatStore({ undo: mockUndo, undoneRecords: { r2: true } }),
     );
-    renderCard(basePayload({ last_change: { record_id: 'r2' } }));
+    renderCard(basePayload({ last_changes: [{ record_id: 'r2' }] }));
     expect(mockUndo).not.toHaveBeenCalled();
   });
 
-  it('shows no undo button anywhere when last_change is absent', () => {
-    renderCard(basePayload({ last_change: null }));
+  it('reads legacy single-slot last_change (T53 前历史卡兼容)', () => {
+    renderCard(basePayload({ last_change: { record_id: 'r2' }, last_changes: undefined }));
+    expect(screen.getByText('撤销')).toBeOnTheScreen();
+  });
+
+  it('shows no undo button anywhere when last_changes empty', () => {
+    renderCard(basePayload({ last_changes: [] }));
     expect(screen.queryByText('撤销')).not.toBeOnTheScreen();
     expect(screen.queryByText('已撤销')).not.toBeOnTheScreen();
   });

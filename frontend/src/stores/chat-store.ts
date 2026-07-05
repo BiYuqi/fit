@@ -56,7 +56,8 @@ type ChatStore = {
   isLoading: boolean;
   chatDates: string[];
   summaryCard: ContextCard | null;
-  undoneCards: Record<string, true>;
+  // T53：撤销乐观态按 record_id 记（一张餐卡可同时有多条被批量改的记录各自撤销），不再按 messageId
+  undoneRecords: Record<string, true>;
   jumpTarget: JumpTarget | null;
   /** 当前窗口结束日期；null = 窗口已含今天（实时模式） */
   windowTo: string | null;
@@ -70,7 +71,7 @@ type ChatStore = {
   clearJumpTarget: () => void;
   send: (text: string, token: string) => Promise<void>;
   resolve: (pendingId: string, choice: string | { grams: number }, token: string) => Promise<void>;
-  undo: (messageId: string, recordId: string, prevState: UndoPrevState | undefined, token: string) => Promise<void>;
+  undo: (recordId: string, prevState: UndoPrevState | undefined, token: string) => Promise<void>;
   undoEvent: (messageId: string, token: string) => Promise<void>;
 };
 
@@ -80,7 +81,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   isLoading: false,
   chatDates: [],
   summaryCard: null,
-  undoneCards: {},
+  undoneRecords: {},
   jumpTarget: null,
   windowTo: null,
 
@@ -407,8 +408,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }
   },
 
-  undo: async (messageId: string, recordId: string, prevState: UndoPrevState | undefined, token: string) => {
-    set(s => ({ undoneCards: { ...s.undoneCards, [messageId]: true } }));
+  undo: async (recordId: string, prevState: UndoPrevState | undefined, token: string) => {
+    // 乐观态按 record_id：批量改的多条各自撤销，互不影响
+    set(s => ({ undoneRecords: { ...s.undoneRecords, [recordId]: true } }));
     try {
       const res = await apiFetch<{ ok: boolean; summary_card: ContextCard; messages?: ChatMessage[] }>(
         `/api/records/${recordId}/undo`,
@@ -418,7 +420,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           token,
         },
       );
-      // T47：撤销后后端返回刷新过的 meal_card（last_change 已清除）——原地更新并浮到末尾
+      // T47/T53：撤销后后端返回刷新过的 meal_card（仅该条撤销态被清除）——原地更新并浮到末尾
       const newMsgs = (res.messages ?? []) as ChatMessage[];
       if (newMsgs.length > 0) await persistMessages(newMsgs);
       set(s => ({
@@ -427,9 +429,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       }));
     } catch {
       set(s => {
-        const next = { ...s.undoneCards };
-        delete next[messageId];
-        return { undoneCards: next };
+        const next = { ...s.undoneRecords };
+        delete next[recordId];
+        return { undoneRecords: next };
       });
     }
   },
