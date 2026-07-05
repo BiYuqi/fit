@@ -121,17 +121,19 @@ run_ios() {
   start_db
   prepare_backend
   seed_if_empty
-  kill_port 9300
-  echo "🚀 启动后端 (后台)"
-  (cd "$BACKEND" && npm run dev) & BACKEND_PID=$!
+  # 调试后端跑在 9301，与 prod 自启的 9300 井水不犯河水（见 docs/DEPLOY.md）
+  kill_port 9301
+  echo "🚀 启动调试后端 :9301 (后台，tsx watch 热重载)"
+  (cd "$BACKEND" && npm run dev:local) & BACKEND_PID=$!
   sleep 2
   prepare_frontend
   kill_port 8081
   echo "📱 打开 Simulator"
   open -a Simulator
   sleep 2
-  echo "📱 编译并启动 iOS 模拟器 (首次需要几分钟)"
-  (cd "$FRONTEND" && npx expo run:ios)
+  echo "📱 编译并启动 iOS 模拟器 (首次需要几分钟，连 :9301)"
+  # 模拟器跑在 Mac 上，localhost 即 Mac；内联此变量只影响本次，不动 frontend/.env
+  (cd "$FRONTEND" && EXPO_PUBLIC_API_URL=http://localhost:9301 npx expo run:ios)
 }
 
 case "${1:-all}" in

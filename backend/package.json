@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "tsx watch src/index.ts",
+    "dev:local": "PORT=9301 tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
     "test": "node --require tsx/cjs --test \"src/**/*.test.ts\"",

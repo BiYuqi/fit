@@ -9,7 +9,7 @@ iPhone (Xcode 安装)
     ▼
 Cloudflare Tunnel (已有: market-cap-radar)
     │
-    │  localhost:3000
+    │  localhost:9300
     ▼
 Mac 后端 (fastify + prisma + postgres)
 ```
@@ -45,131 +45,115 @@ ingress:
     service: http://localhost:9256
   # ↓ 新增
   - hostname: fit-api.refinely.app
-    service: http://localhost:3000
+    service: http://localhost:9300
   # ↑ 新增
   - service: http_status:404
 ```
 
-然后重启 tunnel：
+然后重启 tunnel。这条 tunnel 由 **market-cap-radar 的 launchd 守护**（`com.market-cap-radar.cloudflared`），fit 不自己起 tunnel，只在共享 config 里登记一个域名。改完 config 重启它：
 
 ```bash
-sudo cloudflared tunnel stop market-cap-radar
-cloudflared tunnel run market-cap-radar
+launchctl kickstart -k "gui/$(id -u)/com.market-cap-radar.cloudflared"
 ```
-
-（如果 tunnel 是以 service 方式跑的，先 `sudo launchctl unload` 再 `load`）
 
 ---
 
-## Step 3: 新建一键部署脚本
+## Step 3: 后端跑起来
 
-在项目根目录新建 `deploy.sh`：
+后端只管 **DB + 服务**，tunnel 交给 Step 2 那条共享守护。有两种跑法：
+
+### 3a. 开机自启（prod，日常自用推荐）
+
+`deploy/` 目录下一套 launchd：
 
 ```bash
-#!/usr/bin/env bash
-# 一键部署：DB + 后端 + Cloudflare Tunnel
-# 手机端通过 https://fit-api.refinely.app 访问
-set -euo pipefail
-
-ROOT="$(cd "$(dirname "$0")" && pwd)"
-BACKEND="$ROOT/backend"
-BACKEND_PID=""
-
-cleanup() {
-  echo ""
-  echo "🛑 正在停止后端..."
-  [ -n "$BACKEND_PID" ] && kill "$BACKEND_PID" 2>/dev/null || true
-}
-trap cleanup EXIT INT TERM
-
-# ── 数据库 ────────────────────────────────────
-start_db() {
-  if docker ps --format '{{.Names}}' | grep -q '^fit-pg$'; then
-    echo "🟢 数据库已在运行"
-  elif docker ps -a --format '{{.Names}}' | grep -q '^fit-pg$'; then
-    echo "🟢 启动已有数据库容器"
-    docker start fit-pg >/dev/null
-  else
-    echo "🟢 创建数据库容器"
-    docker run --name fit-pg -e POSTGRES_PASSWORD=dev -e POSTGRES_DB=fit -p 5432:5432 -d postgres:16 >/dev/null
-  fi
-}
-
-# ── 后端 ──────────────────────────────────────
-start_backend() {
-  echo "📦 安装依赖"
-  (cd "$BACKEND" && npm install --no-audit)
-  
-  echo "🗃  数据库迁移"
-  (cd "$BACKEND" && npx prisma migrate deploy && npx prisma generate)
-  
-  # 释放端口
-  lsof -ti :3000 | xargs kill -9 2>/dev/null || true
-  
-  echo "🚀 启动后端 :3000"
-  (cd "$BACKEND" && npm run dev) & BACKEND_PID=$!
-  sleep 2
-}
-
-# ── Tunnel ────────────────────────────────────
-ensure_tunnel() {
-  if pgrep -f "cloudflared tunnel run market-cap-radar" >/dev/null; then
-    echo "🟢 Tunnel 已在运行"
-  else
-    echo "🌐 启动 Cloudflare Tunnel"
-    cloudflared tunnel run market-cap-radar &
-    sleep 3
-  fi
-}
-
-# ── 主流程 ────────────────────────────────────
-echo "╔══════════════════════════════════════╗"
-echo "║  Fit 一键部署                        ║"
-echo "║  后端 → https://fit-api.refinely.app ║"
-echo "╚══════════════════════════════════════╝"
-
-start_db
-start_backend
-ensure_tunnel
-
-echo ""
-echo "✅ 部署完成"
-echo "   API:  https://fit-api.refinely.app"
-echo "   Ctrl+C 停止后端"
-echo ""
-echo "📱 前端安装："
-echo "   cd frontend"
-echo "   EXPO_PUBLIC_API_URL=https://fit-api.refinely.app npx expo run:ios --device"
-
-wait "$BACKEND_PID"
+./deploy/install-launchd.sh     # 首次：装依赖→迁移→build→注册自启并启动
 ```
+
+- 干什么：注册用户级 LaunchAgent `com.fit`，`RunAtLoad`（登录自启）+ `KeepAlive`（崩了自拉）。
+- 每次登录 / 崩溃后由 `deploy/run.sh` 拉起：起 DB 容器 → `prisma migrate deploy` → `node dist/index.js`（**prod**，跑预编译 dist）。
+- 前置：Docker Desktop 建议设为开机登录项，否则自启时 daemon 可能没就绪（`run.sh` 有 30s 等待 + KeepAlive 兜底重试）。
+- node 走 nvm：`run.sh` 里加载 nvm 的 default 版本，升级 node 不失效。
+
+改完后端代码要上线：
+
+```bash
+./deploy/redeploy.sh            # 重新 build + 重启 job，一条命令
+```
+
+停用自启：`./deploy/uninstall-launchd.sh`（不动 DB 和 tunnel）。
+
+### 3b. 调试（dev，改后端时用）
+
+要改后端就跑 **`./start.sh ios`**：调试后端起在 **`:9301`**（`tsx watch`，改代码自动重启）+ 模拟器连 9301。它跟 prod 的 9300 **各占一个端口，井水不犯河水**，所以调试时**不用停 prod、不用碰 launchd**。详见下方「调试后端」。
 
 ---
 
 ## Step 4: 前端环境变量
 
-在 `frontend/.env` 里固定 API 地址（Xcode build 会读这个）：
+`frontend/.env` 的 `EXPO_PUBLIC_API_URL` 决定 App 连哪个后端。自用有两种模式，按需二选一（Xcode build 时读取，改完要重装）：
 
 ```bash
 # frontend/.env
-EXPO_PUBLIC_API_URL=https://fit-api.refinely.app
+
+# 模式一 · 局域网直连（同 WiFi，最快，不依赖 tunnel）
+EXPO_PUBLIC_API_URL=http://192.168.31.10:9300
+
+# 模式二 · 公网 tunnel（出门/换网络也能用，需 Step 1-2 配好）
+# EXPO_PUBLIC_API_URL=https://fit-api.refinely.app
 ```
 
-创建后，后续 `npx expo run:ios --device` 自动用这个 URL，不用每次手打。
+> 当前 `.env` 用的是**模式一**（局域网 IP）。想让手机离开家里的 WiFi 也能用，切到模式二后 `npx expo run:ios --device` 重装即可。
 
 ---
 
 ## 日常使用
 
 ```bash
-# Mac 上
-./deploy.sh          # 一键部署后端 + tunnel
+# 后端（自启已装好后，平时啥都不用管）
+./deploy/redeploy.sh                       # 改了后端代码 → 一键重新上线
+launchctl list | grep com.fit              # 看后端在不在
+tail -f .data/launchd.log                  # 看后端日志
 
 # 前端改代码后重新装手机
-cd frontend && npx expo run:ios --device
-
-# 如果只是 JS 层热更（不改原生）
-cd frontend && npx expo start --dev-client
+cd frontend && npx expo run:ios --device   # 改了原生
+cd frontend && npx expo start --dev-client # 只改 JS，热更
 ```
 
-Tunnel 只要 Mac 不关机就一直活着。出门拿手机打开 App 就能用。
+后端自启 + tunnel 常驻：Mac 不关机，出门拿手机打开 App 就能用。
+
+## 端口备忘（两套后端并行）
+
+| 端口 | 谁 | 谁连它 |
+|---|---|---|
+| `9300` | **prod** 后端（自启常驻，tunnel 转发目标） | 公网 / 真机 |
+| `9301` | **dev** 后端（`./start.sh ios` 调试用，热重载） | 模拟器 |
+| `5432` | Postgres 容器（两套后端**共用**同一个库） | — |
+| `8081` | Expo/Metro dev server（跟后端无关，不冲突） | — |
+
+核心：prod 与 dev 各占一个端口，**互不干扰**——调试不用停 prod、不用碰 launchd。
+模拟器跑在 Mac 上，其 `localhost` 即 Mac 的 localhost，所以连 `localhost:9301` 即可。
+
+## 调试后端：一键 `./start.sh ios`
+
+```bash
+./start.sh ios
+```
+
+一条命令拉起：起 DB（复用 `fit-pg`）→ 调试后端 `:9301`（`npm run dev:local`，`tsx watch` 热重载）→ 模拟器连 `:9301`。
+改后端代码**存盘即自动重启**；`Ctrl+C` 收工，prod 的 `:9300` 全程没动。
+
+> - 9301 与 9300 **共用同一个库**（`5432/fit`）。单用户临时调试，接受共库；调试写的数据会进真实库，自己心里有数。
+> - tunnel 只转发到 9300，所以**公网 / 真机走的永远是 prod**，不受调试影响。
+> - 内联的 `EXPO_PUBLIC_API_URL` 只影响这次模拟器运行，**不动** `frontend/.env`（真机/公网那套照旧）。
+
+### 常用命令速查
+
+| 想干嘛 | 命令 |
+|---|---|
+| 调试（模拟器 + 9301 后端，热重载） | `./start.sh ios` |
+| 看 prod 在不在 | `launchctl list \| grep com.fit` |
+| 看 prod 日志 | `tail -f .data/launchd.log` |
+| 改完代码上线到 prod | `./deploy/redeploy.sh` |
+| 只重启 prod 不重建 | `launchctl kickstart -k gui/$(id -u)/com.fit` |
+| 彻底停用自启 | `./deploy/uninstall-launchd.sh` |

@@ -55,7 +55,8 @@
     "ios": "expo run:ios",
     "web": "expo start --web",
     "lint": "expo lint",
-    "test": "jest"
+    "test": "jest",
+    "release": "npx expo run:ios --device --configuration Release"
   },
   "private": true
 }
