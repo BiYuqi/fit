@@ -1,0 +1,30 @@
+name: 缺口查询——历史某天缺口必须直报（截图 bug 回归：查询渲染丢了 deficit 字段）
+# 背景：用户"昨天有没有缺口"，旧代码 query-plan 渲染只吐摄入/宏量/目标，丢了 deficit，
+# AI 上下文里没有昨天单独的缺口数，就搪塞"没提供缺口/需要补总消耗"。缺口其实恒可算（TDEE 恒定）。
+#
+# 关键：设定必须【非退化】。若昨天是本周唯一记录，本周平均缺口==昨天缺口，AI 能拿周均冒充当天，
+# 测不出 bug。故同时种今天一顿大的，把本周平均缺口拉到 -344，与昨天缺口 816 明显错开：
+#   昨天 deficit=816（唯有 per-day 渲染能给），今天 deficit=-1504，本周平均缺口=-344。
+# 旧代码上下文里只有 -1504（今日）和 -344（周均），拿不出 816 → 必红；新代码逐日渲染给 816 → 必绿。
+profile:
+  gender: male
+  age: 30
+  height_cm: 175
+  weight_kg: 70
+  activity_level: moderate
+  goal_type: cut
+  daily_deficit: 500
+setup:
+  food_record:
+    - { days_ago: 1, food: "米饭（蒸，代表值）", grams: 1500, meal_type: lunch }  # 昨天 → deficit 816
+    - { days_ago: 0, food: "米饭（蒸，代表值）", grams: 3500, meal_type: lunch }  # 今天 → deficit -1504，拉开本周平均缺口
+turns:
+  - say: "昨天有没有缺口"
+    expect:
+      intent: query
+      # 昨天当天缺口 816：旧代码上下文里根本没有这个数（只有今日 -1504、周均 -344）
+      reply_contain: ["816"]
+      reply_forbid:
+        - "没(有)?.{0,10}(提供|记录|给).{0,6}缺口"   # "昨天没有提供缺口数据"
+        - "(需要|得|要|把).{0,10}总消耗"              # "得把总消耗加进来"
+        - "总消耗.{0,6}(当成|按|算).{0,2}0"           # "没有总消耗就是0"

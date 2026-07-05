@@ -277,6 +277,12 @@ function statsLine(days: DayAgg[]): string | null {
     const over = withTarget.filter((d) => d.in > d.target!).length;
     parts.push(`超目标${over}天/${withTarget.length}天`);
   }
+  // 平均缺口（与本周卡「平均缺口」同词）：仅统计有 summary 快照的天，food 兜底天无 deficit
+  const withDeficit = days.filter((d) => d.deficit != null);
+  if (withDeficit.length > 0) {
+    const avgDef = Math.round(withDeficit.reduce((s, d) => s + (d.deficit ?? 0), 0) / withDeficit.length);
+    parts.push(`平均缺口${avgDef}kcal`);
+  }
   return `统计：${parts.join("，")}`;
 }
 
@@ -334,7 +340,9 @@ export function renderQueryResult(plan: QueryPlan, r: ResolvedRange, rows: Query
   const pushDaily = () => {
     for (const d of days) {
       const target = d.target != null && d.target > 0 ? ` 目标${d.target}kcal` : "";
-      lines.push(`${d.date} 摄入${d.in}kcal 蛋白${d.p}g 脂肪${d.f}g 碳水${d.c}g${target}`);
+      // 实际缺口（与今日进度卡「实际缺口」同词）：已含运动，food 兜底天无快照则不显示
+      const deficit = d.deficit != null ? ` 实际缺口${d.deficit}kcal` : "";
+      lines.push(`${d.date} 摄入${d.in}kcal 蛋白${d.p}g 脂肪${d.f}g 碳水${d.c}g${target}${deficit}`);
     }
   };
   const pushTotal = () => {
@@ -348,6 +356,14 @@ export function renderQueryResult(plan: QueryPlan, r: ResolvedRange, rows: Query
     if (rows.exercises.length > 0) {
       const totalOut = rows.exercises.reduce((s, e) => s + e.calories, 0);
       lines.push(`运动共${rows.exercises.length}次 消耗${totalOut}kcal`);
+    }
+    // 缺口：单日引用「实际缺口」，多天给合计+平均缺口（同今日/本周卡口径），仅统计有 summary 的天
+    const defDays = days.filter((d) => d.deficit != null);
+    if (defDays.length === 1) {
+      lines.push(`实际缺口${defDays[0].deficit}kcal`);
+    } else if (defDays.length > 1) {
+      const sum = defDays.reduce((s, d) => s + (d.deficit ?? 0), 0);
+      lines.push(`合计缺口${sum}kcal 平均缺口${Math.round(sum / defDays.length)}kcal（${defDays.length}天）`);
     }
   };
   const pushStats = () => {

@@ -118,9 +118,12 @@ test("render daily: summary 优先带目标，无 summary 天由明细聚合兜�
   }));
   assert.ok(out.includes("2026-07-01 摄入1800kcal"), out);
   assert.ok(out.includes("目标1600kcal"));
+  assert.ok(out.includes("实际缺口100kcal")); // summary 天带缺口（与今日卡同词）
   assert.ok(out.includes("2026-07-02 摄入800kcal 蛋白30g")); // 同一天两条明细正确累加
+  assert.ok(!out.includes("2026-07-02 摄入800kcal 蛋白30g 脂肪1g 碳水52g 实际缺口")); // food 兜底天无缺口
   assert.ok(out.includes("统计：记录2天"));
   assert.ok(out.includes("日均摄入1300kcal"));
+  assert.ok(out.includes("平均缺口100kcal")); // 仅 07-01 有 summary，均值=100
   assert.ok(out.includes("超目标1天/1天")); // 1800 > 1600，仅 summary 天有目标
 });
 
@@ -153,6 +156,34 @@ test("render total/by_food/report", () => {
   const report = renderQueryResult(QueryPlanSchema.parse({ range: { type: "last_n_days", n: 3 }, detail: "report" }), range, data);
   assert.ok(report.includes("统计：记录2天"));
   assert.ok(report.includes("常吃Top2"));
+});
+
+test("render total 缺口：单日给实际缺口，多天给合计+平均缺口", () => {
+  // 单日"昨天有没有缺口" → detail=total，summary 覆盖 → 实际缺口
+  const oneDay = renderQueryResult(
+    QueryPlanSchema.parse({ range: { type: "yesterday" }, detail: "total" }),
+    R,
+    rows({
+      foods: [food({ calories: 2007 })],
+      summaries: [{ date: "2026-07-03", calories_in: 2007, protein: 107, fat: 62, carbs: 258, deficit: -257, target_calories: 1750 }],
+    }),
+  );
+  assert.ok(oneDay.includes("实际缺口-257kcal"), oneDay); // 缺口为负=超支，如实给数
+  assert.ok(!oneDay.includes("合计缺口")); // 单日不给合计
+
+  const multi = renderQueryResult(
+    QueryPlanSchema.parse({ range: { type: "last_n_days", n: 2 }, detail: "total" }),
+    { from: "2026-07-02", to: "2026-07-03", days: 2, note: undefined },
+    rows({
+      foods: [food({ date: "2026-07-02" }), food({ date: "2026-07-03" })],
+      summaries: [
+        { date: "2026-07-02", calories_in: 1800, protein: 90, fat: 60, carbs: 200, deficit: 100, target_calories: 1600 },
+        { date: "2026-07-03", calories_in: 2007, protein: 107, fat: 62, carbs: 258, deficit: -257, target_calories: 1750 },
+      ],
+    }),
+  );
+  assert.ok(multi.includes("合计缺口-157kcal"), multi); // 100 + (-257)
+  assert.ok(multi.includes("平均缺口-78kcal")); // Math.round(-78.5) = -78（向 +∞ 取整）
 });
 
 test("render: 空结果明确说没有记录（含过滤条件回显）", () => {
