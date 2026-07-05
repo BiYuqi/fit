@@ -237,6 +237,6 @@ modify 的 update/append 高置信直执行，不进 pending 流程（见 AI_PAR
 | 字段 | 类型 | 语义 |
 |---|---|---|
 | user_id | uuid | PK 之一 |
-| date | date | PK 之一 |
-| weight_kg | decimal | 设置页改体重时后端顺手 append |
+| date | date | PK 之一（同一天多次上报覆盖当天那行） |
+| weight_kg | decimal | 两条写入路径：①改档案体重时后端顺手 append（静默）——**首次引导**与**设置页改体重**触发，**「重看引导」提交除外**（`is_review=true`，重看是回看/调目标不是称重，T51）；②聊天 `record_weight` 意图用户显式上报实测体重（T51，见 AI_PARSING_SPEC §13）。两者都**只**写本表，绝不改 `user.weight_kg`（初始体重） |
 | created_at | timestamptz | |

@@ -74,7 +74,8 @@ export function compressContext(pack: MemoryPack): string {
   if (p.gender) prof.push(p.gender === "male" ? "男" : "女");
   if (p.age != null) prof.push(`${p.age}岁`);
   if (p.height_cm != null) prof.push(`身高${p.height_cm}`);
-  if (p.weight_kg != null) prof.push(`体重${p.weight_kg}`);
+  if (p.weight_kg != null) prof.push(`初始体重${p.weight_kg}`);
+  if (p.latest_weight_kg != null) prof.push(`最新实测体重${p.latest_weight_kg}(${p.latest_weight_date})`);
   if (p.target_weight_kg != null) prof.push(`目标体重${p.target_weight_kg}`);
   prof.push(p.goal_type === "cut" ? "目标减脂" : "目标维持");
   if (p.daily_deficit) prof.push(`目标缺口${p.daily_deficit}`);

@@ -11,7 +11,7 @@
 - **模型升级策略（在 T05+T06 完成后实现）**：flash 默认；若任一 item `food_confidence < 0.5` 或 zod 校验失败，自动用 pro 重试一次，不再降级。前端永不指定模型。
 
 ## 2. 意图路由
-每条消息先判：`record`（记录饮食/运动）/ `query`（查自己的饮食/运动数据：任意日期/区间、某食物次数、总结回顾类，见 §11）/ `modify`（改/删/追加已有记录，见 §8）/ `discuss`（针对某条已有记录提问/质疑，不动数据，见 §9）/ `resolve_pending`（打字回答上下文里的【待确认】卡片，见 §10）/ `multi`（一条消息多个互不隶属的动作，见 §12）/ `chat`（其余闲聊/营养问题）。可与解析在同一次调用完成。
+每条消息先判：`record`（记录饮食/运动）/ `query`（查自己的饮食/运动数据：任意日期/区间、某食物次数、总结回顾类，见 §11）/ `modify`（改/删/追加已有记录，见 §8）/ `discuss`（针对某条已有记录提问/质疑，不动数据，见 §9）/ `resolve_pending`（打字回答上下文里的【待确认】卡片，见 §10）/ `record_weight`（上报自己的实测体重，见 §13）/ `multi`（一条消息多个互不隶属的动作，见 §12）/ `chat`（其余闲聊/营养问题）。可与解析在同一次调用完成。
 
 ## 3. record 解析协议
 DeepSeek 输出（strict tool schema，zod 同构校验）：
@@ -289,3 +289,14 @@ callDeepSeekCtx(pack, messages, opts)
 - 路由与确认不变（§8）：ops 里的 delete 照常免确认直删 + 事件行撤销，record/update 照常高置信自动入库 + 撤销、低置信出份量/候选卡。
 - 防御（parser 归一化，与 §3 record 空壳降级同段）：空壳 op（record 无 items/exercise、modify 缺 action/target）剔除；只剩 1 个拍平成对应单意图；全无降级 chat——硬拒会触发 pro 重试链，两个模型都犯错时整条消息兜底 chat 丢掉全部动作，比拍平更糟。
 - 一句话报多个食物（"吃了A和B"）是**一个** record 的多个 items，不是 multi；单动作消息绝不用 multi。
+
+## 13. record_weight 意图：上报实测体重（T51）
+
+用户在聊天里报自己当天称出来的体重（"今天体重77.75公斤"、"现在体重到了68了"、"早上称了154斤"）。2026-07-05 真实翻车（账号 outoftoken）：聊天里没有写体重的路径，AI 却反复承诺"我来帮你存上"，`weight_log` 始终 0 行，用户陷入死循环。
+
+**协议**：`{"intent":"record_weight","weight_kg":77.75}`。`weight_kg` 换算成公斤（"斤"÷2）、合理范围 20~500。
+
+- **只 append `weight_log` 一个历史点**（同一天多次覆盖当天那行，upsert by `(user_id, date)`），**绝不触碰 `User.weight_kg`（初始体重）/ `target_weight_kg`**——这正是用户要的"你只负责记录，不用改我的初始体重"。落地在 `intents/record-weight.ts`。
+- 与设置页那条 `upsertWeightLog`（fire-and-forget、静默失败）不同：这里是用户显式指令，写入 **awaited、失败抛异常**（由 `chat.ts` catch 转诚实报错），绝不"说存了其实没存"。回执确认已记 + 相对上次实测点/初始体重的增减趋势。
+- 边界：询问体重（"我现在多少斤"）是 `query`/`chat` 不是记录；食物/份量克数（"150克米饭"）、目标体重设定（"想减到65"）都不是 record_weight。报体重又同时报吃/动时优先 record，体重点这轮略过（ops 只收 record/modify）。
+- 上下文回填：记忆包 `profile.latest_weight_kg/date`（最近一个 `weight_log` 点）注入【用户档案】，AI 答"现在体重多少"引用实测值而非过时的档案初始体重。

@@ -40,6 +40,8 @@ interface Expect {
     exercise_record?: { where?: { type?: string } } & Record<string, unknown>; // T50：断言运动记录字段（calories_burned/duration_min 等）
     pending_record?: { type?: string } | null; // null = 断言无 open pending
     last_card?: string; // 最新 assistant 消息的 kind
+    weight_log?: { weight_kg?: number }; // 最近一个体重历史点（record_weight 写入）
+    user?: { weight_kg?: number }; // 档案字段断言：record_weight 绝不能改初始体重
   };
 }
 
@@ -218,6 +220,19 @@ async function assertTurn(userId: string, turn: Turn, resp: { intent?: string; r
       orderBy: { created_at: "desc" },
     });
     if (msg?.kind !== db.last_card) failures.push({ what: "last_card", expected: db.last_card, actual: msg?.kind ?? "无" });
+  }
+  if (db?.weight_log !== undefined) {
+    const wl = await prisma.weightLog.findFirst({ where: { user_id: userId }, orderBy: { date: "desc" } });
+    if (!wl) failures.push({ what: "weight_log", expected: db.weight_log.weight_kg ?? "(存在)", actual: "无" });
+    else if (db.weight_log.weight_kg !== undefined && Number(wl.weight_kg) !== db.weight_log.weight_kg) {
+      failures.push({ what: "weight_log.weight_kg", expected: db.weight_log.weight_kg, actual: Number(wl.weight_kg) });
+    }
+  }
+  if (db?.user !== undefined) {
+    const u = await prisma.user.findUnique({ where: { id: userId }, select: { weight_kg: true } });
+    if (db.user.weight_kg !== undefined && Number(u?.weight_kg) !== db.user.weight_kg) {
+      failures.push({ what: "user.weight_kg", expected: db.user.weight_kg, actual: Number(u?.weight_kg) });
+    }
   }
   return failures;
 }

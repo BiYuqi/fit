@@ -71,8 +71,10 @@ export interface MemoryProfile {
   gender: string | null;
   age: number | null;
   height_cm: number | null;
-  weight_kg: number | null;
+  weight_kg: number | null;          // 档案初始体重（onboarding 时填，作 BMR/趋势起点）
   target_weight_kg: number | null;
+  latest_weight_kg: number | null;   // 最近一次实测体重点（weight_log），无则 null
+  latest_weight_date: string | null; // 该实测点日期 YYYY-MM-DD
   goal_type: string;
   daily_deficit: number;
   activity_level: string | null;
@@ -165,7 +167,7 @@ export async function buildMemoryPack(user_id: string): Promise<MemoryPack> {
   const yesterday = new Date(todayDate);
   yesterday.setUTCDate(yesterday.getUTCDate() - 1);
 
-  const [user, card, foods, exercises, logs, summaryRows, liveAgg, portion_habits, pending] = await Promise.all([
+  const [user, card, foods, exercises, logs, summaryRows, liveAgg, portion_habits, pending, latestWeight] = await Promise.all([
     prisma.user.findUniqueOrThrow({ where: { id: user_id } }),
     buildContextCard(user_id),
     prisma.foodRecord.findMany({
@@ -195,6 +197,9 @@ export async function buildMemoryPack(user_id: string): Promise<MemoryPack> {
     }),
     buildPortionHabits(user_id),
     buildPendingSummary(user_id),
+    // 最近一次实测体重点（record_weight 或设置页改体重留下的）：让 AI 答"现在体重多少"
+    // 引用实测值而非档案初始体重，避免"当前记录里还是78kg"式的过时回答
+    prisma.weightLog.findFirst({ where: { user_id }, orderBy: { date: "desc" } }),
   ]);
 
   // 合并：summary 优先，没有则用 foodRecord 实时聚合
@@ -294,6 +299,8 @@ export async function buildMemoryPack(user_id: string): Promise<MemoryPack> {
       height_cm: user.height_cm != null ? Number(user.height_cm) : null,
       weight_kg: user.weight_kg != null ? Number(user.weight_kg) : null,
       target_weight_kg: user.target_weight_kg != null ? Number(user.target_weight_kg) : null,
+      latest_weight_kg: latestWeight?.weight_kg != null ? Number(latestWeight.weight_kg) : null,
+      latest_weight_date: latestWeight?.date ? latestWeight.date.toISOString().slice(0, 10) : null,
       goal_type: user.goal_type,
       daily_deficit: user.daily_deficit,
       activity_level: user.activity_level,

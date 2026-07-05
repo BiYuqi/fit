@@ -17,6 +17,10 @@ const PutBodySchema = z.object({
   goal_type: z.enum(["cut", "maintain"]).optional(),
   daily_deficit: z.number().int().min(0).max(1500).optional(),
   custom_tdee: z.number().int().min(800).max(6000).optional(),
+  // T51：本次 PUT 是否来自「重看引导」（设置页回看/调目标）。重看不是称重，
+  // 即便顺手动了体重也不该留成 weight_log 测点（否则污染 §8 TDEE 校准的地面真值）。
+  // 非档案列，落库前 destructure 剔除；只影响 append 判定。
+  is_review: z.boolean().optional(),
 });
 
 function computeDerived(user: User) {
@@ -87,7 +91,8 @@ export async function userRoutes(app: FastifyInstance) {
       return reply.status(400).send({ error: { code: "invalid_input", message: parsed.error.message } });
     }
 
-    const data = parsed.data;
+    // is_review 是控制位、非档案列，落库前剔除（否则 prisma.update 会拒绝未知字段）
+    const { is_review, ...data } = parsed.data;
 
     // 学习信号（LEARNING_SPEC §8）：体重变化时顺手留一条历史点，供 T34 地面真值校准
     let prevWeightKg: number | null = null;
@@ -105,7 +110,9 @@ export async function userRoutes(app: FastifyInstance) {
       },
     });
 
-    if (data.weight_kg !== undefined && data.weight_kg !== prevWeightKg) {
+    // append 测点的三个前提：体重有值、确实变了、且不是「重看引导」（T51，见 PutBodySchema.is_review 注释）。
+    // 首次引导（留起点）与设置页改体重（多为真称重）照常 append；聊天显式上报走 record_weight。
+    if (!is_review && data.weight_kg !== undefined && data.weight_kg !== prevWeightKg) {
       upsertWeightLog(sub, data.weight_kg);
     }
 

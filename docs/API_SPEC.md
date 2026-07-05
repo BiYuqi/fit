@@ -21,19 +21,20 @@ req: `{ account, password }` → resp: `{ token }`，凭据错误 → 401。
 resp: users 全字段 + 计算出的 `{ bmr, tdee, target_calories, target_protein }`。
 
 ### PUT /api/user/profile
-req（任意子集）：`{ name?, gender, age, height_cm, weight_kg, target_weight_kg, activity_level, goal_type?, daily_deficit? }`
-行为：保存并按 CALORIE_ENGINE 计算 bmr/tdee/targets，置 `onboarded=true`。
+req（任意子集）：`{ name?, gender, age, height_cm, weight_kg, target_weight_kg, activity_level, goal_type?, daily_deficit?, custom_tdee?, is_review? }`
+行为：保存并按 CALORIE_ENGINE 计算 bmr/tdee/targets，置 `onboarded=true`。体重变化时顺手 append `weight_log`（LEARNING_SPEC §8）。
+`is_review`（可选 bool，控制位非档案列）：本次 PUT 来自设置页「重看引导」时前端置 `true`，后端据此**跳过 weight_log append**（重看不是称重，T51）；首次引导与设置页改体重不传，照常 append。
 resp: 同 GET。
 
 ## 聊天主入口
 ### POST /api/chat/message
 req: `{ text, source: "text"|"voice" }`
-后端：判意图 → record（自动入库或生成 pending）/ query（用上下文卡回答）/ chat / modify（改/删/追加已记录，见 AI_PARSING_SPEC §8）/ discuss（针对某条记录提问，见 §9）/ resolve_pending（打字回答【待确认】卡片，见 §10）。
+后端：判意图 → record（自动入库或生成 pending）/ query（用上下文卡回答）/ chat / modify（改/删/追加已记录，见 AI_PARSING_SPEC §8）/ discuss（针对某条记录提问，见 §9）/ resolve_pending（打字回答【待确认】卡片，见 §10）/ record_weight（上报实测体重，只 append weight_log 不改档案，见 §13）/ multi（一条消息多个动作，见 §12）。
 > 每轮注入「对话记忆包」(L0/L1/L2，见 AI_PARSING_SPEC §7) 消解指代，记忆只取 ai_parse_log/事实表，不读 chat_message。
 resp:
 ```json
 {
-  "intent": "record|query|chat|modify|discuss|resolve_pending",
+  "intent": "record|query|chat|modify|discuss|resolve_pending|record_weight|multi",
   "reply": "已记录 牛肉面+鸡蛋，约 620 kcal",
   "record": { /* food_record，若高置信自动入库；modify.update / resolve_pending 返回落库或更新后的记录 */ },
   "pending": { "id": "...", "type": "portion_choice|food_choice|clarify", "candidates": [ ... ] },

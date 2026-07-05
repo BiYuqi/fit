@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 // ---------- 枚举 ----------
-export const IntentSchema = z.enum(["record", "query", "chat", "modify", "discuss", "resolve_pending"]);
+export const IntentSchema = z.enum(["record", "query", "chat", "modify", "discuss", "resolve_pending", "record_weight"]);
 export type Intent = z.infer<typeof IntentSchema>;
 
 export const ModifyActionSchema = z.enum(["update", "delete", "append"]);
@@ -130,6 +130,12 @@ export const ParseResultSchema = z.discriminatedUnion("intent", [
     intent: z.literal("resolve_pending"),
     // 用户打字回答【待确认】卡片（T38）：份量档位/食物名(string) 或自定义克数({grams})
     choice: z.union([z.string().min(1), z.object({ grams: z.number().positive() })]),
+  }),
+  z.object({
+    intent: z.literal("record_weight"),
+    // 用户口头上报当日实测体重（"今天体重77.75公斤"）：只 append weight_log 历史点，
+    // 绝不动 User.weight_kg（初始体重）与 target_weight_kg（见 LEARNING_SPEC §8）
+    weight_kg: z.number().min(20).max(500),
   }),
   z.object({
     intent: z.literal("multi"),                  // T45：一条消息多个独立动作，按序执行
@@ -285,8 +291,8 @@ export const parseToolSchema = {
       properties: {
         intent: {
           type: "string",
-          enum: ["record", "query", "chat", "modify", "discuss", "resolve_pending", "multi"],
-          description: "record=记录饮食/运动; query=查询自己的饮食/运动数据(任意日期/区间/某食物次数/总结回顾); modify=改/删/追加已记录的食物; discuss=针对某条已有记录提问/质疑(不动数据); resolve_pending=打字回答上下文里的【待确认】卡片; multi=一条消息同时包含多个独立动作(如 删某条+记录新食物)，动作放 ops 按序执行; chat=其他闲聊/营养咨询",
+          enum: ["record", "query", "chat", "modify", "discuss", "resolve_pending", "record_weight", "multi"],
+          description: "record=记录饮食/运动; query=查询自己的饮食/运动数据(任意日期/区间/某食物次数/总结回顾); modify=改/删/追加已记录的食物; discuss=针对某条已有记录提问/质疑(不动数据); resolve_pending=打字回答上下文里的【待确认】卡片; record_weight=用户上报自己当日实测体重(如'今天体重77.75公斤'、'现在体重到了68了')，只记体重历史点，不改初始/目标体重; multi=一条消息同时包含多个独立动作(如 删某条+记录新食物)，动作放 ops 按序执行; chat=其他闲聊/营养咨询",
         },
         action: actionProp,
         target: targetProp,
@@ -303,6 +309,10 @@ export const parseToolSchema = {
               properties: { grams: { type: "number" } },
             },
           ],
+        },
+        weight_kg: {
+          type: "number",
+          description: "仅 intent=record_weight 必填。用户上报的实测体重，单位公斤（'77.75公斤'/'68kg'→77.75/68；'150斤'→75）。合理范围 20~500，超出别填这个意图",
         },
         meal_type: mealTypeProp,
         scene: sceneProp,

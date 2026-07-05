@@ -13,6 +13,8 @@ function makePack(over: Partial<MemoryPack> = {}): MemoryPack {
       height_cm: 175,
       weight_kg: 70,
       target_weight_kg: 65,
+      latest_weight_kg: null,
+      latest_weight_date: null,
       goal_type: "cut",
       daily_deficit: 500,
       activity_level: "moderate",
@@ -37,6 +39,20 @@ test("compressContext 输出【本周】【本月】行（数据取自 card.week
   const out = compressContext(makePack());
   assert.match(out, /【本周】平均缺口450kcal 已记录6天/);
   assert.match(out, /【本月】平均摄入1400kcal 已记录23天/);
+});
+
+test("compressContext 有实测体重点时【用户档案】区分初始体重与最新实测体重（T51）", () => {
+  const withWeight = makePack();
+  withWeight.profile.latest_weight_kg = 77.75;
+  withWeight.profile.latest_weight_date = "2026-07-05";
+  const out = compressContext(withWeight);
+  assert.match(out, /初始体重70/);
+  assert.match(out, /最新实测体重77\.75\(2026-07-05\)/);
+
+  // 无实测点时不渲染该字段（只有初始体重）
+  const noWeight = compressContext(makePack());
+  assert.match(noWeight, /初始体重70/);
+  assert.doesNotMatch(noWeight, /最新实测体重/);
 });
 
 test("compressContext 无记录时周/月行仍输出（0天，AI 可如实说没数据）", () => {

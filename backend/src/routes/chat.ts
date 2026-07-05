@@ -12,6 +12,7 @@ import { handleQuery } from "../services/intents/query";
 import { handleModify } from "../services/intents/modify";
 import { handleRecord } from "../services/intents/record";
 import { handleResolvePending } from "../services/intents/resolve-pending";
+import { handleRecordWeight } from "../services/intents/record-weight";
 import type { IntentCtx } from "../services/intents/types";
 
 // ---------- 请求 schema ----------
@@ -179,6 +180,11 @@ export async function chatRoutes(app: FastifyInstance) {
     // ── resolve_pending（打字回答【待确认】卡片，T38）──
     if (parsed.intent === "resolve_pending") {
       return await backfillReply(await handleResolvePending(parsed, intentCtx));
+    }
+
+    // ── record_weight（上报实测体重，只 append weight_log，不动档案）──
+    if (parsed.intent === "record_weight") {
+      return await backfillReply(await handleRecordWeight(parsed, intentCtx));
     }
 
     // ── multi（一条消息多个独立动作，T45）──────────

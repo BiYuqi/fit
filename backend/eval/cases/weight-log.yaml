@@ -1,0 +1,47 @@
+# record_weight：用户口头上报实测体重 → 只 append weight_log，绝不改初始体重
+# 复刻线上账号 outoftoken 的死循环：AI 反复说"我来帮你存"却从没写库，且不该动档案体重
+name: record_weight——上报实测体重只记历史点不改档案
+profile: { weight_kg: 78, target_weight_kg: 70 }
+turns:
+  # 直白上报 → 记 weight_log，档案初始体重（78）纹丝不动
+  - say: "现在体重到了77.75了"
+    expect:
+      intent: record_weight
+      reply_contain: ["77.75"]
+      db:
+        weight_log: { weight_kg: 77.75 }
+        user: { weight_kg: 78 }
+        food_record_count: 0
+
+  # "今天体重X公斤"同样是 record_weight；同一天覆盖当天那行
+  - say: "今天体重77.6公斤"
+    expect:
+      intent: record_weight
+      db:
+        weight_log: { weight_kg: 77.6 }
+        user: { weight_kg: 78 }
+
+  # 斤→公斤换算
+  - say: "早上称了154斤"
+    expect:
+      intent: record_weight
+      db:
+        weight_log: { weight_kg: 77 }
+        user: { weight_kg: 78 }
+
+  # 询问体重不是记录：不得写库、不得当 record_weight
+  - say: "我现在体重多少"
+    expect:
+      intent: [query, chat]
+      db:
+        weight_log: { weight_kg: 77 }
+        user: { weight_kg: 78 }
+
+  # 食物克数不是体重：绝不能误判成 record_weight
+  - say: "中午吃了150克米饭"
+    expect:
+      intent: record
+      db:
+        food_record: { where: { food_name: "米饭" } }
+        weight_log: { weight_kg: 77 }
+        user: { weight_kg: 78 }

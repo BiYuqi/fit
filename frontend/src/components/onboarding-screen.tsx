@@ -195,6 +195,11 @@ export function OnboardingScreen({ onComplete, initialData }: Props) {
       if (customTdee !== null) {
         body.custom_tdee = customTdee;
       }
+      // T51：有 initialData = 从设置页「重看引导」进来的（首次引导不传 initialData）。
+      // 重看是回看/调目标，不是称重——告诉后端别把这次的体重当 weight_log 测点。
+      if (initialData != null) {
+        body.is_review = true;
+      }
       const resp = await apiFetch<ProfileResp>('/api/user/profile', {
         method: 'PUT',
         token,
