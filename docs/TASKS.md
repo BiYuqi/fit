@@ -133,7 +133,7 @@ T01 → T02 → T03 → T04 → T05 → T06 → T07(✅M1)
 | ✅ | T46 | tasks/T46-meal-card-backend.md | 餐食卡后端：一餐一卡(日期+餐次) + food_record 实时组装 + created_at 跟随 |
 | ✅ | T47 | tasks/T47-meal-card-refresh.md | 餐食卡原地刷新：modify/删除/撤销全路径 + 前端按 id upsert 重排序 |
 | ✅ | T48 | tasks/T48-meal-card-ui.md | MealCard 组件：折叠汇总/展开明细/项级撤销/已清空态 |
-| ✅ | T49 | tasks/T49-chat-noise-reduction.md | 聊天降噪：回执降级事件行 + 免确认删除可撤销 + 量词删除解析为减量 |
+| ✅ | T49 | tasks/T49-chat-noise-reduction.md | 聊天降噪：回执降级事件行 + 免确认删除可撤销 + 量词删除解析为减量（补记④：份量确认回执直接去掉） |
 | ✅ | T50 | tasks/T50-record-exercise-calories.md | 录入采信：record 阶段直采用户自报运动消耗（"打球65分钟消耗590卡"一步落库） |
 | ✅ | T51 | tasks/T51-record-weight.md | 体重记录：聊天 record_weight 只 append weight_log 不改初始体重 + 最新实测点入上下文 + 重看引导不当测点 |
 | ✅ | T52 | tasks/T52-meal-card-count.md | 餐食卡份数：AI 出结构化 count/count_unit，明细主显示 `食物名 ×N` 替代 raw_input 长文案 |

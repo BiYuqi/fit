@@ -47,7 +47,7 @@
 ## 改动清单
 
 - `backend/src/services/intents/modify.ts`：delete 直删（共享 executeDelete）+ event 产出；update/append 回复降级 event（delta 文案）。
-- `backend/src/services/pending-resolve.ts`：delete_confirm 删除逻辑抽出为共享函数，分支本身保留（存量兼容）。
+- `backend/src/services/pending-resolve.ts`：delete_confirm 删除逻辑抽出为共享函数，分支本身保留（存量兼容）；**份量/候选确认落库后不再产「已确认：…」文本回执**（见补记④）。
 - `backend/src/routes/`：event 撤销/恢复接口（重建记录）。
 - `backend/src/ai/schema.ts`：action 描述补量词规则。
 - `frontend/src/types/chat.ts`：event kind + payload 类型。
@@ -65,3 +65,15 @@
 5. 历史消息：旧 delete_confirm_card / 旧 text 回执照常显示；存量未处理的确认卡仍可点确认/取消。
 6. 运动记录删除同样免确认 + 可恢复。
 7. `npm test`、`tsc` 前后端通过；全量 `npm run eval` 无回归（量词新案例通过）。
+
+## 补记 ④ — 份量确认回执也降噪（2026-07-05 真机截图补立项）
+
+**问题**：T49 只降级了 delete/modify 回执，漏了**份量/候选确认回执**。用户说模糊份量（"喝了2口安慕希酸奶"）→ 选份量卡 → 确认后仍产一条全尺寸白气泡「已确认：安慕希酸奶 20g（约 18 kcal）」。而下方 meal_card 已原地列出该项，这条回执纯冗余——和 T49 要消灭的是同一类噪音。
+
+**决定**：直接**去掉这条文本回执**，不降级为事件行。理由：meal_card 原地 upsert 本身就是"已录入"的视觉反馈；份量是用户刚亲手选的，无删除那种撤销诉求，再补一条事件行仍是噪音。resolve 后聊天流只留刷新后的该餐卡。
+
+**改动**：`pending-resolve.ts` 落库分支删除 `confirmMsg`（原 `已确认：…` text 消息），`messages` 从 `[confirmMsg]` 改为 `[]` 后交给 `refreshMealCard`。`refreshMealCard` 默认 `createIfMissing:true` 且记录刚落库，卡必然存在/新建，`messages` 稳定只含该餐卡，无空数组边界。
+
+**兼容**：历史里旧的「已确认」气泡照常回放（铁律3，不迁移），只是不再新增。
+
+**验收**：说模糊份量 → 选份量 → 聊天流只多刷新后的餐卡，无「已确认」气泡；`tsc` + `npm test`（132）通过；不碰解析，eval 断言的 intent/action 不受影响。

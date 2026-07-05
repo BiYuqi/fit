@@ -272,18 +272,9 @@ export async function resolvePendingRecord(params: {
   await recompute(user_id, today);
   const summary_card = await buildContextCard(user_id);
 
-  // 落库确认走文本确认 + 该餐 meal_card upsert。
-  // 时序：先文本后卡片 bump，保证卡片排在本轮回复之后、聊天流最末（卡片跟随）。
-  const confirmMsg = await prisma.chatMessage.create({
-    data: {
-      user_id,
-      date: dateObj,
-      role: "assistant",
-      kind: "text",
-      content: `已确认：${food.name} ${weight_g}${resolved_unit}（约 ${Math.round(nutrition.calories)} kcal）`,
-    },
-  });
-  const messages: ChatMessage[] = [confirmMsg];
+  // 份量确认不再产文本回执（T49 降噪同类，当时漏掉此 case）：meal_card 原地 upsert 就是"已录入"的视觉反馈，
+  // 用户刚亲手选的份量、无撤销诉求，再发一条「已确认：…」全气泡纯属噪音。聊天流只余刷新后的该餐卡。
+  const messages: ChatMessage[] = [];
   await refreshMealCard(messages, { user_id, mealDate: today, meal_type, chatDate: dateObj });
 
   return { ok: true, record, summary_card, messages, action };
