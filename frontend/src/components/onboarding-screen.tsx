@@ -38,7 +38,8 @@ const PACE_OPTIONS = [
 
 const GOAL_TYPE_OPTIONS = [
   { value: 'cut' as const, label: '减脂', desc: '创造热量缺口，逐步降低体重', icon: { ios: 'arrow.down.circle' as const, android: 'trending_down' as const, web: 'trending_down' as const } },
-  { value: 'maintain' as const, label: '维持', desc: '保持当前体重，摄入约等于消耗', icon: { ios: 'equal.circle' as const, android: 'balance' as const, web: 'balance' as const } },
+  // 维持模式暂隐藏（引导只做减脂，goal_type 默认 cut）。恢复时取消下一行注释即可。
+  // { value: 'maintain' as const, label: '维持', desc: '保持当前体重，摄入约等于消耗', icon: { ios: 'equal.circle' as const, android: 'balance' as const, web: 'balance' as const } },
 ];
 
 const ACTIVITY_COEFF: Record<string, number> = {

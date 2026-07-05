@@ -67,7 +67,8 @@ const GENDER_OPTIONS = [
 
 const GOAL_OPTIONS = [
   { value: 'cut' as const, label: '减脂' },
-  { value: 'maintain' as const, label: '维持' },
+  // 维持模式暂隐藏（goal_type 仍支持 maintain，但当前只做减脂）。恢复时取消下一行注释即可。
+  // { value: 'maintain' as const, label: '维持' },
 ];
 
 const DEFICIT_MIN = 150;
