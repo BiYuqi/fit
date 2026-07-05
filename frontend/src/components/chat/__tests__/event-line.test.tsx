@@ -43,7 +43,7 @@ describe('EventLine', () => {
   it('删除事件：显示文案 + 撤销按钮', () => {
     render(<EventLine payload={basePayload()} messageId="m1" />);
     expect(screen.getByText('已删除 李子 · -38 kcal')).toBeOnTheScreen();
-    expect(screen.getByText('· 撤销')).toBeOnTheScreen();
+    expect(screen.getByText('撤销')).toBeOnTheScreen();
   });
 
   it('点撤销：调用 undoEvent(messageId, token)', async () => {
@@ -51,7 +51,7 @@ describe('EventLine', () => {
     mockUseChatStore.mockReturnValue(createMockChatStore({ undoEvent }));
     render(<EventLine payload={basePayload()} messageId="m1" />);
     await act(async () => {
-      fireEvent.press(screen.getByText('· 撤销'));
+      fireEvent.press(screen.getByText('撤销'));
     });
     expect(undoEvent).toHaveBeenCalledWith('m1', expect.anything());
   });
@@ -59,7 +59,7 @@ describe('EventLine', () => {
   it('已撤销态：显示「已撤销」灰态，不再渲染撤销按钮', () => {
     render(<EventLine payload={basePayload({ undone: true })} messageId="m1" />);
     expect(screen.getByText('· 已撤销')).toBeOnTheScreen();
-    expect(screen.queryByText('· 撤销')).toBeNull();
+    expect(screen.queryByText('撤销')).toBeNull();
   });
 
   it('modified 事件（无 undo）：只显示文案，不渲染撤销按钮', () => {
@@ -70,6 +70,6 @@ describe('EventLine', () => {
       />,
     );
     expect(screen.getByText('已修改：米饭 100g → 200g（+130 kcal）')).toBeOnTheScreen();
-    expect(screen.queryByText('· 撤销')).toBeNull();
+    expect(screen.queryByText('撤销')).toBeNull();
   });
 });

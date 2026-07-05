@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { StyleSheet, TouchableOpacity, View } from 'react-native';
+import { SymbolView } from 'expo-symbols';
 import { ThemedText } from '@/components/themed-text';
+import { useTheme } from '@/hooks/use-theme';
 import { useChatStore } from '@/stores/chat-store';
 import { useAuthStore } from '@/stores/auth-store';
 import type { EventCardPayload } from '@/types/chat';
@@ -10,6 +12,7 @@ import type { EventCardPayload } from '@/types/chat';
 export function EventLine({ payload, messageId }: { payload: EventCardPayload; messageId: string }) {
   const { undoEvent } = useChatStore();
   const { token } = useAuthStore();
+  const colors = useTheme();
   const [isUndoing, setIsUndoing] = useState(false);
 
   const canUndo = !!payload.undo && !payload.undone;
@@ -30,11 +33,22 @@ export function EventLine({ payload, messageId }: { payload: EventCardPayload; m
         {payload.text}
       </ThemedText>
       {canUndo && (
-        <TouchableOpacity onPress={handleUndo} disabled={isUndoing} activeOpacity={0.6}>
-          <ThemedText themeColor="textSecondary" style={styles.undoText}>
-            {' '}· 撤销
+        <>
+          <ThemedText themeColor="textSecondary" style={styles.text}>
+            {' '}·{' '}
           </ThemedText>
-        </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.undoBtn}
+            onPress={handleUndo}
+            disabled={isUndoing}
+            activeOpacity={0.6}
+          >
+            <SymbolView name="arrow.uturn.backward" size={11} tintColor={colors.textSecondary} />
+            <ThemedText themeColor="textSecondary" style={styles.undoText}>
+              撤销
+            </ThemedText>
+          </TouchableOpacity>
+        </>
       )}
       {payload.undone && (
         <ThemedText themeColor="textSecondary" style={styles.undoneText}>
@@ -59,10 +73,14 @@ const styles = StyleSheet.create({
     fontSize: 12,
     textAlign: 'center',
   },
+  undoBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+  },
   undoText: {
     fontSize: 12,
     fontWeight: '600',
-    textDecorationLine: 'underline',
   },
   undoneText: {
     fontSize: 12,
