@@ -514,7 +514,7 @@ function DateCard({
             <ThemedText style={styles.dateChevron} themeColor="textTertiary">
               {chevron}
             </ThemedText>
-            <ThemedText style={styles.dateLabel}>{dateLabel()}</ThemedText>
+            <ThemedText style={styles.dateLabel} numberOfLines={1}>{dateLabel()}</ThemedText>
             {!expanded && totalItems > 0 && (
               <ThemedText themeColor="textTertiary" style={styles.dateSummary}>
                 {totalItems} 条记录
@@ -559,13 +559,6 @@ function DateCard({
       else dayMap.get(d)!.hasExercise = true;
     }
     const days = Array.from(dayMap.entries()).sort(([a], [b]) => a.localeCompare(b));
-    const activeDays = days.length;
-    const collapsedHint = () =>
-      activeDays > 0 ? (
-        <ThemedText themeColor="textTertiary" style={styles.dateSummary}>
-          {activeDays} 天
-        </ThemedText>
-      ) : null;
 
     return (
       <GlassCard style={styles.listCard}>
@@ -577,8 +570,7 @@ function DateCard({
             <ThemedText style={styles.dateChevron} themeColor="textTertiary">
               {chevron}
             </ThemedText>
-            <ThemedText style={styles.dateLabel}>{dateLabel()}</ThemedText>
-            {!expanded && collapsedHint()}
+            <ThemedText style={styles.dateLabel} numberOfLines={1}>{dateLabel()}</ThemedText>
           </View>
           <ThemedText style={[styles.dateDeficit, { color: deficit >= 0 ? colors.ok : colors.warn }]}>
             缺口 {deficit >= 0 ? '−' : '+'}{fmt(Math.abs(deficit))}
@@ -619,7 +611,7 @@ function DateCard({
           <ThemedText style={styles.dateChevron} themeColor="textTertiary">
             {chevron}
           </ThemedText>
-          <ThemedText style={styles.dateLabel}>{dateLabel()}</ThemedText>
+          <ThemedText style={styles.dateLabel} numberOfLines={1}>{dateLabel()}</ThemedText>
           {!expanded && collapsedHint()}
         </View>
         <ThemedText style={[styles.dateDeficit, { color: deficit >= 0 ? colors.ok : colors.warn }]}>
@@ -1002,7 +994,7 @@ const styles = StyleSheet.create({
   },
   dateChevron:  { fontSize: 10, width: 12 },
   dateSummary:  { fontSize: 12, flexShrink: 1 },
-  dateLabel:    { fontSize: 14, fontWeight: '600' },
+  dateLabel:    { fontSize: 14, fontWeight: '600', flexShrink: 1 },
   dateDeficit:  { fontSize: 13, fontWeight: '600' },
 
   // ── Record row ─────────────────────────────────────────────────
