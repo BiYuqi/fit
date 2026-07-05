@@ -29,6 +29,8 @@ export function ChatInput({ onSend, isSending }: Props) {
   const inputRef = useRef<TextInput>(null);
   const voiceSetRef = useRef(false);
   const initialTextRef = useRef('');
+  // 发送时置位：停止录音后可能还会补一个 final result，忽略它以免把已清空的输入框重新填上
+  const suppressResultRef = useRef(false);
   const scheme = useColorScheme();
   const isDark = scheme === 'dark';
   const colors = Colors[isDark ? 'dark' : 'light'];
@@ -36,12 +38,15 @@ export function ChatInput({ onSend, isSending }: Props) {
   const blurTint = isDark ? 'systemChromeMaterialDark' : 'systemChromeMaterialLight';
 
   const handleSend = () => {
-    // 录音中点击发送 → 停止录音，清空识别文本，不发送
+    // 录音中点击发送 → 先停止录音，再把已识别的文本发出去
     if (isListening) {
+      suppressResultRef.current = true;
       ExpoSpeechRecognitionModule.stop();
+      const trimmed = text.trim();
       initialTextRef.current = '';
       setText('');
       setResetKey(k => k + 1);
+      if (trimmed && !isSending) onSend(trimmed);
       return;
     }
     const trimmed = text.trim();
@@ -75,9 +80,13 @@ export function ChatInput({ onSend, isSending }: Props) {
   };
 
   // ── Voice input ──────────────────────────────────────────────
-  useSpeechRecognitionEvent('start', () => setIsListening(true));
+  useSpeechRecognitionEvent('start', () => {
+    suppressResultRef.current = false;
+    setIsListening(true);
+  });
   useSpeechRecognitionEvent('end', () => setIsListening(false));
   useSpeechRecognitionEvent('result', (event) => {
+    if (suppressResultRef.current) return;
     if (event.results[0]?.transcript) {
       voiceSetRef.current = true;
       setText(initialTextRef.current + event.results[0].transcript);
@@ -152,7 +161,7 @@ export function ChatInput({ onSend, isSending }: Props) {
         <TouchableOpacity
           testID="send-btn"
           onPress={handleSend}
-          disabled={!canSend}
+          disabled={!canSend && !isListening}
           activeOpacity={0.7}
           style={[styles.circleClip, canSend && { backgroundColor: glass.tint }]}>
           {!canSend && (

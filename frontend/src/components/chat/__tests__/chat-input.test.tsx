@@ -174,14 +174,40 @@ describe('existing text preserved', () => {
 
 // ─── Send during recording ─────────────────────────────────────────────────
 describe('send during recording', () => {
-  it('send while listening stops voice and clears text', async () => {
-    renderInput();
-    typeText('临时');
+  it('send while listening stops voice AND sends recognized text', async () => {
+    const onSend = jest.fn();
+    renderInput({ onSend });
+    fireVoiceEvent('start');
+    fireVoiceResult('语音识别的文字');
+
+    await tapSend();
+
+    expect(mockSpeech.stop).toHaveBeenCalled();
+    expect(onSend).toHaveBeenCalledWith('语音识别的文字');
+    expect(screen.getByPlaceholderText(/记录你吃了/).props.value).toBe('');
+  });
+
+  it('send while listening with empty transcript stops voice, sends nothing', async () => {
+    const onSend = jest.fn();
+    renderInput({ onSend });
     fireVoiceEvent('start');
 
     await tapSend();
 
     expect(mockSpeech.stop).toHaveBeenCalled();
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it('trailing final result after send does not refill the input', async () => {
+    const onSend = jest.fn();
+    renderInput({ onSend });
+    fireVoiceEvent('start');
+    fireVoiceResult('已识别');
+
+    await tapSend();
+    // stop() 后系统补发的 final result 应被忽略
+    fireVoiceResult('已识别的最终版本');
+
     expect(screen.getByPlaceholderText(/记录你吃了/).props.value).toBe('');
   });
 
