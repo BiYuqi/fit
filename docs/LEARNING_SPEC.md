@@ -107,20 +107,20 @@ function applyBias(grams: number, b: { food?: Bias; category?: Bias; scene?: Bia
 ## 6. 学到的东西如何影响下次预测（三路径）
 
 1. **克数修正**（主路径，后端确定性）：applyBias 调整 portions 各档克数。
-2. **食物直连**：`user_food_alias` 中 `(canonical→food_id)` **streak ≥ 2** 时跳过 CandidateCard 直接入库（配逃生口，见 §7）。
+2. **食物直连**：`user_food_alias` 中 `(canonical→food_id)` **streak ≥ 2** 时跳过 CandidateCard 直接入库（匹配错了走自然语言纠错/撤销清零 streak，见 §7）。
 3. **提示词辅助**（只影响 chosen_label，不给数字）：`compressContext` 加一行【份量习惯】如"牛肉面:常选大份"。
 
 ## 7. 配套交互与提示词变更（必做，防半吊子）
 
 | 变更 | 阶段 | 内容 |
 |---|---|---|
-| 逃生口 | T30 | 习惯直连的 record_card 带 `matched_by_habit:true`，文案"已按你的习惯记为「X」"，卡上「不是它？」→ 重弹 CandidateCard + streak 清零 |
+| 直连纠错 | T30 | 习惯直连自动匹配错了时，用户自然语言改食物（modify.update `change.food`）或撤销该记录 → 清零 streak「重新观察」，需再连续选够 streak 次才重新跳卡 |
 | undo 联动 | T30 | 习惯直连记录被撤销 → 同时 streak 清零（UI 撤销了模型也要撤销）；modify 改食物同理清 streak |
 | discuss 注入 | T31 | **必改，否则幻觉**：answerDiscuss 注入偏差说明（"AI 原估 420g，按你历史习惯调整为 480g"），数据取 `food_record.predicted_grams`（比查 learning_event 更简单，且覆盖尚无事件的 auto_commit 记录） |
-| payload | T31 | record_card / portion_card 带 `bias_applied:{from,to}`，前端可不展示，discuss/debug 用 |
+| payload | T31 | portion_card 带 `bias_applied:{from,to}`，前端可不展示，discuss/debug 用 |
 | 【份量习惯】 | T31 | compressContext 加一行 |
 | scene 字段 | T32 | parser record 协议加 `scene`（strict schema + zod + prompt 示例），同步 AI_PARSING_SPEC §3 |
-| 属性修正自愈 | T40 | modify.update change.food_desc 产生新估算条目后 `upsertFoodAlias(user, 原食物名→新food_id)`，streak 从 1 起，下次同名食物 streak≥2 后食物直连命中修正版；与 T30 逃生口/undo 联动共用同一套 alias 机制 |
+| 属性修正自愈 | T40 | modify.update change.food_desc 产生新估算条目后 `upsertFoodAlias(user, 原食物名→新food_id)`，streak 从 1 起，下次同名食物 streak≥2 后食物直连命中修正版；与 T30 直连纠错/undo 联动共用同一套 alias 机制 |
 
 parse 主提示词在 T29–T31 期间零改动。
 

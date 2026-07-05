@@ -4,7 +4,6 @@ import { MarkdownText } from './markdown-text';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { FontSize, Glass, Radius, Spacing } from '@/constants/theme';
 import { UserBubble } from './user-bubble';
-import { RecordCard } from './record-card';
 import { MealCard } from './meal-card';
 import { PortionCard } from './portion-card';
 import { CandidateCard } from './candidate-card';
@@ -14,7 +13,6 @@ import { DeleteConfirmCard } from './delete-confirm-card';
 import { EventLine } from './event-line';
 import type {
   ChatMessage,
-  RecordCardPayload,
   MealCardPayload,
   PortionCardPayload,
   CandidateCardPayload,
@@ -93,9 +91,6 @@ export const MessageItem = memo(function MessageItem({ message, isLast }: { mess
   const p = message.payload;
 
   switch (message.kind) {
-    case 'record_card':
-      return <RecordCard payload={p as RecordCardPayload} mealType={(p as RecordCardPayload)?.meal_type} messageId={message.id} recordId={message.record_id} />;
-
     case 'meal_card':
       return p ? <MealCard payload={p as unknown as MealCardPayload} messageId={message.id} /> : null;
 
@@ -111,11 +106,6 @@ export const MessageItem = memo(function MessageItem({ message, isLast }: { mess
 
     case 'clarify_card':
       return <ClarifyCard payload={p as ClarifyCardPayload} />;
-
-    // 进度卡已下线：query 回复一律纯文本气泡。历史里旧的 query_card 消息也降级为文本
-    // （content 自包含数字，直接显示即可），不再渲染进度卡。
-    case 'query_card':
-      return <AiTextBubble content={message.content} />;
 
     case 'exercise_card':
       return p ? <ExerciseCard payload={p as unknown as ExerciseCardPayload} messageId={message.id} /> : null;

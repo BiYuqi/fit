@@ -8,7 +8,6 @@ import { chatRoutes } from "./routes/chat";
 import { chatHistoryRoutes } from "./routes/chat-history";
 import { pendingRoutes } from "./routes/pending";
 import { recordsRoutes } from "./routes/records";
-import { learningRoutes } from "./routes/learning";
 import { dailyRoutes } from "./routes/daily";
 
 const app = Fastify({ logger: true });
@@ -25,7 +24,6 @@ app.register(chatRoutes);
 app.register(chatHistoryRoutes);
 app.register(pendingRoutes);
 app.register(recordsRoutes);
-app.register(learningRoutes);
 app.register(dailyRoutes);
 
 // 公共路由

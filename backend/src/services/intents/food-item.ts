@@ -277,10 +277,9 @@ export async function processFoodItem(item: FoodItem, ctx: ItemCtx): Promise<Ite
       );
     }
 
-    // T46/T47：入库不再逐食材发 record_card——卡片由调用方（record/append）统一挂该餐 meal_card，
+    // 入库不逐食材发卡——卡片由调用方（record/append）统一挂该餐 meal_card，
     // 卡片级撤销由 meal_card 的 payload.last_change 承载。
-    // matched_by_habit 的「不是它？」逃生口随 record_card 一并下线（alias 学习本身不受影响：
-    // 直连命中仍写 alias_canonical，用户自然语言改食物时照旧触发 streak 清零）。
+    // alias 学习不受影响：直连命中仍写 alias_canonical，用户自然语言改食物时照旧触发 streak 清零。
     return {
       record,
       replyPart: `${food.name} ${weight_g}${unit}（约 ${Math.round(nutrition.calories)} kcal）`,

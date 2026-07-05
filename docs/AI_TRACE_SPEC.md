@@ -412,7 +412,7 @@ AI 理解成了什么。
 
 | 值 | 含义 | 用户看到什么 |
 |---|---|---|
-| `auto_commit` | 食物高置信 + 份量高置信，直接入库 | record_card |
+| `auto_commit` | 食物高置信 + 份量高置信，直接入库 | meal_card（刷新该餐卡） |
 | `candidate_card` | 食物有歧义（is_ambiguous 或 calorie_spread > 100） | candidate_card，列出候选 |
 | `portion_card` | 食物唯一但份量不确定 | portion_card，小/中/大选择 |
 | `clarify_card` | 食物低置信（< 0.5），解析失败兜底 | clarify_card |

@@ -32,7 +32,7 @@
 
 ## 6. 端到端一致性（最重要）
 - 在 Chat 记一餐 → Today 的摄入/缺口随之更新 → History 当天出现该记录。
-- 改/删某条 food_record → Today/History 同步，且对应 record_card 显示回填/"已删除"。
+- 改/删某条 food_record → Today/History 同步，且对应 meal_card 明细同步更新/整卡"已清空"。
 - **删 chat_message 不影响任何热量统计**（事实层 vs 展示层验证）。
 
 ## 7. 聊天持久化与保留

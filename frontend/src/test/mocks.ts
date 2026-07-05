@@ -34,7 +34,6 @@ export interface ChatStoreState {
   jumpTarget: { type: string; id?: string; date?: string } | null;
   undo: ReturnType<typeof jest.fn>;
   undoEvent: ReturnType<typeof jest.fn>;
-  resetAlias: ReturnType<typeof jest.fn>;
   send: ReturnType<typeof jest.fn>;
   resolve: ReturnType<typeof jest.fn>;
   loadRecentMessages: ReturnType<typeof jest.fn>;
@@ -53,7 +52,6 @@ export function createMockChatStore(overrides: Partial<ChatStoreState> = {}): Ch
     jumpTarget: null,
     undo: jest.fn(),
     undoEvent: jest.fn(),
-    resetAlias: jest.fn(),
     send: jest.fn(),
     resolve: jest.fn(),
     loadRecentMessages: jest.fn(),

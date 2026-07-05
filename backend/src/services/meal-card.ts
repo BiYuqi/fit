@@ -74,8 +74,8 @@ export function buildMealCardView(records: MealCardRecord[]): MealCardView {
   return { items, totals, item_count: items.length };
 }
 
-// last_change（T47）：卡片单槽撤销信息。prev_state 有 = update 撤销（还原），无 = append 撤销（删除），
-// 语义同 record_card 时代的 payload.undo。再次修改覆盖，撤销后清除。
+// last_change（T47）：卡片单槽撤销信息。prev_state 有 = update 撤销（还原），无 = append 撤销（删除）。
+// 再次修改覆盖，撤销后清除。
 export type MealCardLastChange = { record_id: string; prev_state?: Record<string, unknown> };
 
 export interface UpsertMealCardParams {

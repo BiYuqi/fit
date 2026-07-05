@@ -268,7 +268,7 @@ export async function resolvePendingRecord(params: {
   await recompute(user_id, today);
   const summary_card = await buildContextCard(user_id);
 
-  // T46：落库确认不再发独立 record_card，改为文本确认 + 该餐 meal_card upsert。
+  // 落库确认走文本确认 + 该餐 meal_card upsert。
   // 时序：先文本后卡片 bump，保证卡片排在本轮回复之后、聊天流最末（卡片跟随）。
   const confirmMsg = await prisma.chatMessage.create({
     data: {

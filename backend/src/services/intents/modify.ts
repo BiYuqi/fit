@@ -321,7 +321,7 @@ export async function handleModify(
   });
   messages.push(aiMsg);
 
-  // T47：不再新建 record_card，改为原地刷新该餐 meal_card。改餐次是双卡刷新：
+  // 修改走原地刷新该餐 meal_card。改餐次是双卡刷新：
   // 旧餐卡少一项（只 bump 已存在的），新餐卡多一项；撤销信息写进目标餐卡 last_change
   // （单槽：再次修改覆盖，撤销后由 undo 接口清除）。跨天修改刷的是记录归属日那张卡。
   const mealDate = rec.date.toISOString().slice(0, 10);

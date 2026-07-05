@@ -54,9 +54,6 @@ modify 行为（AI_PARSING_SPEC §8；卡片语义 T47 起为 meal_card 原地�
 ```
 前端渲染为居中小字（非气泡），`undo` 存在且 `undone=false` 时带内联撤销按钮；`event_type=deleted` 撤销调 `/api/chat/events/:id/undo`，`event_type=modified` 没有 `undo`（撤销走该餐 meal_card 的 `last_change`）。存量 `delete_confirm_card`/纯文本回执按原样回放（不迁移）。
 
-`record_card.payload` 基础字段：`{ food_name, weight_g, unit, calories, protein_g, fat_g, carbs_g, is_estimated, meal_type }`。`meal_type` 为该记录餐次（breakfast/lunch/dinner/snack），前端卡片据此显示"午餐 · 80g"；历史消息可能缺失，缺失时前端不显示餐次（不得兜底成某个具体餐次）。
-> T46 起 record / resolve 入库不再逐食材发 record_card，改为该餐的 `meal_card`（modify.append 在 T47 接入前仍发 record_card）；历史 record_card 照旧渲染。
-
 `meal_card.payload`（T46，一餐一卡）：落库只存 `{ meal_key: { date, meal_type }, last_change }`；接口返回时后端从 food_record 实时组装补上：
 ```json
 {
@@ -68,14 +65,9 @@ modify 行为（AI_PARSING_SPEC §8；卡片语义 T47 起为 meal_card 原地�
 }
 ```
 明细主显示用 `raw_input`（用户原话子句，自然单位天然保留），`food_name + weight_g` 作兜底/副信息；`items: []` 表示该餐记录已全删光（渲染"已清空"态）。内容变更时同一条消息 `created_at` 刷新（卡片跟随），POST 响应与 GET 都会返回其最新组装态。
-`last_change`（T47）：该餐最近一次 modify 的撤销信息（单槽：再次修改覆盖、撤销后清除），有 `prev_state` = update 撤销（还原），无 = append 撤销（删除）——语义同旧 `record_card.payload.undo`，T48 据此在展开态渲染对应项的撤销按钮，点按调 `/api/records/:id/undo`。
+`last_change`（T47）：该餐最近一次 modify 的撤销信息（单槽：再次修改覆盖、撤销后清除），有 `prev_state` = update 撤销（还原），无 = append 撤销（删除），T48 据此在展开态渲染对应项的撤销按钮，点按调 `/api/records/:id/undo`。
 
-用户食物直连命中时（LEARNING_SPEC §6 §7，T30），**历史** `record_card.payload` 额外带：
-```json
-{ "matched_by_habit": true, "escape": { "canonical", "portions", "chosen_label", "ai_candidates?" } }
-```
-前端据此显示"已按你的习惯记为「X」"+「不是它？」按钮；点击时把 `escape` 的字段连同 `canonical`/`record_id` 传给 `/api/learning/alias/reset`（见下）。
-> T47 起入库不再发 record_card，「不是它？」按钮随之只存在于历史卡片；直连纠错走自然语言改食物（modify.update `change.food`），同样触发 streak 清零。`/api/learning/alias/reset` 保留服务历史卡片。
+用户食物直连命中（LEARNING_SPEC §6 §7，T30）时不再有专门的「不是它？」按钮：直连纠错走自然语言改食物（modify.update `change.food`）或撤销该记录，两者都触发 alias streak 清零（见 LEARNING_SPEC §7）。
 
 resolve_pending 行为（AI_PARSING_SPEC §10，T38）：用户打字回答【待确认】卡片（不点卡）时命中。内部复用 `/api/pending/:id/resolve` 同一套落地逻辑（份量卡/候选卡/删除确认三分支），返回其产出的卡片消息 + `resolved_pending_id`；无待确认或卡片已过期（>5分钟）时不落任何数据，只回一句提示文本。
 
@@ -86,7 +78,7 @@ resp: `{ record?, summary_card, messages }`。落库确认时（T46）messages =
 > `delete_confirm` 分支（T49 起）只服务存量未 resolve 的旧卡片；免确认删除不再产生新的 `pending(type=delete_confirm)`，见上方 modify.delete 行为与 `event`。
 
 ### POST /api/records/:id/undo
-撤销 modify 的 update/append（见 AI_PARSING_SPEC §8），由 `meal_card.payload.last_change` 驱动（历史 `record_card.payload.undo` 仍兼容）。
+撤销 modify 的 update/append（见 AI_PARSING_SPEC §8），由 `meal_card.payload.last_change` 驱动。
 req: `{ prev_state? }`——带 `prev_state{food_id,portion_label,weight_g,meal_type?,calories?,protein?,fat?,carbs?,calories_source?}` → 还原（update 撤销）；不带 → 删该记录（append 撤销）。
 `calories/protein/fat/carbs/calories_source`（T40）若齐全，直接还原这些精确值，不按 food×grams 重算——`change.calories`（用户真值覆盖）产生的记录，重算值会不同于落库值，必须精确还原。
 行为：还原/删记录后重算 daily_summary；若该记录 `alias_canonical` 非空，联动清零对应用户食物直连的 streak（见 LEARNING_SPEC §7）。
@@ -96,12 +88,6 @@ resp: `{ ok, summary_card, messages }`（T47 新增 messages）——受影响�
 撤销 modify 的 delete 免确认删除。message_id 是那条 `kind=event`（`event_type=deleted`）的 chat_message id；prev_state 从该消息自身的 `payload.undo.prev_state` 读取，请求体为空。
 行为：按快照重建记录（**新 id**，食物/运动记录同理）→ 重算 daily_summary → 食物记录额外刷新受影响的该餐 meal_card → 更新事件消息 `payload`（`undone: true`，清 `undo`）。恢复不产生新的 learning_event（delete 信号保留，恢复不算新信号）。幂等：`payload.undone` 已为 `true` 时直接返回当前状态，不重复重建。
 resp: `{ ok, summary_card, messages }`——`messages` 含更新后的事件消息（+ 食物场景下刷新的 meal_card），前端按 id upsert。
-
-### POST /api/learning/alias/reset
-「不是它？」逃生口（见 LEARNING_SPEC §6 §7）。用户食物直连（streak≥2）自动匹配错了时调用。
-req: `{ canonical, record_id, portions, chosen_label, ai_candidates? }`——`portions`/`chosen_label`/`ai_candidates` 取自触发本次逃生口的 `record_card.payload.escape`（见下）。
-行为：清零该 canonical 的 alias streak → 删除该条误判记录（记一条 `signal_type=delete` 学习事件，只记不训练）→ 用同一份份量估算重新走候选流程，产出新的 `candidate_card`。
-resp: `{ summary_card, messages: [candidate_card 消息] }`。
 
 ## 数据查询（读事实层）
 ### GET /api/daily/today

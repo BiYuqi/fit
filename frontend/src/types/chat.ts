@@ -1,11 +1,9 @@
 export type MessageKind =
   | 'text'
-  | 'record_card'
   | 'meal_card'
   | 'portion_card'
   | 'candidate_card'
   | 'clarify_card'
-  | 'query_card'
   | 'exercise_card'
   | 'delete_confirm_card'
   | 'event';
@@ -41,29 +39,6 @@ export type UndoPrevState = {
 export type RecordUndo = {
   record_id: string;
   prev_state?: UndoPrevState; // 有=update 撤销(还原)，无=append 撤销(删除)
-};
-
-export type FoodAliasEscape = {
-  canonical: string;
-  portions: PortionOption[];
-  chosen_label: string;
-  ai_candidates?: string[];
-};
-
-export type RecordCardPayload = {
-  food_name: string;
-  weight_g: number;
-  calories: number;
-  protein_g: number;
-  fat_g: number;
-  carbs_g: number;
-  meal_type?: string; // breakfast/lunch/dinner/snack；旧消息无此字段，卡片不显示餐次
-  is_estimated?: boolean;
-  unit?: string;
-  undo?: RecordUndo; // modify 的 update/append 直执行时带，支持撤销
-  matched_by_habit?: boolean; // 用户食物直连（streak≥2）自动匹配，见 LEARNING_SPEC §6 §7
-  escape?: FoodAliasEscape; // 「不是它？」逃生口所需数据
-  bias_applied?: { from: number; to: number }; // 份量偏差修正 AI原估→实记（T31，前端可不展示，discuss/debug 用）
 };
 
 // T49：回执降级为居中小字事件行。text 由后端组装好（铁律1：数字来自后端）。

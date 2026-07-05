@@ -36,11 +36,11 @@ iOS 26 Liquid Glass / Apple Intelligence：毛玻璃卡片、柔和半透明层�
 
 **消息/卡片类型**（对应 chat_message.kind）：
 - 用户文本气泡（role=user, text）
-- AI 反馈卡 record_card：食物名+餐次+份数+总kcal，下方蛋白/脂肪/碳水
+- 餐食卡 meal_card：一餐一卡，同 (日期,餐次) 食物合并显示（badge+餐次+项数+总kcal + 逐项明细 + 宏量素总计），详见 §3.1
 - 份量选择卡 portion_card：2×2 网格，小份/中份/大份/自定义各占一格，选中后显示 checkmark；点自定义展开克数输入框 + 确认/取消按钮
 - 候选食物卡 candidate_card：`[煎饼果子] [煎饼+油条] [其他]`
 - 追问卡 clarify_card：`是不是：[火锅] [外卖混合] [其他描述]`
-- 查询回答卡 query_card：如"今天还可以吃 720 kcal" + 剩余额度进度条 + 一句建议
+- 查询回答：纯文本气泡（AI 文字自包含数字，不套进度卡；今日进度看 Today 页）
 - 运动卡 exercise_card：如"已记录跑步 5km，消耗约 320 kcal"
 - 删除确认卡 delete_confirm_card：如"确认删除「牛肉面」？约 600 kcal" + `[取消] [确认删除]`（破坏性，红色确认）。**T49 起不再产生新的删除确认卡**（改为免确认直删 + 事件行，见 §3.2）；仅存量未 resolve 的旧卡片仍可点确认/取消，见历史回放。
 - 系统事件行 event：居中小字回执（非气泡），见 §3.2
@@ -48,8 +48,8 @@ iOS 26 Liquid Glass / Apple Intelligence：毛玻璃卡片、柔和半透明层�
 - 加号附件菜单：相机 / 照片 / 文件（v1 可仅占位）
 
 **关键交互态**：
-- 高置信 → 直接出 record_card。
-- 中/低置信 → 出 portion/candidate/clarify 卡。portion_card 点选后**替换为确认后的 record_card**；candidate_card 点选食物后**先出 portion_card 确认份量**，再出 record_card（两步串行，见 AI_PARSING_SPEC §4；一步化为暂定候选，见 FEATURE_CANDIDATES）。
+- 高置信 → 直接入库，该餐 meal_card 原地刷新（新增一项）。
+- 中/低置信 → 出 portion/candidate/clarify 卡。portion_card 点选后落库并刷新该餐 meal_card；candidate_card 点选食物后**先出 portion_card 确认份量**，再落库刷新 meal_card（两步串行，见 AI_PARSING_SPEC §4；一步化为暂定候选，见 FEATURE_CANDIDATES）。
 - **Pending 卡片过期**：portion_card / candidate_card 超过 **5 分钟**未操作即显示"已过期"，不可再交互。防止旧消息的 pending 卡片被误触后在新日期产生记录。
 - modify 修改（见 AI_PARSING_SPEC §8，回执降噪 T49）：
   - 删除 → **免确认直接执行**，聊天流只多一条居中小字事件行「已删除 X · -N kcal」+ 内联「撤销」；该餐 meal_card 原地少一项。点撤销→`/api/chat/events/:message_id/undo`（按事件行自带的快照重建新记录），事件行转「已撤销」灰态，再点无效（幂等）。
@@ -67,13 +67,13 @@ iOS 26 Liquid Glass / Apple Intelligence：毛玻璃卡片、柔和半透明层�
 **聊天持久化显示行为**：
 - 进页面先读本地 SQLite 缓存秒显示，再用 `GET /chat/messages?date=` 同步。
 - 顶部线程选择器用 `GET /chat/dates` 列出有对话的日期，默认今天；选别的日期加载那天的线程。
-- 卡片新鲜度：**查询类卡片冻结**（显示当时答案）；**记录类卡片绑 record_id**，底层记录被改/删时显示更新或"已删除"。
+- 卡片新鲜度：**查询类卡片冻结**（显示当时答案）；**meal_card 实时组装**，底层记录被改/删时明细同步更新或整卡"已清空"（见 §3.1）。
 
 ### 3.1 餐食卡 meal_card（P3 同餐食物分组，T46–T48）
 
-一餐一卡：同一 (日期, 餐次) 的所有食物合并显示在同一张卡上，卡片随内容变化"浮"到聊天流末尾（`created_at` 跟随刷新），不再为每次记录/修改新开一张 record_card。旧消息里的 record_card / exercise_card 原样保留展示（历史回放兼容）。
+一餐一卡：同一 (日期, 餐次) 的所有食物合并显示在同一张卡上，卡片随内容变化"浮"到聊天流末尾（`created_at` 跟随刷新），每次记录/修改都刷新这张卡而非新开卡。
 
-- **展开态（默认）**：标题行（badge + `早餐 · 4 项` + 右侧总 kcal） + 逐项明细（每项一行：主显示 `raw_input` 原话，缺失时兜底 `food_name+weight_g`；右侧该项 kcal；`is_estimated` 项名后带"估"角标） + 底部宏量素总计行（蛋白/脂肪/碳水，圆点+数值）。视觉沿用 record-card 骨架（GlassCard、badge 图标、右侧大号热量数字、宏量素圆点行）。
+- **展开态（默认）**：标题行（badge + `早餐 · 4 项` + 右侧总 kcal） + 逐项明细（每项一行：主显示 `raw_input` 原话，缺失时兜底 `food_name+weight_g`；右侧该项 kcal；`is_estimated` 项名后带"估"角标） + 底部宏量素总计行（蛋白/脂肪/碳水，圆点+数值）。视觉骨架：GlassCard、badge 图标、右侧大号热量数字、宏量素圆点行。
   ```
   ✓ 早餐 · 4 项                      385 kcal
     全麦面包2片                          174
@@ -83,7 +83,7 @@ iOS 26 Liquid Glass / Apple Intelligence：毛玻璃卡片、柔和半透明层�
     ● 蛋白 24.6g  ● 脂肪 12.3g  ● 碳水 42.1g
   ```
 - **收起态**：点标题行切换为收起，只留标题行 + 宏量素总计行两行；明细项隐藏。展开/收起是纯前端本地 UI 态，不影响卡片数据。
-- **项级撤销**：`payload.last_change` 指向最近一次修改/追加的那一项，仅该项右侧显示「撤销」按钮（其余项不出现按钮）；点击调已有 `/records/:id/undo` 链路，`prev_state` 有值=还原、无值=删除（同 record_card 撤销语义）；撤销后该项进灰态，按钮变"已撤销"。`last_change` 为空时卡片不出现任何撤销按钮。
+- **项级撤销**：`payload.last_change` 指向最近一次修改/追加的那一项，仅该项右侧显示「撤销」按钮（其余项不出现按钮）；点击调已有 `/records/:id/undo` 链路，`prev_state` 有值=还原、无值=删除；撤销后该项进灰态，按钮变"已撤销"。`last_change` 为空时卡片不出现任何撤销按钮。
 - **空餐态**：该餐所有食物被删光（`items: []`）→ 整卡灰化显示"已清空"，不再显示明细/宏量素行。
 - **数据来源**：卡片不做任何求和，`items`/`totals` 均由后端每次实时组装好（铁律 1）；前端只管渲染。
 

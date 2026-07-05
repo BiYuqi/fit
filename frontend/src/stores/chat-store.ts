@@ -3,7 +3,7 @@ import { apiFetch } from '@/lib/api';
 import { getMessagesInRange, getMessagesAround, getMessageDateById, upsertMessages } from '@/lib/db';
 import { localDateStr, dateOnly } from '@/lib/format';
 import { mergeMessages } from '@/lib/messages';
-import type { ChatMessage, ContextCard, SendMessageResponse, ResolveResponse, UndoPrevState, FoodAliasEscape } from '@/types/chat';
+import type { ChatMessage, ContextCard, SendMessageResponse, ResolveResponse, UndoPrevState } from '@/types/chat';
 
 function todayStr() {
   return localDateStr();
@@ -72,7 +72,6 @@ type ChatStore = {
   resolve: (pendingId: string, choice: string | { grams: number }, token: string) => Promise<void>;
   undo: (messageId: string, recordId: string, prevState: UndoPrevState | undefined, token: string) => Promise<void>;
   undoEvent: (messageId: string, token: string) => Promise<void>;
-  resetAlias: (messageId: string, recordId: string, escape: FoodAliasEscape, token: string) => Promise<void>;
 };
 
 export const useChatStore = create<ChatStore>((set, get) => ({
@@ -448,36 +447,5 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       messages: newMsgs.length > 0 ? mergeMessages(s.messages, newMsgs) : s.messages,
       summaryCard: res.summary_card ?? s.summaryCard,
     }));
-  },
-
-  // 「不是它？」逃生口：用户食物直连自动匹配错了，撤销该记录 + 清零 streak + 重发候选卡
-  resetAlias: async (messageId: string, recordId: string, escape: FoodAliasEscape, token: string) => {
-    set(s => ({ undoneCards: { ...s.undoneCards, [messageId]: true } }));
-    try {
-      const res = await apiFetch<ResolveResponse>('/api/learning/alias/reset', {
-        method: 'POST',
-        body: JSON.stringify({
-          canonical: escape.canonical,
-          record_id: recordId,
-          portions: escape.portions,
-          chosen_label: escape.chosen_label,
-          ai_candidates: escape.ai_candidates,
-        }),
-        token,
-      });
-      const newMsgs = res.messages as ChatMessage[];
-      await persistMessages(newMsgs);
-      // T47：统一按 id upsert + created_at 重排（新候选卡时间最新，自然落在流末尾）
-      set(s => ({
-        messages: mergeMessages(s.messages, newMsgs),
-        summaryCard: res.summary_card ?? s.summaryCard,
-      }));
-    } catch {
-      set(s => {
-        const next = { ...s.undoneCards };
-        delete next[messageId];
-        return { undoneCards: next };
-      });
-    }
   },
 }));
