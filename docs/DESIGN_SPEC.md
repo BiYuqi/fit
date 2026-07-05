@@ -73,7 +73,7 @@ iOS 26 Liquid Glass / Apple Intelligence：毛玻璃卡片、柔和半透明层�
 
 一餐一卡：同一 (日期, 餐次) 的所有食物合并显示在同一张卡上，卡片随内容变化"浮"到聊天流末尾（`created_at` 跟随刷新），每次记录/修改都刷新这张卡而非新开卡。
 
-- **展开态（默认）**：标题行（badge + `早餐 · 4 项` + 右侧总 kcal） + 逐项明细（每项一行：主显示 `raw_input` 原话，缺失时兜底 `food_name+weight_g`；右侧该项 kcal；`is_estimated` 项名后带"估"角标） + 底部宏量素总计行（蛋白/脂肪/碳水，圆点+数值）。视觉骨架：GlassCard、badge 图标、右侧大号热量数字、宏量素圆点行。
+- **展开态（默认）**：标题行（badge + `早餐 · 4 项` + 右侧总 kcal） + 逐项明细（每项一行：主显示 `food_name`，有 `count` 时缀份数 `×count`（如「韭菜鸡蛋包子 ×2」），`weight_g` 作副信息（如「（180g）」）；`count` 为空的纯重量/旧记录只显示 `food_name + weight_g`；右侧该项 kcal；`is_estimated` 项名后带"估"角标） + 底部宏量素总计行（蛋白/脂肪/碳水，圆点+数值）。视觉骨架：GlassCard、badge 图标、右侧大号热量数字、宏量素圆点行。
   ```
   ✓ 早餐 · 4 项                      385 kcal
     全麦面包2片                          174

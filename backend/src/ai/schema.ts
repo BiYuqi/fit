@@ -29,6 +29,10 @@ const FoodItemBaseSchema = z.object({
   raw: z.string(),
   canonical: z.string(),
   quantity_expr: z.string(),
+  // T52：结构化份数，仅供餐食卡展示 `食物名 ×count`，绝不参与算账（铁律 1）。
+  // 只在原话有明确可数份量时填（"两个包子"→2,"个"；"一碗面"→1,"碗"），纯重量/容量（"50克瘦肉"）留空。
+  count: z.number().positive().optional(),
+  count_unit: z.string().optional(),
   portions: z.array(PortionSchema).min(1).max(4),
   chosen_label: PortionLabelSchema,
   food_confidence: z.number().min(0).max(1),
@@ -204,6 +208,8 @@ const itemsProp = {
       raw: { type: "string", description: "用户原始表达" },
       canonical: { type: "string", description: "归一后标准食物名（中文，供数据库匹配）" },
       quantity_expr: { type: "string", description: "原始份量表达，如'一碗'、'半个'" },
+      count: { type: "number", description: "可数份数，仅当原话有明确可数份量时填（'两个包子'→2、'一碗面'→1、'三片面包'→3）；纯重量/容量表达（'50克瘦肉'、'200ml牛奶'）不填。仅用于展示，不影响热量" },
+      count_unit: { type: "string", description: "与 count 配套的量词（'个'/'碗'/'片'/'根'），填了 count 才填；count 不填则不填" },
       portions: {
         type: "array",
         description: "小/中/大三档份量估算，含单位和克数(ml)",

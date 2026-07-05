@@ -159,6 +159,8 @@ export async function resolvePendingRecord(params: {
           predicted_grams: rawChosen?.grams,
           applied_grams: appliedChosen?.grams,
           scene: candidates.scene ?? null,
+          count: candidates.count ?? null,
+          count_unit: candidates.count != null ? (candidates.count_unit ?? null) : null,
         } as object,
       },
     });
@@ -210,6 +212,8 @@ export async function resolvePendingRecord(params: {
       date: dateObj,
       predicted_grams: predictedGrams ?? null,
       scene: candidates.scene ?? null,
+      count: candidates.count ?? null,
+      count_unit: candidates.count != null ? (candidates.count_unit ?? null) : null,
     },
   });
 

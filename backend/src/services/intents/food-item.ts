@@ -48,8 +48,10 @@ export async function buildCandidateCardData(params: {
   chosen_label: PortionLabel;
   ai_candidates?: string[];
   scene?: string | null;
+  count?: number | null;
+  count_unit?: string | null;
 }): Promise<CandidateCardData> {
-  const { user_id, query, raw, meal_type, source, portions, chosen_label, ai_candidates, scene } = params;
+  const { user_id, query, raw, meal_type, source, portions, chosen_label, ai_candidates, scene, count, count_unit } = params;
   const { foods: dbCandidates } = await matchFoodCandidates(query);
 
   const mediumGrams = (portions.find((p) => p.label === "medium") ?? portions[0])?.grams ?? 150;
@@ -68,7 +70,7 @@ export async function buildCandidateCardData(params: {
     data: {
       user_id, type: "food_choice", raw_input: raw,
       // candidate_names：T38 注入记忆包用，避免为了渲染【待确认】而重跑 matchFoodCandidates 或读 chat_message
-      candidates: { query, meal_type, source, portions, chosen_label, scene: scene ?? null, candidate_names: allNames } as object,
+      candidates: { query, meal_type, source, portions, chosen_label, scene: scene ?? null, candidate_names: allNames, count: count ?? null, count_unit: count != null ? (count_unit ?? null) : null } as object,
     },
   });
 
@@ -94,7 +96,7 @@ export interface ItemResult {
 
 export async function processFoodItem(item: FoodItem, ctx: ItemCtx): Promise<ItemResult> {
   const { user_id, meal_type, source, dateObj, scene, itrace } = ctx;
-  const { canonical, chosen_label, portions, food_confidence, portion_confidence, raw, is_ambiguous, ai_candidates } = item;
+  const { canonical, chosen_label, portions, food_confidence, portion_confidence, raw, is_ambiguous, ai_candidates, count, count_unit } = item;
   const query = canonical || raw;
 
   // 初始化 ItemTrace state
@@ -156,7 +158,7 @@ export async function processFoodItem(item: FoodItem, ctx: ItemCtx): Promise<Ite
       }
 
       const { pendingRecord: pr, foodsPayload } = await buildCandidateCardData({
-        user_id, query, raw, meal_type, source, portions, chosen_label, ai_candidates, scene,
+        user_id, query, raw, meal_type, source, portions, chosen_label, ai_candidates, scene, count, count_unit,
       });
 
       if (itrace) {
@@ -265,6 +267,8 @@ export async function processFoodItem(item: FoodItem, ctx: ItemCtx): Promise<Ite
         alias_canonical: matchedByHabit ? query : null,
         predicted_grams: rawChosen.grams,
         scene: scene ?? null,
+        count: count ?? null,
+        count_unit: count != null ? (count_unit ?? null) : null,
       },
     });
 
@@ -311,6 +315,7 @@ export async function processFoodItem(item: FoodItem, ctx: ItemCtx): Promise<Ite
         portions: biasedPortions, chosen_label,
         predicted_grams: rawChosen.grams, applied_grams: biasedChosen.grams,
         scene: scene ?? null,
+        count: count ?? null, count_unit: count != null ? (count_unit ?? null) : null,
       } as object,
     },
   });

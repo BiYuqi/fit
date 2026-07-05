@@ -114,6 +114,8 @@ model FoodRecord {
   meal_type          MealType
   portion_label      PortionLabel
   weight_g           Float
+  count              Float? // 可数份数（"两个"→2），AI 从原话提取；仅供餐食卡展示 `食物名 ×count`，不参与算账（T52，铁律 1）
+  count_unit         String? // 与 count 配套的量词（个/碗/片/根）；count 为空时同为空
   calories           Float
   protein            Float
   fat                Float

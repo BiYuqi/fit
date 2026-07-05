@@ -55,6 +55,8 @@
 | meal_type | enum(breakfast/lunch/dinner/snack) | |
 | portion_label | enum(small/medium/large/custom) | |
 | weight_g | float | 最终克数（AI估或用户定） |
+| count | float? | 可数份量的份数（AI 从原话提取，「两个」→2、「一碗」→1）；无明确可数份量（如「50克瘦肉」）时为空。仅供餐食卡展示 `食物名 ×count`，**不参与任何热量计算**（铁律 1：账只由 weight_g×每100g 算）。见 AI_PARSING_SPEC。 |
+| count_unit | text? | 与 count 配套的量词（「个/碗/片/根」）；count 为空时同为空。 |
 | calories | float | 后端算：calories_100g/100*weight_g；若 `calories_source=user_override` 则是用户直接指定的值（modify.update change.calories，T40，见 LEARNING_SPEC §3） |
 | protein / fat / carbs | float | 同理；`user_override` 时按新旧热量比例回推，不是重新估算 |
 | calories_source | text | computed（默认，food×grams 算出）/ user_override（用户直接报的热量，T40）；modify 改 food/grams/food_desc 时会被重置回 computed |

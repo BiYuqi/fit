@@ -60,12 +60,12 @@ modify 行为（AI_PARSING_SPEC §8；卡片语义 T47 起为 meal_card 原地�
 {
   "meal_key": { "date": "2026-07-04", "meal_type": "lunch" },
   "last_change": { "record_id": "...", "prev_state": { /* 同 undo 接口 prev_state */ } },
-  "items": [ { "record_id", "food_name", "raw_input", "weight_g", "calories", "protein_g", "fat_g", "carbs_g", "is_estimated", "portion_label" } ],
+  "items": [ { "record_id", "food_name", "count", "count_unit", "raw_input", "weight_g", "calories", "protein_g", "fat_g", "carbs_g", "is_estimated", "portion_label" } ],
   "totals": { "calories", "protein_g", "fat_g", "carbs_g" },
   "item_count": 3
 }
 ```
-明细主显示用 `raw_input`（用户原话子句，自然单位天然保留），`food_name + weight_g` 作兜底/副信息；`items: []` 表示该餐记录已全删光（渲染"已清空"态）。内容变更时同一条消息 `created_at` 刷新（卡片跟随），POST 响应与 GET 都会返回其最新组装态。
+明细主显示用 `food_name`（+ 有 `count` 时缀 `×count` 份数，如「韭菜鸡蛋包子 ×2」），`weight_g` 作副信息（如「（180g）」）；`count` 为空（纯重量记录/旧数据）时只显示 `food_name + weight_g`。`raw_input`（用户原话子句）不再作主显示，仅留作数据留痕。`items: []` 表示该餐记录已全删光（渲染"已清空"态）。内容变更时同一条消息 `created_at` 刷新（卡片跟随），POST 响应与 GET 都会返回其最新组装态。
 `last_change`（T47）：该餐最近一次 modify 的撤销信息（单槽：再次修改覆盖、撤销后清除），有 `prev_state` = update 撤销（还原），无 = append 撤销（删除），T48 据此在展开态渲染对应项的撤销按钮，点按调 `/api/records/:id/undo`。
 
 用户食物直连命中（LEARNING_SPEC §6 §7，T30）时不再有专门的「不是它？」按钮：直连纠错走自然语言改食物（modify.update `change.food`）或撤销该记录，两者都触发 alias streak 清零（见 LEARNING_SPEC §7）。

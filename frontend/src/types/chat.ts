@@ -112,8 +112,10 @@ export type ContextCard = {
 // 内容变更时后端刷新同一条消息的 created_at——前端按 id upsert + 按 created_at 重排（见 lib/messages.ts）。
 export type MealCardItem = {
   record_id: string;
-  food_name: string;
-  raw_input: string | null; // 明细主显示（用户原话子句）；空时用 food_name + weight_g 兜底
+  food_name: string; // 明细主显示（T52）：有 count 时拼 `食物名 ×count`，否则 `食物名 weight_g`
+  count: number | null; // 可数份数（"两个"→2），展示用不算账；null=纯重量/旧记录，退回克数
+  count_unit: string | null; // 量词（个/碗/片/根）
+  raw_input: string | null; // 数据留痕，不再作主显示（T52 前曾为主显示）
   weight_g: number;
   calories: number;
   protein_g: number;

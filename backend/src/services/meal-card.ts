@@ -23,6 +23,8 @@ export interface MealCardRecord {
   id: string;
   raw_input: string | null;
   weight_g: number;
+  count: number | null;
+  count_unit: string | null;
   calories: number;
   protein: number;
   fat: number;
@@ -34,8 +36,10 @@ export interface MealCardRecord {
 export interface MealCardView {
   items: Array<{
     record_id: string;
-    food_name: string;
-    raw_input: string | null; // 明细主显示：用户原话子句（自然单位天然保留），food_name+weight_g 作兜底
+    food_name: string; // 明细主显示：有 count 时前端拼 `食物名 ×count`，否则 `食物名 weight_g`（T52）
+    count: number | null; // 可数份数，展示用不算账（铁律 1）；null=纯重量/旧记录，退回克数显示
+    count_unit: string | null;
+    raw_input: string | null; // 数据留痕，不再作主显示（T52 前曾为主显示）
     weight_g: number;
     calories: number;
     protein_g: number;
@@ -53,6 +57,8 @@ export function buildMealCardView(records: MealCardRecord[]): MealCardView {
   const items = records.map((r) => ({
     record_id: r.id,
     food_name: r.food.name,
+    count: r.count ?? null,
+    count_unit: r.count != null ? (r.count_unit ?? null) : null,
     raw_input: r.raw_input ?? null,
     weight_g: Math.round(r.weight_g),
     calories: Math.round(r.calories),

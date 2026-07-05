@@ -33,6 +33,8 @@ function basePayload(overrides?: Partial<MealCardPayload>): MealCardPayload {
       {
         record_id: 'r1',
         food_name: '全麦面包',
+        count: 2,
+        count_unit: '片',
         raw_input: '全麦面包2片',
         weight_g: 100,
         calories: 174,
@@ -45,6 +47,8 @@ function basePayload(overrides?: Partial<MealCardPayload>): MealCardPayload {
       {
         record_id: 'r2',
         food_name: '鸡蛋',
+        count: null,
+        count_unit: null,
         raw_input: null,
         weight_g: 50,
         calories: 72,
@@ -83,15 +87,15 @@ describe('MealCard', () => {
     expect(screen.getByText('kcal')).toBeOnTheScreen();
   });
 
-  it('renders each item using raw_input when present', () => {
+  it('renders item as food_name ×count（weight）when count present', () => {
     renderCard(basePayload());
-    expect(screen.getByText(/全麦面包2片/)).toBeOnTheScreen();
+    expect(screen.getByText(/全麦面包 ×2（100g）/)).toBeOnTheScreen();
     expect(screen.getByText('174')).toBeOnTheScreen();
   });
 
-  it('falls back to food_name + weight_g when raw_input is missing', () => {
+  it('falls back to food_name + weight_g when count is missing', () => {
     renderCard(basePayload());
-    expect(screen.getByText(/鸡蛋50g/)).toBeOnTheScreen();
+    expect(screen.getByText(/鸡蛋 50g/)).toBeOnTheScreen();
     expect(screen.getByText('72')).toBeOnTheScreen();
   });
 
@@ -126,7 +130,7 @@ describe('MealCard', () => {
     const header = screen.getByText(/早餐/);
     fireEvent.press(header);
     fireEvent.press(header);
-    expect(screen.getByText(/全麦面包2片/)).toBeOnTheScreen();
+    expect(screen.getByText(/全麦面包 ×2（100g）/)).toBeOnTheScreen();
   });
 
   // ── last_change / undo ──────────────────────────────────────────────

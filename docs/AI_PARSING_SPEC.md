@@ -25,6 +25,8 @@ DeepSeek 输出（strict tool schema，zod 同构校验）：
       "raw": "牛肉面",
       "canonical": "牛肉面",
       "quantity_expr": "一碗",
+      "count": 1,
+      "count_unit": "碗",
       "portions": [
         {"label": "small",  "grams": 350},
         {"label": "medium", "grams": 450},
@@ -43,6 +45,7 @@ DeepSeek 输出（strict tool schema，zod 同构校验）：
 - `portions`：每份量的克数估算（数据库不存克数，全由此估）。
 - `chosen_label` 必须指向 `portions` 中真实存在的档；用户明示精确数量（"100克"/"200ml"）时须含等值 `custom` 条目。后端 schema 层有归一化护栏（`ensureChosenPortion`，T42）：缺档时从 `quantity_expr` 提取数量补 custom，提不出则回退 medium——绝不回退小份，防止明示克数被静默改档。
 - `scene`：进食场景 `takeout | canteen | home | unknown`，**只从原话提取，不靠常识猜**（"点了个外卖麻辣香锅"→takeout；"食堂打的饭"→canteen；"自己煮的"→home；提不出→unknown）。落 `food_record.scene`，scene 层偏差参与份量修正融合（unknown 不参与），见 LEARNING_SPEC §4（T32）。
+- `count` / `count_unit`：可数份量的**结构化份数 + 量词**，只供餐食卡展示 `食物名 ×count`（如「两个包子」→ `count:2, count_unit:"个"`；「一碗面」→ `1, "碗"`）。**仅在原话有明确可数份量时填**；纯重量/容量表达（"50克瘦肉"、"200ml 牛奶"）**留空**——克数已由 `portions` 承载，别硬凑量词。与热量计算完全无关（铁律 1），落 `food_record.count/count_unit`。`quantity_expr` 仍照旧保留（自由文本，护栏用），二者不互相替代。
 - `is_ambiguous`：AI 语义判断食物名是否有歧义（如"煎饼"可指多种，"粥"可指多种）。
 - 运动则输出 `{type, duration_min, intensity?}`，热量后端按 MET 估或简表。
 

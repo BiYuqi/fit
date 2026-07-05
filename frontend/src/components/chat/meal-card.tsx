@@ -82,13 +82,18 @@ export function MealCard({
               payload.items.map((item) => {
                 const showUndo = !!lastChange && lastChange.record_id === item.record_id;
                 const itemUndone = showUndo && isUndone;
+                // 主显示（T52）：有可数份数 → `食物名 ×N（Ng）`；否则 `食物名 Ng`
+                const itemLabel =
+                  item.count != null
+                    ? `${item.food_name} ×${item.count}（${item.weight_g}g）`
+                    : `${item.food_name} ${item.weight_g}g`;
                 return (
                   <View
                     key={item.record_id}
                     style={[styles.itemRow, itemUndone && styles.itemUndone]}
                   >
                     <ThemedText style={styles.itemName} numberOfLines={1}>
-                      {item.raw_input || `${item.food_name}${item.weight_g}g`}
+                      {itemLabel}
                       {item.is_estimated && (
                         <ThemedText themeColor="textSecondary" style={styles.estBadge}>
                           {' '}
