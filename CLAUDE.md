@@ -24,6 +24,7 @@
 |------|--------|
 | `docs/PRD.md` | 产品要什么、范围、非目标 |
 | `docs/ARCHITECTURE.md` | 技术栈、仓库结构、数据流、本地缓存/同步、聊天保留策略、部署 |
+| `docs/DB_HOSTING.md` | 本地库托管：Docker vs 原生 Postgres 决策 + 迁移方案（暂缓） |
 | `docs/DATA_MODEL.md` | 所有表与字段语义（字段的**唯一定义处**） |
 | `docs/API_SPEC.md` | 接口契约（前后端**唯一对齐源**） |
 | `docs/FOOD_DB_SPEC.md` | 食物库领域规范：数据源、三层结构、版权 |

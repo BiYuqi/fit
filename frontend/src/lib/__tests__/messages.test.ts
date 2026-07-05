@@ -44,6 +44,14 @@ describe('mergeMessages（T47：按 id upsert + created_at 重排）', () => {
     expect(mergeMessages(cur, inc).map(m => m.id)).toEqual(['y-card', 'today']);
   });
 
+  it('server 传的完整 ISO date 在入口归一成 YYYY-MM-DD（避免分隔线误判跨天）', () => {
+    const cur = [msg({ id: 'am', date: '2026-07-04', created_at: '2026-07-04T01:00:00.000Z' })];
+    // 刚从后端回来的今天消息，date 是完整 ISO
+    const inc = [msg({ id: 'pm', date: '2026-07-04T00:00:00.000Z', created_at: '2026-07-04T05:00:00.000Z' })];
+    const out = mergeMessages(cur, inc);
+    expect(out.map(m => m.date)).toEqual(['2026-07-04', '2026-07-04']); // 两条同一天，原始字符串也一致
+  });
+
   it('created_at 相同保持稳定顺序（先到先排）', () => {
     const t = '2026-07-04T04:00:00.000Z';
     const cur = [msg({ id: 'a', created_at: t }), msg({ id: 'b', created_at: t })];
