@@ -1,0 +1,40 @@
+# 2026-07-05 真机翻车（AItrace 实锤）：同一天早、晚各记过一次"瘦肉"，
+# 说"瘦肉改为50克"（没指餐次）→ 模型 0.95 高置信选了列表靠前的【早餐】那条改错，
+# 用户实际在操作的是刚记的【晚餐】那条。修：parser 加"同名多条默认取最近那条"规则。
+name: 同名多条改单样——没指餐次默认改最近那条（2026-07-05 真机翻车）
+turns:
+  # 早餐先记一条瘦肉（45g）
+  - say: "早上吃了45克炒瘦肉，纯瘦肉"
+    expect:
+      intent: record
+      db:
+        food_record: { where: { food_name: "肉", meal_type: breakfast }, meal_type: breakfast }
+        pending_record: null
+
+  # 晚餐再记一条瘦肉（80g）——现在今日有两条同名"瘦肉"
+  - say: "晚上又吃了80克排骨瘦肉，纯肉不算骨头"
+    expect:
+      intent: record
+      db:
+        food_record: { where: { food_name: "肉", meal_type: dinner }, weight_g: 80 }
+        food_record_count: 2
+
+  # 核心：没指餐次说"瘦肉改为60克"→ 应改【最近记的晚餐】那条，早餐那条 45g 原封不动
+  - say: "瘦肉改为60克"
+    expect:
+      intent: modify
+      db:
+        food_record:
+          - { where: { food_name: "肉", meal_type: dinner }, weight_g: 60 }
+          - { where: { food_name: "肉", meal_type: breakfast }, weight_g: 45 }
+        food_record_count: 2
+
+  # 反向确认：指明"早餐的"仍能精准命中早餐那条，不被"默认取最近"带偏
+  - say: "早餐的瘦肉改为50克"
+    expect:
+      intent: modify
+      db:
+        food_record:
+          - { where: { food_name: "肉", meal_type: breakfast }, weight_g: 50 }
+          - { where: { food_name: "肉", meal_type: dinner }, weight_g: 60 }
+        food_record_count: 2

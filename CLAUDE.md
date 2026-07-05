@@ -59,3 +59,5 @@ When compressing, preserve in priority order:
 ```
 
 需 Docker 与 Node 20+。数据库默认本地（容器），上线换任意 Postgres 托管只改 `backend/.env` 的 `DATABASE_URL`。选型理由见 ARCHITECTURE §7.1。
+
+> **给 AI 的备注**：`:9300` 是**常驻 prod 后端**（launchd `com.fit` 自启 + KeepAlive，服务真机/公网）——**别去停它、重启它、rebuild dist 或占它的端口**，那是用户自己管的。要跑 eval 或验证改动，**自己另起服务**打自己的：起个干净端口 `PORT=9309 npm run dev`（tsx watch 热重载）配 `EVAL_API_BASE=http://localhost:9309 npm run eval`，或 `./start.sh ios` 用 `:9301`。端口拓扑与部署见 `docs/DEPLOY.md`。

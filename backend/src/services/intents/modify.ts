@@ -14,6 +14,51 @@ import type { IntentCtx } from "./types";
 
 const MEAL_ZH: Record<string, string> = { breakfast: "早餐", lunch: "午餐", dinner: "晚餐", snack: "加餐" };
 
+// 用户话里带餐次/位置限定词时，说明 target 是被明确指定的，别再做"默认取最近"纠偏。
+const QUALIFIER_RE =
+  /早餐|早饭|早上|早晨|中午|午餐|午饭|晌午|晚餐|晚饭|晚上|傍晚|夜宵|夜里|加餐|下午|上午|刚才|刚刚|那个|那条|那碗|那盘|那份|那杯|第[一二三四12345]|上面|下面|前面|后面|最后/;
+
+const stripParen = (s: string) => s.replace(/[（(][^）)]*[)）]/g, "");
+
+// 最长公共子串（判两条记录是不是"同名/近义"，如"炒瘦肉"vs"排骨瘦肉"共有"瘦肉"）
+function longestCommonSubstr(a: string, b: string): string {
+  let best = "";
+  for (let i = 0; i < a.length; i++) {
+    for (let j = i + 1; j <= a.length; j++) {
+      const sub = a.slice(i, j);
+      if (sub.length > best.length && b.includes(sub)) best = sub;
+    }
+  }
+  return best;
+}
+
+// 同名多条消歧兜底（2026-07-05 真机翻车，AItrace 实锤）：同一天早/晚各记过一次"瘦肉"，
+// 用户说"瘦肉改为50克"（没指餐次），模型 0.95 高置信却挑了列表靠前的【早餐】那条改错。
+// LLM 消歧不可靠（换措辞/换展示序仍选错），这里做确定性纠偏：用户没给餐次/位置限定词、
+// 且提到的名字在今日记录里撞到多条时，改成最近记的那条（＝用户正在操作、刚记的那条）。
+// 只对 update/delete 单条食物生效；带限定词一律信任模型输出。
+export function disambiguateRecent(
+  ref: string,
+  action: string,
+  text: string,
+  records: { ref: string; kind: string; name: string }[],
+): string {
+  if (action !== "update" && action !== "delete") return ref;
+  if (QUALIFIER_RE.test(text)) return ref;
+  const chosen = records.find((r) => r.ref === ref);
+  if (!chosen || chosen.kind !== "food") return ref;
+  const chosenCore = stripParen(chosen.name);
+  const sameNamed = records.filter((r) => {
+    if (r.kind !== "food") return false;
+    if (r.ref === chosen.ref) return true;
+    const core = longestCommonSubstr(chosenCore, stripParen(r.name));
+    return core.length >= 2 && text.includes(core); // 共有名字片段且用户确实提到了它
+  });
+  if (sameNamed.length <= 1) return ref;
+  // records 按 created_at 旧→新，最后一条即最近记录
+  return sameNamed[sameNamed.length - 1].ref;
+}
+
 export async function handleModify(
   parsed: Extract<ParseResult, { intent: "modify" }>,
   ctx: IntentCtx,
@@ -112,7 +157,9 @@ export async function handleModify(
     return { intent: "modify", reply: aiMsg.content, summary_card: card, messages };
   }
 
-  const target = pack.recent_records.find((r) => r.ref === refs[0]);
+  // 同名多条消歧兜底（见上）：模型选早了就纠到最近那条；带餐次/位置限定词则信任模型。
+  const resolvedRef = disambiguateRecent(refs[0], parsed.action, text, pack.recent_records);
+  const target = pack.recent_records.find((r) => r.ref === resolvedRef);
   if (!target) {
     const aiMsg = await prisma.chatMessage.create({
       data: { user_id, date: dateObj, role: "assistant", kind: "text", content: "没找到要修改的那条记录，可以说得具体一点吗？" },

@@ -105,7 +105,7 @@ export function compressContext(pack: MemoryPack): string {
   const shown = recent_records.slice(-RECORD_LIMIT);
   const hidden = total - shown.length;
   if (total > 0) {
-    lines.push(`【今日已记录】(共${total}条)`);
+    lines.push(`【今日已记录】(共${total}条，按记录先后 旧→新，最后一条是最近记的)`);
     if (hidden > 0) lines.push(`  (另有${hidden}条更早记录已折叠)`);
     for (const r of shown) {
       if (r.kind === "food") {

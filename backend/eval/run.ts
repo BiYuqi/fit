@@ -37,8 +37,8 @@ interface Expect {
   db?: {
     // 单条断言，或多条（T53 批量改：一句改多样，逐条断言每条落对）
     food_record?:
-      | ({ where?: { food_name?: string } } & Record<string, unknown>)
-      | Array<{ where?: { food_name?: string } } & Record<string, unknown>>;
+      | ({ where?: { food_name?: string; meal_type?: string } } & Record<string, unknown>)
+      | Array<{ where?: { food_name?: string; meal_type?: string } } & Record<string, unknown>>;
     food_record_count?: number;
     exercise_record?: { where?: { type?: string } } & Record<string, unknown>; // T50：断言运动记录字段（calories_burned/duration_min 等）
     pending_record?: { type?: string } | null; // null = 断言无 open pending
@@ -184,11 +184,14 @@ async function assertTurn(userId: string, turn: Turn, resp: { intent?: string; r
         where: {
           user_id: userId,
           ...(where?.food_name ? { food: { name: { contains: where.food_name } } } : {}),
+          ...(where?.meal_type ? { meal_type: where.meal_type as never } : {}),
         },
         include: { food: true },
         orderBy: { created_at: "desc" },
       });
-      const label = where?.food_name ? `food_record(${where.food_name})` : "food_record";
+      const label = where?.food_name
+        ? `food_record(${where.food_name}${where.meal_type ? `,${where.meal_type}` : ""})`
+        : "food_record";
       checkFields(failures, label, fields, rec ? { ...rec, food_name: rec.food?.name } : null);
     }
   }
