@@ -9,7 +9,7 @@
 1. **AI 绝不算账。** 热量/营养只能由后端用 `food_standard` 的每100g数值 × 克数算出。AI 只负责理解、估份量、估兜底营养。
 2. **数据库是唯一事实源。** `food_record` / `daily_summary` 是真相。Today/History 只读它们。
 3. **聊天记录是展示层，不是事实源。** `chat_message` 只用于回放显示，**Today/History 绝不读它**；删聊天不影响热量统计。
-4. **食物匹配不用 embedding、不用向量库。** 用 DeepSeek 归一 + pg_trgm 模糊匹配（见 AI_PARSING_SPEC）。
+4. **食物匹配不用 embedding。** 用 DeepSeek 归一 + pg_trgm 模糊匹配（见 AI_PARSING_SPEC）。语义记忆检索不属于此条管辖（见 MEMORY_SPEC）。
 5. **认证极简**：账号 + 密码，account 唯一即可。无邮箱验证、无找回密码、无第三方登录。
 6. **不做**「最近吃过 / 收藏 / 一键重记」。
 7. **DeepSeek key 只在后端**，绝不进前端。
@@ -31,6 +31,7 @@
 | `docs/AI_PARSING_SPEC.md` | DeepSeek 解析、意图路由、置信度、匹配、上下文卡 |
 | `docs/CALORIE_ENGINE.md` | BMR/TDEE/缺口/目标 计算口径（公式的**唯一定义处**） |
 | `docs/LEARNING_SPEC.md` | 自学习机制：学习信号、偏差模型、更新/应用算法（学习公式的**唯一定义处**） |
+| `docs/MEMORY_SPEC.md` | 语义记忆系统（设计稿）：从对话提取用户偏好/忌口/习惯，pgvector 检索注入（尚未进入任务拆分） |
 | `docs/DESIGN_SPEC.md` | UI 行为规格（视觉稿已由 Claude Design 产出） |
 | `docs/TEST_PLAN.md` | 后端验证计划（curl 流程、一致性） |
 | `docs/TESTING.md` | 前端组件测试规范：怎么写、怎么跑、已知坑 |
