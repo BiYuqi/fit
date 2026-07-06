@@ -30,7 +30,11 @@ export async function handleRecord(
 
   const user = await prisma.user.findUniqueOrThrow({ where: { id: user_id } });
   const weight_kg = Number(user.weight_kg) || 70;
-  let mealResolved = (extractMealTypeFromText(text) ?? parsed.meal_type) as MealType | undefined;
+  // 餐次判定：文本时间词 > 续报继承 > 当前时间。
+  // 刻意不信 AI 的 parsed.meal_type：模型常无视"无时间词就省略餐次"的指令，
+  // 看到上下文卡里某餐已有几项，就把新食物也脑补进那餐（如 12 点多记血桃被塞进早餐）。
+  // 没有时间词、又不是续报时，唯一可信的餐次信号是时钟，别让模型的脑补压过它。
+  let mealResolved = extractMealTypeFromText(text) as MealType | undefined;
   if (!mealResolved && CONTINUATION_RE.test(text.trim())) {
     mealResolved = (await inheritRecentMealType(user_id)) ?? undefined;
   }

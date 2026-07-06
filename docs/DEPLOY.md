@@ -122,6 +122,22 @@ cd frontend && npx expo start --dev-client # 只改 JS，热更
 
 后端自启 + tunnel 常驻：Mac 不关机，出门拿手机打开 App 就能用。
 
+### 图标 / 开屏（原生资源，改完必须 prebuild）
+
+App 图标、启动图、`app.json` 的 icon/splash/adaptiveIcon 属**原生资源**——它们在 `prebuild` 时被"烤"进 `ios/`、`android/` 工程。改了源图或 app.json 后**只重装旧构建不生效**，桌面还是旧图标。`ios/`、`android/` 是 gitignore 的（CNG 流），`--clean` 整份重生，安全无损：
+
+```bash
+cd frontend
+npx expo prebuild --clean      # 用新 app.json + assets 重生成 ios/android
+# 先在手机上删掉旧 App（iOS 桌面图标缓存很顽固）
+npx expo run:ios --device      # 重新构建装真机；安卓同理 run:android --device
+```
+
+- **Expo Go 里永远看不到自定义图标**（它只显示 Expo Go 自己的图标）——必须 `run:ios`/`run:android` 的 dev build 或正式构建。
+- 资源位置：`frontend/assets/images/` 下 `icon.png`（iOS/通用，须 **8-bit 无 alpha**）、`android-icon-{foreground,background,monochrome}.png`（安卓自适应三层）、`splash-icon.png`、`favicon.png`。
+- ⚠️ **坑**：`app.json` 的 `ios.icon` 若单独指向别的文件（如默认的 `assets/expo.icon`），会**盖过**顶层 `icon`，导致 iOS 用错图标——iOS 想用 `icon.png` 就别设 `ios.icon`。
+- 品牌蓝统一为 `#0A84FF`（图标 / adaptive 底 / splash 底 / 开屏遮罩）。
+
 ## 端口备忘（两套后端并行）
 
 | 端口 | 谁 | 谁连它 |

@@ -135,7 +135,8 @@ export async function resolvePendingRecord(params: {
       ?? portionsList[0];
     const biases = biasEnabled() ? await getBiases(user_id, food.id, food.category, candidates.scene) : {};
     const portionsWithCal = portionsList.map((p) => {
-      const grams = applyBias(p.grams, biases);
+      // custom 档是用户显式克数（地面真值），绝不套偏差；偏差只修正 AI 估档（同 food-item）
+      const grams = p.label === "custom" ? p.grams : applyBias(p.grams, biases);
       return {
         ...p,
         grams,

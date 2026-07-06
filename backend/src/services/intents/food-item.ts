@@ -189,7 +189,11 @@ export async function processFoodItem(item: FoodItem, ctx: ItemCtx): Promise<Ite
   // 食物确定后，对各档克数应用该用户学到的份量偏差；冷启动/开关关闭时原样返回。
   // rawChosen 是 AI 原估（学习事件的 predicted 基准），biasedChosen 是展示/入库的值。
   const biases = biasEnabled() ? await getBiases(user_id, food.id, food.category, scene) : {};
-  const biasedPortions = portions.map((p) => ({ ...p, grams: applyBias(p.grams, biases) }));
+  // custom 档是用户亲口报的精确克数（"149克"），是地面真值，绝不套学习偏差——
+  // 偏差只修正 AI 的估档（小/中/大）。否则会把用户明示的重量"改"掉（149→125），
+  // 且 predicted_grams 记原值、weight_g 记被改小的值，隐式确认还会 ln(应用/原估) 反向强化偏差（自污染）。
+  const biasedPortions = portions.map((p) =>
+    p.label === "custom" ? { ...p } : { ...p, grams: applyBias(p.grams, biases) });
   // chosen_label 缺档已在 schema 层归一化（T42 ensureChosenPortion）；此处兜底回退 medium，绝不回退小份
   const rawChosen = portions.find((p) => p.label === chosen_label)
     ?? portions.find((p) => p.label === "medium") ?? portions[0];

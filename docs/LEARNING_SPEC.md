@@ -84,7 +84,9 @@ function updateBias(prior: Bias, e: number, signalWeight: number): Bias {
 }
 ```
 
-应用（parse 后、出卡/入库前，对每档 portion 克数）：
+应用（parse 后、出卡/入库前，对**估档**克数）：
+
+> **只修 AI 估档（small/medium/large），绝不碰 `custom` 档。** `custom` 是用户亲口报的精确克数（"149克"）或卡片自定义输入，是地面真值（正是 §3 权重 1.0/0.9 的最强学习信号）——偏差学的是 `ln(final_g / predicted_g)`，即 AI 估算的系统误差，对用户明示的重量套系数属于逻辑矛盾。历史教训（2026-07-06）：曾对 `custom` 也套偏差，把用户报的 149克 改成 125g，且 `predicted_grams` 记原值、`weight_g` 记改后值，隐式确认又拿 `ln(125/149)` 反向强化偏差，形成自污染正反馈。调用方（`food-item` / `pending-resolve`）须对 `label === "custom"` 的档跳过 `applyBias`。
 
 ```ts
 function applyBias(grams: number, b: { food?: Bias; category?: Bias; scene?: Bias }): number {
@@ -101,7 +103,7 @@ function applyBias(grams: number, b: { food?: Bias; category?: Bias; scene?: Bia
 }
 ```
 
-防污染小结：截断 + 离群降权 + 倍率硬边界 + 删除不训练 + 信号分级权重。
+防污染小结：截断 + 离群降权 + 倍率硬边界 + 删除不训练 + 信号分级权重 + custom 档（用户显式克数）不修正。
 防漂移小结：n_eff 封顶（等效滑动窗口）+ σ² 保底 + bias_update_log 可回放回滚。
 
 ## 6. 学到的东西如何影响下次预测（三路径）
