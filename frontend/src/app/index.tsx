@@ -17,7 +17,7 @@ import { SymbolView } from 'expo-symbols';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { formatChatTime, formatDateLabel, localDateStr, dateOnly, CHAT_TIME_GAP_MS } from '@/lib/format';
+import { formatChatTime, formatDateLabel, appToday, dateOnly, CHAT_TIME_GAP_MS } from '@/lib/format';
 import { ChatInput } from '@/components/chat/chat-input';
 import { MessageItem, ThinkingBubble } from '@/components/chat/message-item';
 import { SearchModal } from '@/components/chat/search-modal';
@@ -181,7 +181,7 @@ export default function ChatScreen({ isActive = true }: { isActive?: boolean }) 
     if (!isActive || !token) return;
     const msgs = useChatStore.getState().messages;
     if (msgs.length === 0) return;
-    if (!msgs.some(m => dateOnly(m.date) === localDateStr())) {
+    if (!msgs.some(m => dateOnly(m.date) === appToday())) {
       loadRecentMessages(token);
     }
   }, [isActive, token, loadRecentMessages]);

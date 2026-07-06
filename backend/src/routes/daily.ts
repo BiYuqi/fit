@@ -2,14 +2,7 @@ import { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
 import { computeUserTargets } from "../services/summary";
-
-function todayStr(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
-function toDateOnly(date: string): Date {
-  return new Date(date + "T00:00:00.000Z");
-}
+import { todayStr, toDateOnly } from "../lib/dates";
 
 function dateToStr(date: Date): string {
   return date.toISOString().slice(0, 10);

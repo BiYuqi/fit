@@ -1,4 +1,5 @@
 import { prisma } from "../lib/prisma";
+import { todayStr, toDateOnly } from "../lib/dates";
 import { bmr as calcBmr, tdee as calcTdee } from "./calc";
 import type { UserProfile, Sex, ActivityLevel } from "./calc";
 import type { User } from "@prisma/client";
@@ -9,17 +10,6 @@ export interface ContextCard {
   week: { avg_deficit: number; logged_days: number };
   month: { logged_days: number; avg_in: number };
   targets: { calories: number; protein: number };
-}
-
-// date string "YYYY-MM-DD" → UTC midnight Date（@db.Date 字段匹配用）
-function toDateOnly(date: Date | string): Date {
-  const s = typeof date === "string" ? date : date.toISOString().slice(0, 10);
-  return new Date(s + "T00:00:00.000Z");
-}
-
-function todayStr(): string {
-  const local = new Date(Date.now() + 8 * 3600 * 1000);
-  return local.toISOString().slice(0, 10);
 }
 
 // ---------- 目标值（bmr/tdee/target_calories/target_protein）----------

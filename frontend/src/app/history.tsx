@@ -18,6 +18,7 @@ import { apiFetch } from '@/lib/api';
 import { useAuthStore } from '@/stores/auth-store';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { Colors, Glass, BottomTabInset, Spacing } from '@/constants/theme';
+import { appToday, addDays, localDateStr } from '@/lib/format';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface RangeItem {
@@ -78,9 +79,7 @@ const WEEKDAYS_FULL  = ['周日', '周一', '周二', '周三', '周四', '周�
 const CHART_H = 92;
 
 // ─── Date helpers ─────────────────────────────────────────────────────────────
-function todayStr(): string {
-  return new Date().toISOString().slice(0, 10);
-}
+// "今天/窗口" 一律按 APP_TZ（北京）算，与后端同口径；见 lib/format 文件头说明。
 
 /** Extract YYYY-MM-DD from an ISO datetime or date string (backend returns full ISO). */
 function toDateOnly(s: string): string {
@@ -88,25 +87,19 @@ function toDateOnly(s: string): string {
 }
 
 function getDateRange(g: Granularity): { from: string; to: string } {
-  const now = new Date();
+  const to = appToday();
   switch (g) {
-    case 'day': {
-      const d = new Date(now);
-      d.setDate(d.getDate() - 6);
-      return { from: d.toISOString().slice(0, 10), to: todayStr() };
-    }
-    case 'week': {
+    case 'day':
+      return { from: addDays(to, -6), to };
+    case 'week':
       // Last 7 weeks for a meaningful chart (~7 data points)
-      const d = new Date(now);
-      d.setDate(d.getDate() - 48);
-      return { from: d.toISOString().slice(0, 10), to: todayStr() };
-    }
+      return { from: addDays(to, -48), to };
     case 'month': {
-      // Last 12 months for a meaningful chart (~12 data points)
-      const d = new Date(now);
-      d.setMonth(d.getMonth() - 11);
-      d.setDate(1);
-      return { from: d.toISOString().slice(0, 10), to: todayStr() };
+      // Last 12 months：从今天所在月往前推 11 个自然月的 1 号
+      const [y, m] = to.split('-').map(Number);
+      let mm = m - 11, yy = y;
+      while (mm < 1) { mm += 12; yy -= 1; }
+      return { from: `${yy}-${String(mm).padStart(2, '0')}-01`, to };
     }
   }
 }
@@ -144,8 +137,7 @@ function isoWeekDateRange(period: string): { mon: string; sun: string } {
   mon.setDate(week1Mon.getDate() + (w - 1) * 7);
   const sun = new Date(mon);
   sun.setDate(mon.getDate() + 6);
-  const fmt = (d: Date) => d.toISOString().slice(0, 10);
-  return { mon: fmt(mon), sun: fmt(sun) };
+  return { mon: localDateStr(mon), sun: localDateStr(sun) };
 }
 
 function formatTime(iso: string): string {

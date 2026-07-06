@@ -1,12 +1,12 @@
 import { create } from 'zustand';
 import { apiFetch } from '@/lib/api';
 import { getMessagesInRange, getMessagesAround, getMessageDateById, upsertMessages } from '@/lib/db';
-import { localDateStr, dateOnly } from '@/lib/format';
+import { appToday, addDays, dateOnly } from '@/lib/format';
 import { mergeMessages } from '@/lib/messages';
 import type { ChatMessage, ContextCard, SendMessageResponse, ResolveResponse, UndoPrevState } from '@/types/chat';
 
 function todayStr() {
-  return localDateStr();
+  return appToday();
 }
 
 // 写入 SQLite 时按每条消息自身的 date 分组——响应里可能混着不同归属日的消息
@@ -43,10 +43,8 @@ type JumpTarget =
 
 // 跳转窗口的结束日期（含当天）。窗口已覆盖今天时返回 null（= 实时模式，无需向新方向加载）。
 function windowToFor(targetDate: string): string | null {
-  const d = new Date(targetDate + 'T12:00:00');
-  if (isNaN(d.getTime())) return null;
-  d.setDate(d.getDate() + 1); // 与 getMessagesAround(date, 1) 的窗口右边界一致
-  const to = d.toISOString().slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(targetDate)) return null;
+  const to = addDays(targetDate, 1); // 与 getMessagesAround(date, 1) 的窗口右边界一致
   return to >= todayStr() ? null : to;
 }
 
@@ -88,9 +86,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   loadDates: async (token: string) => {
     try {
       const to = todayStr();
-      const from = new Date();
-      from.setDate(from.getDate() - 89);
-      const fromStr = localDateStr(from);
+      const fromStr = addDays(to, -89);
       const data = await apiFetch<{ dates: string[] }>(
         `/api/chat/dates?from=${fromStr}&to=${to}`,
         { token },
@@ -107,9 +103,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     set({ isLoading: true, windowTo: null }); // 最近窗口总是含今天
 
     const to = todayStr();
-    const fromDate = new Date();
-    fromDate.setDate(fromDate.getDate() - 6); // 7-day display window
-    const from = localDateStr(fromDate);
+    const from = addDays(to, -6); // 7-day display window
 
     // 1. Read display window from SQLite (instant — data already cached by T26)
     try {

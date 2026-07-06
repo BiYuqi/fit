@@ -1,4 +1,5 @@
 import { prisma } from "../lib/prisma";
+import { todayStr, toDateOnly } from "../lib/dates";
 import { buildContextCard, type ContextCard } from "./summary";
 import { biasEnabled } from "./learning";
 import { PENDING_STALE_MS } from "./pending-resolve";
@@ -45,14 +46,6 @@ async function buildPortionHabits(user_id: string): Promise<PortionHabit[]> {
 
 const TURN_WINDOW = 8; // L0 滑动窗口：最近 N 轮
 
-function todayStr(): string {
-  const local = new Date(Date.now() + 8 * 3600 * 1000);
-  return local.toISOString().slice(0, 10);
-}
-
-function toDateOnly(date: string): Date {
-  return new Date(date + "T00:00:00.000Z");
-}
 
 const MEAL_ZH: Record<string, string> = {
   breakfast: "早餐",

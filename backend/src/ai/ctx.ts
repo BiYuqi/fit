@@ -1,5 +1,6 @@
 import { callDeepSeek, type ChatMessage, type CallOptions } from "./client";
 import type { MemoryPack } from "../services/memory";
+import { todayStr, tzDateStr, tzTimeStr, tzMonthDayStr } from "../lib/dates";
 
 const RECORD_LIMIT = 20;
 const TURN_LIMIT = 5;
@@ -19,24 +20,17 @@ const PORTION_ZH: Record<string, string> = {
   small: "小份", medium: "中份", large: "大份", custom: "自定",
 };
 
-function todayStrCtx(): string {
-  const local = new Date(Date.now() + 8 * 3600 * 1000);
-  return local.toISOString().slice(0, 10);
-}
-
-// L0 相对时间前缀（北京时间口径与 todayStrCtx 一致）：
+// L0 相对时间前缀（APP_TZ 口径，见 lib/dates）：
 // 今天 → "HH:mm"，昨天 → "昨天HH:mm"，更早 → "M月D日"
 function turnTimeLabel(at: Date | undefined): string {
   if (!at) return "";
-  const local = new Date(at.getTime() + 8 * 3600 * 1000);
-  const dateStr = local.toISOString().slice(0, 10);
-  const hm = local.toISOString().slice(11, 16);
-  const today = todayStrCtx();
-  if (dateStr === today) return hm;
+  const dateStr = tzDateStr(at);
+  const today = todayStr();
+  if (dateStr === today) return tzTimeStr(at);
   const yesterday = new Date(new Date(today + "T00:00:00.000Z").getTime() - 86400000)
     .toISOString().slice(0, 10);
-  if (dateStr === yesterday) return `昨天${hm}`;
-  return `${local.getUTCMonth() + 1}月${local.getUTCDate()}日`;
+  if (dateStr === yesterday) return `昨天${tzTimeStr(at)}`;
+  return tzMonthDayStr(at);
 }
 
 const PORTION_ZH_CTX: Record<string, string> = { small: "小", medium: "中", large: "大" };
@@ -67,7 +61,7 @@ export function compressContext(pack: MemoryPack): string {
   const lines: string[] = [];
 
   // 日期锚点：让 AI 知道"今天/昨天/前天"对应的实际日期
-  lines.push(`【当前日期】今天是 ${todayStrCtx()}（北京时间）`);
+  lines.push(`【当前日期】今天是 ${todayStr()}（北京时间）`);
 
   // L2 画像 + 今日进度
   const prof: string[] = [];
