@@ -1,7 +1,8 @@
 import { prisma } from "../../lib/prisma";
 import { answerQuery } from "../../ai/answers";
 import type { IntentCtx } from "./types";
-import { planQuery, executeQueryPlan, type QueryPlan } from "./query-plan";
+import { planQuery, executeQueryPlan, fetchWeights, buildWeightCard, type QueryPlan } from "./query-plan";
+import type { Prisma } from "@prisma/client";
 
 type Usage = { prompt_tokens: number; completion_tokens: number; total_tokens: number };
 
@@ -29,6 +30,26 @@ export async function handleQuery(ctx: IntentCtx) {
     plan = p.plan;
     planUsage = p.usage;
     await tctx.recordQueryPlan({ plan: p.plan, model: p.model, upgraded: p.upgraded });
+
+    // 体重趋势：直接出 weight_chart 卡（后端算结论，不走 answerQuery，铁律1）
+    if (p.plan.target === "weight") {
+      const w = await fetchWeights(user_id);
+      const { content, payload } = buildWeightCard(w);
+      const cardMsg = await prisma.chatMessage.create({
+        data: {
+          user_id,
+          date: dateObj,
+          role: "assistant",
+          kind: "weight_chart",
+          content,
+          payload: payload as unknown as Prisma.InputJsonValue,
+        },
+      });
+      messages.push(cardMsg);
+      tctx.ok("query", { tokenUsage: planUsage, promptMessages: parseMessages });
+      return { intent: "query", reply: content, summary_card: pack.card, messages };
+    }
+
     extraCtx = await executeQueryPlan(user_id, p.plan);
   } catch (err: any) {
     // planner flash+pro 均失败：记 trace 后走无 extraCtx 兜底，绝不 500

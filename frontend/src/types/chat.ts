@@ -6,7 +6,15 @@ export type MessageKind =
   | 'clarify_card'
   | 'exercise_card'
   | 'delete_confirm_card'
-  | 'event';
+  | 'event'
+  | 'weight_chart';
+
+// 体重趋势卡：等距次序折线（起点 + 实测点）+ 后端算好的结论文字（在 message.content）
+export type WeightChartPayload = {
+  points: { label: string; kg: number }[]; // 首点可能是"起点"（初始体重）
+  target: number | null;                   // 目标体重参考线
+  chart: boolean;                          // 是否够点画图（>=2）
+};
 
 export type ChatMessage = {
   id: string;

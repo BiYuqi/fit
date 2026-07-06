@@ -20,6 +20,8 @@ interface EvalCase {
     food_alias?: Array<{ canonical: string; food: string; streak?: number; hits?: number }>;
     // T44：种历史食物记录。days_ago 相对今天（1=昨天），用相对天数避免用例被日历边界（月初/周一）搞抖
     food_record?: Array<{ days_ago: number; food: string; grams: number; meal_type?: string }>;
+    // 体重趋势查询：种历史体重实测点（days_ago 相对今天，1=昨天）
+    weight_log?: Array<{ days_ago: number; kg: number }>;
   };
   turns: Turn[];
 }
@@ -43,6 +45,7 @@ interface Expect {
     exercise_record?: { where?: { type?: string } } & Record<string, unknown>; // T50：断言运动记录字段（calories_burned/duration_min 等）
     pending_record?: { type?: string } | null; // null = 断言无 open pending
     last_card?: string; // 最新 assistant 消息的 kind
+    weight_chart?: { points?: number; kgs?: number[] }; // 最近一张 weight_chart 卡的折线点断言
     weight_log?: { weight_kg?: number }; // 最近一个体重历史点（record_weight 写入）
     user?: { weight_kg?: number }; // 档案字段断言：record_weight 绝不能改初始体重
   };
@@ -115,6 +118,17 @@ async function runSetup(userId: string, setup: EvalCase["setup"]) {
     touchedDates.add(dateStr);
   }
   for (const d of touchedDates) await recompute(userId, d);
+
+  // 种历史体重实测点（同 record_weight 的落库口径：每日一行，覆盖式）
+  for (const w of setup?.weight_log ?? []) {
+    const local = new Date(Date.now() + 8 * 3600 * 1000);
+    const day = new Date(Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate() - w.days_ago));
+    await prisma.weightLog.upsert({
+      where: { user_id_date: { user_id: userId, date: day } },
+      update: { weight_kg: w.kg },
+      create: { user_id: userId, date: day, weight_kg: w.kg },
+    });
+  }
 }
 
 // ---------- 断言 ----------
@@ -230,6 +244,25 @@ async function assertTurn(userId: string, turn: Turn, resp: { intent?: string; r
       orderBy: { created_at: "desc" },
     });
     if (msg?.kind !== db.last_card) failures.push({ what: "last_card", expected: db.last_card, actual: msg?.kind ?? "无" });
+  }
+  if (db?.weight_chart !== undefined) {
+    const msg = await prisma.chatMessage.findFirst({
+      where: { user_id: userId, role: "assistant", kind: "weight_chart" },
+      orderBy: { created_at: "desc" },
+    });
+    const pts = (msg?.payload as any)?.points as Array<{ kg: number }> | undefined;
+    if (!pts) {
+      failures.push({ what: "weight_chart", expected: "weight_chart 卡", actual: msg?.kind ?? "无" });
+    } else {
+      if (db.weight_chart.points !== undefined && pts.length !== db.weight_chart.points) {
+        failures.push({ what: "weight_chart.points", expected: db.weight_chart.points, actual: pts.length });
+      }
+      for (const kg of db.weight_chart.kgs ?? []) {
+        if (!pts.some((p) => Math.abs(Number(p.kg) - kg) <= 0.01)) {
+          failures.push({ what: "weight_chart.kgs", expected: `含${kg}`, actual: JSON.stringify(pts.map((p) => p.kg)) });
+        }
+      }
+    }
   }
   if (db?.weight_log !== undefined) {
     const wl = await prisma.weightLog.findFirst({ where: { user_id: userId }, orderBy: { date: "desc" } });

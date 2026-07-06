@@ -6,7 +6,8 @@
 //
 // 安全边界（写死，永不放宽）：
 //   - 计划里没有 user_id 字段，执行器的 user_id 永远来自 JWT（词汇上无法越权）
-//   - 只查 food_record / exercise_record / daily_summary 三张事实表，
+//   - 只查 food_record / exercise_record / daily_summary 三张事实表；
+//     体重趋势分支额外只读 weight_log + user 的体重字段（weight_kg/target_weight_kg），
 //     chat_message 物理不可达（铁律3）
 //   - 只读：本文件只允许 findMany / aggregate / groupBy，无任何写路径
 //     （query-plan.test.ts 有源码扫描测试兜底）
@@ -25,6 +26,7 @@ export const ITEMS_MAX = 40;
 export const DAILY_MAX_DAYS = 31; // daily 超过则降为 total，附说明
 const BY_FOOD_TOP = 10;
 const REPORT_TOP = 5;
+export const WEIGHT_MAX_POINTS = 60; // 体重查询最多返回最近 N 个实测点，防撑爆上下文
 
 // ---------- QueryPlan schema ----------
 
@@ -41,7 +43,8 @@ const RangeSchema = z.discriminatedUnion("type", [
 export const QueryPlanSchema = z
   .object({
     range: RangeSchema,
-    target: z.enum(["food", "exercise", "both"]).default("both"),
+    // weight：体重趋势查询，走独立分支（读 WeightLog + 初始/目标体重），忽略 range/detail/filter
+    target: z.enum(["food", "exercise", "both", "weight"]).default("both"),
     food_filter: z.string().min(1).optional(),
     meal_filter: z.enum(["breakfast", "lunch", "dinner", "snack"]).optional(),
     detail: z.enum(["total", "daily", "items", "report", "by_food"]),
@@ -408,9 +411,105 @@ export function renderQueryResult(plan: QueryPlan, r: ResolvedRange, rows: Query
   return lines.join("\n");
 }
 
+// ---------- 体重趋势（target=weight，独立分支）----------
+// WeightLog（每日实测点）+ User 的初始体重/目标体重。结论一律后端算好（铁律1）。
+// 体重点是稀疏的，用户问"最近体重变化"要的是真实的那几个点，而非某日历窗口，
+// 因此这里忽略 range，直接给最近 WEIGHT_MAX_POINTS 个实测点 + 起点。
+
+export interface WeightPoint {
+  date: string; // YYYY-MM-DD
+  kg: number;
+}
+export interface WeightData {
+  initial: number | null; // 初始体重（User.weight_kg）
+  target: number | null;  // 目标体重（User.target_weight_kg）
+  points: WeightPoint[];  // 按日期升序，最多最近 WEIGHT_MAX_POINTS 个
+}
+
+function fmtKg(kg: number): string {
+  return Number(kg.toFixed(2)).toString(); // 去尾零：77.75→77.75，78.0→78
+}
+
+export async function fetchWeights(user_id: string): Promise<WeightData> {
+  const [user, logs] = await Promise.all([
+    prisma.user.findUnique({ where: { id: user_id }, select: { weight_kg: true, target_weight_kg: true } }),
+    prisma.weightLog.findMany({
+      where: { user_id },
+      orderBy: { date: "desc" },
+      take: WEIGHT_MAX_POINTS,
+      select: { date: true, weight_kg: true },
+    }),
+  ]);
+  const points = logs
+    .map((l) => ({ date: l.date.toISOString().slice(0, 10), kg: Number(l.weight_kg) }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+  return {
+    initial: user?.weight_kg != null ? Number(user.weight_kg) : null,
+    target: user?.target_weight_kg != null ? Number(user.target_weight_kg) : null,
+    points,
+  };
+}
+
+// 带符号（下降为负）：+0.35 / -0.6 / 0
+function signedKg(delta: number): string {
+  const s = fmtKg(delta);
+  return delta > 0 ? `+${s}` : s; // 负数 fmtKg 已带 "-"
+}
+
+// ---------- 体重卡（weight_chart 消息的 content + payload）----------
+// content：后端算好的结论文字（铁律1，AI 不算账），也是纯文本兜底/eval 断言的锚。
+// payload：折线图数据；点少于 2 个时 chart=false，前端只出文字不画图。
+
+export interface WeightChartPoint {
+  label: string; // 起点 / MM-DD（等距次序横轴的标签）
+  kg: number;
+}
+export interface WeightChartPayload {
+  points: WeightChartPoint[]; // [起点(若有), ...实测点] 等距排列
+  target: number | null;      // 目标体重（前端可画参考线）
+  chart: boolean;             // 是否够点画图（>=2）
+}
+
+// 结论文字：当前 / 较起点 / 较上次 / 距目标（“较起点”对初始体重，“较上次”对上一实测点）
+function weightConclusion(w: WeightData): string {
+  if (w.initial == null && w.points.length === 0) {
+    return "还没有任何体重数据，之后每次称完报我，我帮你盯趋势。";
+  }
+  if (w.points.length === 0) {
+    const t = w.target != null ? `，目标 ${fmtKg(w.target)}kg` : "";
+    return `起点 ${fmtKg(w.initial!)}kg，还没有实测点，之后每次称完报我，我帮你盯趋势${t}。`;
+  }
+  const latest = w.points[w.points.length - 1];
+  const parts: string[] = [`当前 ${fmtKg(latest.kg)}kg`];
+  if (w.initial != null) parts.push(`较起点${signedKg(latest.kg - w.initial)}kg`);
+  if (w.points.length >= 2) parts.push(`较上次${signedKg(latest.kg - w.points[w.points.length - 2].kg)}kg`);
+  if (w.target != null) {
+    const toGo = latest.kg - w.target;
+    parts.push(toGo > 0.05 ? `距目标${fmtKg(w.target)}kg还差${fmtKg(toGo)}kg` : `已达/超过目标${fmtKg(w.target)}kg`);
+  }
+  return parts.join("，") + "。";
+}
+
+// 图上的点：等距次序，起点在最左（初始体重无日期，标“起点”），其后为实测点（MM-DD）
+function weightChartPoints(w: WeightData): WeightChartPoint[] {
+  const pts: WeightChartPoint[] = [];
+  if (w.initial != null) pts.push({ label: "起点", kg: w.initial });
+  for (const p of w.points) pts.push({ label: p.date.slice(5), kg: p.kg });
+  return pts;
+}
+
+export function buildWeightCard(w: WeightData): { content: string; payload: WeightChartPayload } {
+  const points = weightChartPoints(w);
+  return {
+    content: weightConclusion(w),
+    payload: { points, target: w.target, chart: points.length >= 2 },
+  };
+}
+
 // ---------- 执行器 ----------
 
 // 返回给 answerQuery 的 extraCtx 文本；区间在未来时也返回明确说明，让 AI 如实回答
+// 注：target=weight 不走这里，由 handleQuery 直接出 weight_chart 卡（见 intents/query.ts）
 export async function executeQueryPlan(user_id: string, plan: QueryPlan): Promise<string> {
   const r = resolveRange(plan.range, todayStr());
   if (!r) return `【实时查询】询问的日期在未来，没有记录`;
@@ -451,8 +550,8 @@ const queryPlanToolSchema = {
         },
         target: {
           type: "string",
-          enum: ["food", "exercise", "both"],
-          description: "只问吃→food；只问运动→exercise；都问或不明确→both",
+          enum: ["food", "exercise", "both", "weight"],
+          description: "只问吃→food；只问运动→exercise；问体重/体重变化/趋势/瘦了胖了多少→weight；都问或不明确→both",
         },
         food_filter: {
           type: "string",
@@ -481,7 +580,8 @@ const PLANNER_PROMPT = `你是查询计划生成器：把用户关于自己饮�
 - 跟进式细问（"具体吃了什么"、"都有哪些"）本身不带日期时，沿用【最近对话】里上一轮查询所指的日期。
 - "吃了几次X/吃过X吗" → detail=items + food_filter=X（次数由后端数好）。
 - "总结/回顾/表现/吃得怎么样" → detail=report。
-- 问某一餐（早饭/午饭/晚饭/加餐/宵夜）→ meal_filter（宵夜→snack）。`;
+- 问某一餐（早饭/午饭/晚饭/加餐/宵夜）→ meal_filter（宵夜→snack）。
+- 问体重/称重/体重变化/趋势/瘦了胖了几斤 → target=weight（range/detail 随便给，如 this_month+total，后端会返回全部实测点和结论）。`;
 
 type Usage = { prompt_tokens: number; completion_tokens: number; total_tokens: number };
 

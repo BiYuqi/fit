@@ -345,7 +345,7 @@ model ChatMessage {
   user_id    String
   date       DateTime @db.Date // 线程分组（按天）
   role       ChatRole
-  kind       String   // text | record_card | meal_card | portion_card | candidate_card | clarify_card | query_card | exercise_card
+  kind       String   // text | record_card | meal_card | portion_card | candidate_card | clarify_card | query_card | exercise_card | weight_chart
   content    String?
   payload    Json?
   record_id  String? // 记录类卡片关联的 food_record，用于实时回填/删除联动

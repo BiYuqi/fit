@@ -1,0 +1,38 @@
+# 体重趋势查询（target=weight）：复刻线上 outoftoken 的傻 bug——
+# "列一下最近的体重变化" 时 AI 只凭上下文答（初始+最新），把中间那个实测点漏了、
+# 还谎称"只有两条/没有记录"。修复：query-plan 加 weight 分支，读全部 WeightLog + 初始体重。
+name: 体重趋势查询——列出全部真实实测点，不漏中间点、不谎称没记录
+profile: { weight_kg: 78, target_weight_kg: 70 }
+setup:
+  # 昨天有一个实测点 77.75（就是线上被漏掉的那条）
+  weight_log:
+    - { days_ago: 1, kg: 77.75 }
+turns:
+  # 今天再上报一个点 → 现在库里应有：初始78 + 昨天77.75 + 今天77.4
+  - say: "今天体重77.4公斤"
+    expect:
+      intent: record_weight
+      reply_contain: ["77.4"]
+      db:
+        weight_log: { weight_kg: 77.4 }
+        user: { weight_kg: 78 }
+
+  # 列体重变化 → 出 weight_chart 卡；折线三点齐全（起点78 + 昨天77.75 + 今天77.4），
+  # 昨天那条 77.75 不能再被漏掉。结论文字含当前值，且绝不谎称没记录。
+  - say: "列一下最近的体重变化"
+    expect:
+      intent: query
+      reply_contain: ["77.4"]
+      reply_forbid: ["只有两条", "没有记录", "没记录", "看不出"]
+      db:
+        last_card: weight_chart
+        weight_chart: { points: 3, kgs: [78, 77.75, 77.4] }
+
+  # 换个问法（趋势）同样出卡；结论里"较上次-0.35"必须用到中间点 77.75 才算得出来
+  - say: "帮我看下最近的体重趋势"
+    expect:
+      intent: query
+      reply_contain_any: ["0.35", "77.75"]
+      db:
+        last_card: weight_chart
+        weight_chart: { points: 3, kgs: [78, 77.75, 77.4] }

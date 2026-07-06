@@ -11,6 +11,7 @@ import { ClarifyCard } from './clarify-card';
 import { ExerciseCard } from './exercise-card';
 import { DeleteConfirmCard } from './delete-confirm-card';
 import { EventLine } from './event-line';
+import { WeightChartCard } from './weight-chart-card';
 import type {
   ChatMessage,
   MealCardPayload,
@@ -20,6 +21,7 @@ import type {
   ExerciseCardPayload,
   DeleteConfirmCardPayload,
   EventCardPayload,
+  WeightChartPayload,
 } from '@/types/chat';
 
 export function ThinkingBubble() {
@@ -117,6 +119,11 @@ export const MessageItem = memo(function MessageItem({ message, isLast }: { mess
 
     case 'event':
       return p ? <EventLine payload={p as unknown as EventCardPayload} messageId={message.id} /> : null;
+
+    case 'weight_chart':
+      return p
+        ? <WeightChartCard payload={p as unknown as WeightChartPayload} content={message.content} />
+        : <AiTextBubble content={message.content} />;
 
     case 'text':
     default:

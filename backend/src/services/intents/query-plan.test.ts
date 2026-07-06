@@ -202,9 +202,12 @@ test("query-plan.ts 源码：无写路径、chat_message 不可达", () => {
   for (const forbidden of ["chatMessage", ".create(", ".update(", ".upsert(", ".delete", ".executeRaw", "$queryRaw"]) {
     assert.ok(!src.includes(forbidden), `query-plan.ts 不应出现 "${forbidden}"`);
   }
-  // prisma 访问只允许三张白名单表
+  // prisma 访问只允许白名单表（均只读；weightLog/user 为体重趋势分支只读体重字段）
   const tables = [...src.matchAll(/prisma\.(\w+)\./g)].map((m) => m[1]);
   for (const t of tables) {
-    assert.ok(["foodRecord", "exerciseRecord", "dailySummary"].includes(t), `白名单外的表访问: prisma.${t}`);
+    assert.ok(
+      ["foodRecord", "exerciseRecord", "dailySummary", "weightLog", "user"].includes(t),
+      `白名单外的表访问: prisma.${t}`,
+    );
   }
 });
