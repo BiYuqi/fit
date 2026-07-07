@@ -14,7 +14,7 @@ import { handleRecord } from "../services/intents/record";
 import { handleResolvePending } from "../services/intents/resolve-pending";
 import { handleRecordWeight } from "../services/intents/record-weight";
 import type { IntentCtx } from "../services/intents/types";
-import { constraintOnlyExtract, fullExtract, CONSTRAINT_KEYWORDS } from "../services/memory-extract";
+import { quickExtract, fullExtract, CONSTRAINT_KEYWORDS } from "../services/memory-extract";
 import { isMemoryPaused } from "../services/memory-store";
 
 // ---------- 请求 schema ----------
@@ -56,9 +56,9 @@ export async function chatRoutes(app: FastifyInstance) {
     const memoryPaused = await isMemoryPaused(user_id).catch(() => false);
     if (!memoryPaused && CONSTRAINT_KEYWORDS.some((kw) => text.includes(kw))) {
       try {
-        await constraintOnlyExtract(text, user_id);
+        await quickExtract(text, user_id);
       } catch (err) {
-        console.warn("chat: constraintOnlyExtract failed", err);
+        console.warn("chat: quickExtract failed", err);
       }
     }
 

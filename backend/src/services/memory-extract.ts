@@ -16,17 +16,27 @@ import {
 // ── 关键词预筛选词表（MEMORY_SPEC §4.2）──
 
 /** 约束关键词：同步路径第一层过滤，命中才调 LLM（~50 词，< 0.1ms） */
+/** 用户特征信号词：同步路径第一层过滤，命中才调 LLM。
+ *  宁可松不可紧——漏筛代价是少记一条用户特征，LLM 才是真正的闸门。 */
 export const CONSTRAINT_KEYWORDS = [
-  // 过敏相关
+  // 过敏
   "过敏", "过敏源", "起疹子", "起红疹", "肿了", "呼吸困难",
   "碰不得", "不能碰", "不能吃", "不能喝", "忌口", "忌",
-  // 疾病/医疗
+  // 疾病/医疗（笼统 + 具体，覆盖面优先）
   "痛风", "糖尿病", "血糖", "血压", "高血脂", "脂肪肝",
-  "乳糖不耐", "麸质", "胃酸", "胃炎", "胃溃疡", "肠胃",
+  "乳糖不耐", "麸质", "胃酸", "胃病", "胃痛", "胃胀", "胃炎", "胃溃疡", "肠胃",
   "腹泻", "拉肚子", "便秘", "消化不良",
+  "肾病", "肝病", "胆囊", "结石", "心脏", "甲亢", "甲减", "贫血",
+  "怀孕", "哺乳",
+  "医生说", "营养师说", "体检", "报告", "查出", "诊断", "得了", "患有",
   // 饮食身份/限制
   "素食", "吃素", "清真", "halal", "不吃猪肉", "不吃肉",
-  "医生说", "营养师说", "体检", "报告", "查出",
+  // 偏好/习惯（口语化表达——用户可能在描述自己）
+  "不吃", "讨厌", "喜欢", "爱吃", "受不了", "接受不了", "从来不吃",
+  "习惯", "一般", "通常", "总是", "每天", "一直",
+  // 状态/目标信号
+  "最近", "这周", "这个月", "备赛", "出差", "控碳", "戒", "减肥", "增肌",
+  "压力", "焦虑", "加班", "熬夜", "生病", "不舒服",
 ];
 
 /** 异步 full 提取触发词：比约束词表宽，宁可松不可紧 */
@@ -64,32 +74,52 @@ const ExtractResultSchema = z.object({
  * 约束提取 prompt：极轻量（~80 token），只提取 constraint 类型。
  * 不包含其他四类的定义——预筛选已过滤了大部分无关消息。
  */
-const CONSTRAINT_ONLY_PROMPT = `你是记忆提取器。只提取饮食硬约束（过敏、疾病限制、宗教/身份饮食）。
+const QUICK_EXTRACT_PROMPT = `你是记忆提取器。用户正在告诉你关于 ta 自己的事情——你的任务是记住。
 
-类型 constraint：过敏("花生过敏")、医疗限制("痛风不能吃高嘌呤")、宗教/身份饮食("素食者")。
+提取所有五类用户特征（不要只盯着 constraint）：
+
+### constraint（硬约束——安全/健康相关）
+- 过敏、诊断、疾病："花生过敏"、"慢性非萎缩性胃炎"、"痛风"、"糖尿病"、"乳糖不耐"、"脂肪肝"
+- 用户说自己有/患有/查出/得了某病 → 必须提取，importance_class=medical
+- 宗教/身份："素食者"、"清真"
+
+### preference（偏好——口味/食物喜好）
+- "我不吃香菜"、"我超爱吃辣"、"口淡少油少盐"、"受不了太甜的"
+
+### habit（长期习惯——稳定行为模式）
+- "我早上一般不吃早饭"、"每天都要喝咖啡"、"晚上睡得晚"
+
+### context_state（临时状态——被动身处的环境）
+- "最近出差"、"最近压力大"、"胃炎恢复期"、"最近上夜班"
+- 区分：被动描述环境→context_state，主动设定方向→goal
+
+### goal（短期目标——有时间边界）
+- "备赛期"、"这周控碳水"、"这个月戒糖"
 
 规则：
-- 只输出用户明确陈述的硬约束，不推断不猜测
-- llm_confidence: 0.90+明确, 0.80-0.89可能有修辞, 0.70-0.79不够明确, <0.70不输出
-- importance_class: medical(安全/医疗级), strong(重要), normal(普通), casual(随口)
-- entity 用 snake_case 英文（优先：peanut/dairy/gluten/seafood/soybean/vegetarian/halal）
-- action: "create"（首次）或 "update"（修正已有约束）
+- 用户的自我描述就值得记录。宁多勿漏——多记一条无害，漏一条丢失用户信任。
+- llm_confidence: 0.90+明确陈述, 0.80-0.89可能有修辞, 0.70-0.79不够明确, <0.70不输出
+- importance_class: 任何诊断/过敏都是medical, 明确强偏好是strong, 普通是normal, 随口是casual
+- entity 用 snake_case 英文，优先用受控词表，没有的新建
+- action: "create"（首次）或 "update"（修正已有）
 
-返回 JSON：{"candidates":[{"type":"constraint","entity":"...","content":"...","llm_confidence":0.9,"importance_class":"medical","action":"create","source":"..."}]}
-没有约束时返回 {"candidates":[]}`;
+返回 JSON：{"candidates":[{"type":"...","entity":"...","content":"...","llm_confidence":0.9,"importance_class":"medical","action":"create","source":"..."}]}
+没有要记的返回 {"candidates":[]}`;
 
 /**
  * 完整提取 prompt：覆盖全部五种类型，含受控 entity 词表。
  * 异步路径使用——失败不影响主流程。
  */
-const FULL_EXTRACT_PROMPT = `你是记忆提取器。从用户消息中提取"关于用户自己的持久事实"。大部分时候返回空列表。
+const FULL_EXTRACT_PROMPT = `你是记忆提取器。用户在告诉你关于 ta 自己的事情——你的任务是记住。宁多勿漏。
 
 ## 提取类型
 
 ### constraint（硬约束——安全/健康相关，不衰减）
 - 过敏: "我对花生过敏" → {type:"constraint", entity:"peanut", content:"花生过敏"}
-- 医疗限制: "痛风不能吃高嘌呤" → {type:"constraint", entity:"high_purine", content:"痛风，需低嘌呤饮食"}
+- 慢性病/诊断: "慢性非萎缩性胃炎" → {type:"constraint", entity:"chronic_gastritis", content:"慢性非萎缩性胃炎", importance_class:"medical"}
+- 任何诊断都算："我有胃病"、"查出轻度脂肪肝"、"乳糖不耐"、"痛风"、"糖尿病"、"高血压"——只要用户说自己有/患有/查出，就是 constraint
 - 宗教/身份饮食: "我是素食者" → {type:"constraint", entity:"vegetarian", content:"素食者"}
+- importance_class：任何诊断/过敏/疾病都是 medical
 
 ### preference（偏好——口味/食物喜好，λ=0.001）
 - "我不吃香菜" → {type:"preference", entity:"cilantro", content:"不吃香菜"}
@@ -150,16 +180,17 @@ function extractJson(text: string): object | null {
   }
 }
 
-// ── Constraint-Only Extraction（同步，MEMORY_SPEC §4.1 同步路径）──
+// ── Quick Extraction（同步，T55/T56）──
 
 /**
- * 约束关键词命中 → 调 DeepSeek flash 提取 constraint → 写入 user_memory。
+ * 关键词命中 → 调 DeepSeek flash 提取所有五类用户特征 → 写入 user_memory。
  * 返回写入的 memory 列表（供 chat.ts 本轮立即使用）。
  *
+ * 不再只提 constraint——用户说的任何关于自己的事实都值得记住。
  * 关键词未命中直接返回 []，零 LLM 调用。
  * LLM 调用失败静默返回 []，不影响主流程。
  */
-export async function constraintOnlyExtract(
+export async function quickExtract(
   text: string,
   userId: string,
 ): Promise<ActiveMemory[]> {
@@ -170,7 +201,7 @@ export async function constraintOnlyExtract(
   try {
     const res = await callDeepSeek(
       [
-        { role: "system", content: CONSTRAINT_ONLY_PROMPT },
+        { role: "system", content: QUICK_EXTRACT_PROMPT },
         { role: "user", content: text },
       ],
       { model: "deepseek-v4-flash" },
@@ -184,13 +215,12 @@ export async function constraintOnlyExtract(
 
     const parsed = ExtractResultSchema.safeParse(json);
     if (!parsed.success) {
-      console.warn("constraintOnlyExtract: zod validation failed", parsed.error.flatten());
+      console.warn("quickExtract: zod validation failed", parsed.error.flatten());
       return [];
     }
 
     const results: ActiveMemory[] = [];
     for (const c of parsed.data.candidates) {
-      if (c.type !== "constraint") continue;
       try {
         const mem = await upsertMemory(userId, {
           type: c.type,
@@ -199,15 +229,16 @@ export async function constraintOnlyExtract(
           llm_confidence: c.llm_confidence,
           importance_class: c.importance_class,
           source_text: c.source,
+          expires_at: c.expires_at ? new Date(c.expires_at) : null,
         });
         results.push(mem);
       } catch (err) {
-        console.warn("constraintOnlyExtract: upsert failed for", c.entity, err);
+        console.warn("quickExtract: upsert failed for", c.entity, err);
       }
     }
     return results;
   } catch (err) {
-    console.warn("constraintOnlyExtract: LLM call failed", err);
+    console.warn("quickExtract: LLM call failed", err);
     return [];
   }
 }
