@@ -15,7 +15,7 @@ function buildClient() {
 }
 
 let _client: OpenAI | null = null;
-function getClient() {
+export function getClient() {
   if (!_client) _client = buildClient();
   return _client;
 }

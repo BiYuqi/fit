@@ -4,7 +4,7 @@
 > 用法：一次只做一个任务，按下方顺序，自测验收通过再下一个。
 > 状态：⬜待办 / 🔄进行中 / ✅完成。**任务验收通过后更新两处**：本表该行 + `tasks/Txx.md` 顶部状态行。
 
-**进度：51 / 56**　里程碑：✅ M1 命令行心跳(T07)　✅ M2 后端全通(T12)　✅ 前端可用(T19)　⬜ 可出包(T21)　✅ E 对话上下文(T23)　✅ L 学习闭环(T31)　✅ C 对话智能(T40)　✅ G 餐食卡(T48)　⬜ M 语义记忆(T56)
+**进度：52 / 56**　里程碑：✅ M1 命令行心跳(T07)　✅ M2 后端全通(T12)　✅ 前端可用(T19)　⬜ 可出包(T21)　✅ E 对话上下文(T23)　✅ L 学习闭环(T31)　✅ C 对话智能(T40)　✅ G 餐食卡(T48)　⬜ M 语义记忆(T56)
 
 ## 分轨
 - **基建 S**：T01
@@ -62,6 +62,10 @@ T49(需T47/T48)                      聊天降噪 N：事件行回执 + 免确�
 T50(无依赖)                         录入采信 R：record 阶段直采用户自报运动消耗
 
 T53(需T45/T47/T48)                  批量修改 G3：multi-modify 触发 + 后端护栏 + 项级独立撤销
+
+T54(无强依赖，需 pgvector)            语义记忆 M：地基——DB + Scoring Engine + Store（零侵入）
+  └─ T55(需T54)                      语义记忆 M：接入——提取管线 + compressContext 注入
+       └─ T56(需T55)                 语义记忆 M：闭环——cron 维护 + Memory Center API + 前端管理页
 ```
 说明：T13 前端骨架不依赖接口，可在后端推进时并行起；但真实联调要等对应后端任务（T15↔T09，T16↔T11/T12，T17/T18↔T12，T19↔T09）。
 
@@ -143,6 +147,6 @@ T01 → T02 → T03 → T04 → T05 → T06 → T07(✅M1)
 | ✅ | T51 | tasks/T51-record-weight.md | 体重记录：聊天 record_weight 只 append weight_log 不改初始体重 + 最新实测点入上下文 + 重看引导不当测点 |
 | ✅ | T52 | tasks/T52-meal-card-count.md | 餐食卡份数：AI 出结构化 count/count_unit，明细主显示 `食物名 ×N` 替代 raw_input 长文案 |
 | ✅ | T53 | tasks/T53-batch-modify.md | 批量修改正确性 + 项级独立撤销：每样值不同走 multi、后端护栏不静默丢、last_change→last_changes 每条各自撤销 |
-| ⬜ | T54 | tasks/T54-memory-phase1-foundation.md | 语义记忆地基：user_memory 表 + Scoring Engine 纯函数 + Memory Store CRUD（零侵入） |
+| ✅ | T54 | tasks/T54-memory-phase1-foundation.md | 语义记忆地基：user_memory 表 + Scoring Engine 纯函数 + Memory Store CRUD（零侵入） |
 | ⬜ | T55 | tasks/T55-memory-phase2-extract-inject.md | 语义记忆接入：提取管线（同步 constraint + 异步 full）+ compressContext 注入 |
 | ⬜ | T56 | tasks/T56-memory-phase3-lifecycle-ui.md | 语义记忆闭环：cron 维护 + Memory Center API + 前端管理页 |

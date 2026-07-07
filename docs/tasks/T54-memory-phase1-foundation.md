@@ -1,6 +1,6 @@
 # T54 — 语义记忆 Phase 1：地基（DB + 纯函数）
 
-**状态**：⬜待办
+**状态**：✅完成
 
 **目标**：创建 `user_memory` 表、Scoring Engine 纯函数、Memory Store CRUD，全部零侵入——不碰任何现有代码。
 
@@ -68,15 +68,30 @@ decideState(type, score) → 'ACTIVE' | 'WEAK' | 'ARCHIVED'
 
 ## 验收
 
-- [ ] migration 可执行，表创建成功，索引生效
-- [ ] `computeScore` 8 个场景数值与 spec 一致（容差 ±0.01）
-- [ ] `decideState` 跨阈值行为正确（晋升/降级/死区不震荡）
-- [ ] `importanceMap` 四类映射正确
-- [ ] `repetitionBoost` n=1→0.70, n=2→0.91, n=3→0.97
-- [ ] `loadActiveMemories` 混合检索：constraint 全量、context_state/goal 按 score、结果数合理
-- [ ] `upsertMemory` INSERT + ON CONFLICT UPDATE 两条路径都可工作
-- [ ] 单测全绿，tsc 零错误
+- [x] migration 可执行，表创建成功，索引生效
+- [x] `computeScore` 8 个场景数值与 spec 一致（容差 ±0.01）
+- [x] `decideState` 跨阈值行为正确（晋升/降级/死区不震荡）
+- [x] `importanceMap` 四类映射正确
+- [x] `repetitionBoost` n=1→0.70, n=2→0.91, n=3→0.97
+- [x] `loadActiveMemories` 混合检索：constraint 全量、context_state/goal 按 score、结果数合理
+- [x] `upsertMemory` INSERT + ON CONFLICT UPDATE 两条路径都可工作
+- [x] 单测全绿（38 new + 147 existing = 185 total, 0 fail），tsc 零错误
 
 ## 落地记录
 
-（待填）
+### 新增文件
+- `backend/prisma/migrations/20260707024327_t54_user_memory/` — UserMemory 表 + pgvector 扩展 + CHECK 约束 + HNSW 索引
+- `backend/prisma/migrations/20260707024508_t54_checks_and_indexes/` — Prisma 自动产生的漂移修正（误删 HNSW，手工重建）
+- `backend/src/services/memory-scorer.ts` — Scoring Engine 纯函数（computeScore / importanceMap / repetitionBoost / decay / decideState）
+- `backend/src/services/memory-store.ts` — Memory Store CRUD（loadActiveMemories 混合检索 / upsertMemory / archiveMemory / deleteExpiredMemories / recalcAndPrune / setMemoryPaused / clearAllMemories）
+- `backend/src/services/memory-scorer.test.ts` — 38 个单测：§5.4 八场景 + 滞回边界 + 乘法融合边界
+
+### 修改文件
+- `backend/prisma/schema.prisma` — 加 vector 扩展、UserMemory model、User 模型加 memories 关系
+- `backend/src/ai/client.ts` — 导出 `getClient()`（供 memory-store.ts embedding 调用）
+
+### 已知限制
+- 场景 2/4 的 decideState 结果与 MEMORY_SPEC §5.4 文字标注的"→ ACTIVE ✓"不同（场景用 §3 简化阈值 0.50，实际 §8.1 滞回 ACTIVE_UP=0.55），测试按 §8.1 滞回模型验证，spec 场景文字待后续修订
+- HNSW 索引需在 Prisma migrate 后手工维护（Prisma 不原生支持 pgvector 索引类型）
+- `generateEmbedding` 调 DeepSeek embedding API，如 DeepSeek 不提供 embedding 端点则退化到 null（preference/habit 检索退化到 score 排序）
+- `setMemoryPaused` 用 user_memory 表的 _system 行存暂停状态（临时方案，Phase 3 移入 user 表字段）

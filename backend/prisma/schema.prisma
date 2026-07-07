@@ -12,7 +12,7 @@ generator client {
 
 datasource db {
   provider   = "postgresql"
-  extensions = [pg_trgm] // 启用模糊匹配扩展；url 在 prisma.config.ts
+  extensions = [pg_trgm, vector] // pg_trgm 模糊匹配；vector 语义记忆 embedding
 }
 
 // ---------- 枚举 ----------
@@ -78,6 +78,7 @@ model User {
   weight_logs      WeightLog[]
   food_aliases     UserFoodAlias[]
   biases           UserBias[]
+  memories          UserMemory[]
 }
 
 // ---------- 食物标准库（seed 导入的目标表）----------
@@ -333,6 +334,37 @@ model UserFoodAlias {
 //   ORDER BY s DESC
 //   LIMIT 5;
 // ============================================================
+
+// ---------- 语义记忆（MEMORY_SPEC §6）----------
+// 用户画像层：从对话提取的语义事实。score 不落库——检索时实时计算。
+// embedding 用 Unsupported("vector(1024)") 因为 Prisma 不原生支持 pgvector 类型。
+model UserMemory {
+  id                String    @id @default(uuid())
+  user_id           String
+  type              String    // constraint | preference | habit | context_state | goal；CHECK 在迁移 SQL 里
+  entity            String    // 归一化实体，优先使用受控词表（MEMORY_SPEC §4.3）
+  content           String    // 人类可读文本，供 LLM 上下文注入
+  llm_confidence    Float     // LLM 初始把握度（提取时记录，之后不变）
+  importance_class  String    @default("normal") // medical | strong | normal | casual；LLM 分类 → 系统映射
+  repetition_count  Int       @default(1) // 累计提及次数（24h 去重）
+  state             String    @default("WEAK") // ACTIVE | WEAK | ARCHIVED
+  source_type       String    @default("explicit_user") // explicit_user | implicit_behavior | system_inferred
+  expires_at        DateTime? // 仅 type=goal 时可选：目标截止时间，过期后 decay × 0.2
+  valid_from        DateTime  @default(now()) // 记忆开始有效的时间
+  valid_to          DateTime? // 被矛盾记忆取代的时间（冲突处理时填写）
+  embedding         Unsupported("vector(1024)")? // DeepSeek embedding（1024 维），preference/habit 语义检索用
+  source_message_id String?   // 追溯：来源消息
+  source_text       String?   // 追溯：原文片段
+  created_at        DateTime  @default(now())
+  updated_at        DateTime  @updatedAt
+  last_accessed_at  DateTime  @default(now()) // 上次被注入或更新的时间；decay 的 Δt 基准
+
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([user_id, type, entity, content])
+  @@index([user_id, state])
+  @@index([user_id, last_accessed_at])
+}
 
 // ---------- 聊天记录（展示层，非事实源；保留约1年）----------
 enum ChatRole {
