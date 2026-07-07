@@ -143,8 +143,7 @@ export async function loadActiveMemories(
   // 1. constraint：全量拉取，不走 embedding，不受 top-5 限制（安全优先）
   const constraintRows = await prisma.$queryRaw<Record<string, unknown>[]>`
     SELECT * FROM "UserMemory"
-    WHERE user_id = ${userId}::uuid
-      AND type = 'constraint'
+    WHERE user_id = ${userId}      AND type = 'constraint'
       AND state = 'ACTIVE'
     ORDER BY created_at DESC
   `;
@@ -152,8 +151,7 @@ export async function loadActiveMemories(
   // 2. context_state + goal：全部 ACTIVE，应用层算 score，取 top-3
   const cgRows = await prisma.$queryRaw<Record<string, unknown>[]>`
     SELECT * FROM "UserMemory"
-    WHERE user_id = ${userId}::uuid
-      AND state = 'ACTIVE'
+    WHERE user_id = ${userId}      AND state = 'ACTIVE'
       AND type IN ('context_state', 'goal')
   `;
 
@@ -165,8 +163,7 @@ export async function loadActiveMemories(
       phRows = await prisma.$queryRaw<Record<string, unknown>[]>`
         SELECT *, embedding <=> ${vecLiteral(emb)}::vector AS _distance
         FROM "UserMemory"
-        WHERE user_id = ${userId}::uuid
-          AND state = 'ACTIVE'
+        WHERE user_id = ${userId}          AND state = 'ACTIVE'
           AND type IN ('preference', 'habit')
         ORDER BY _distance
         LIMIT 5
@@ -175,8 +172,7 @@ export async function loadActiveMemories(
       // 退化：无 embedding 时全量 + score 排序
       phRows = await prisma.$queryRaw<Record<string, unknown>[]>`
         SELECT * FROM "UserMemory"
-        WHERE user_id = ${userId}::uuid
-          AND state = 'ACTIVE'
+        WHERE user_id = ${userId}          AND state = 'ACTIVE'
           AND type IN ('preference', 'habit')
       `;
     }
@@ -184,8 +180,7 @@ export async function loadActiveMemories(
     // 无 queryText：全量 + score 排序
     phRows = await prisma.$queryRaw<Record<string, unknown>[]>`
       SELECT * FROM "UserMemory"
-      WHERE user_id = ${userId}::uuid
-        AND state = 'ACTIVE'
+      WHERE user_id = ${userId}        AND state = 'ACTIVE'
         AND type IN ('preference', 'habit')
     `;
   }
@@ -229,7 +224,7 @@ export async function upsertMemory(
 
   // 生成 embedding（偏好/习惯需要语义检索）
   const emb = await generateEmbedding(candidate.content);
-  const embExpr = emb ? `'${vecLiteral(emb)}'::vector` : "NULL";
+  const embParam = emb ? vecLiteral(emb) : null; // JS null → SQL NULL bind param
 
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
     INSERT INTO "UserMemory" (
@@ -239,7 +234,7 @@ export async function upsertMemory(
       expires_at, valid_from, embedding, last_accessed_at, updated_at
     ) VALUES (
       gen_random_uuid(),
-      ${userId}::uuid,
+      ${userId},
       ${candidate.type},
       ${candidate.entity},
       ${candidate.content},
@@ -248,11 +243,11 @@ export async function upsertMemory(
       1,
       ${initState},
       ${candidate.source_type ?? "explicit_user"},
-      ${candidate.source_message_id ? `${candidate.source_message_id}` : null}::uuid,
+      ${candidate.source_message_id ? `${candidate.source_message_id}` : null},
       ${candidate.source_text ?? null},
       ${candidate.expires_at ? candidate.expires_at.toISOString() : null}::timestamptz,
       ${now.toISOString()}::timestamptz,
-      ${embExpr}::vector,
+      ${embParam}::vector,
       ${now.toISOString()}::timestamptz,
       ${now.toISOString()}::timestamptz
     )
@@ -269,7 +264,7 @@ export async function upsertMemory(
       source_message_id = COALESCE(EXCLUDED.source_message_id, "UserMemory".source_message_id),
       source_text = COALESCE(EXCLUDED.source_text, "UserMemory".source_text),
       expires_at = EXCLUDED.expires_at,
-      embedding = COALESCE(${embExpr}::vector, "UserMemory".embedding),
+      embedding = COALESCE(${embParam}::vector, "UserMemory".embedding),
       updated_at = ${now.toISOString()}::timestamptz,
       last_accessed_at = ${now.toISOString()}::timestamptz
     RETURNING *
@@ -283,8 +278,7 @@ export async function updateAccessTime(memoryId: string): Promise<void> {
   await prisma.$executeRaw`
     UPDATE "UserMemory"
     SET last_accessed_at = ${new Date().toISOString()}::timestamptz
-    WHERE id = ${memoryId}::uuid
-  `;
+    WHERE id = ${memoryId}  `;
 }
 
 /** 软删除：设 state = ARCHIVED */
@@ -293,8 +287,7 @@ export async function archiveMemory(memoryId: string): Promise<void> {
     UPDATE "UserMemory"
     SET state = 'ARCHIVED',
         updated_at = ${new Date().toISOString()}::timestamptz
-    WHERE id = ${memoryId}::uuid
-  `;
+    WHERE id = ${memoryId}  `;
 }
 
 /** 硬删除 ARCHIVED 且 created_at > 90 天的记忆（每周 cron 调用） */
@@ -304,8 +297,7 @@ export async function deleteExpiredMemories(userId: string): Promise<number> {
 
   const result = await prisma.$executeRaw`
     DELETE FROM "UserMemory"
-    WHERE user_id = ${userId}::uuid
-      AND state = 'ARCHIVED'
+    WHERE user_id = ${userId}      AND state = 'ARCHIVED'
       AND created_at < ${cutoff.toISOString()}::timestamptz
   `;
   // $executeRaw returns number of affected rows in Prisma 7
@@ -319,8 +311,7 @@ export async function getUserMemories(
   const now = new Date();
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
     SELECT * FROM "UserMemory"
-    WHERE user_id = ${userId}::uuid
-      AND state IN ('ACTIVE', 'WEAK')
+    WHERE user_id = ${userId}      AND state IN ('ACTIVE', 'WEAK')
     ORDER BY type, created_at DESC
   `;
   return rows.map((r) => attachScore(r, now));
@@ -332,8 +323,7 @@ export async function getMemoryById(
 ): Promise<ActiveMemory | null> {
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
     SELECT * FROM "UserMemory"
-    WHERE id = ${memoryId}::uuid
-  `;
+    WHERE id = ${memoryId}  `;
   if (rows.length === 0) return null;
   return attachScore(rows[0], new Date());
 }
@@ -358,7 +348,7 @@ export async function setMemoryPaused(
       source_type, last_accessed_at, updated_at
     ) VALUES (
       gen_random_uuid(),
-      ${userId}::uuid,
+      ${userId},
       'constraint',
       '_system',
       ${paused ? 'memory_paused' : 'memory_active'},
@@ -379,8 +369,7 @@ export async function setMemoryPaused(
 export async function isMemoryPaused(userId: string): Promise<boolean> {
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
     SELECT content FROM "UserMemory"
-    WHERE user_id = ${userId}::uuid
-      AND type = 'constraint'
+    WHERE user_id = ${userId}      AND type = 'constraint'
       AND entity = '_system'
     LIMIT 1
   `;
@@ -393,8 +382,7 @@ export async function clearAllMemories(userId: string): Promise<number> {
     UPDATE "UserMemory"
     SET state = 'ARCHIVED',
         updated_at = ${new Date().toISOString()}::timestamptz
-    WHERE user_id = ${userId}::uuid
-      AND state IN ('ACTIVE', 'WEAK')
+    WHERE user_id = ${userId}      AND state IN ('ACTIVE', 'WEAK')
   `;
   return result;
 }
@@ -407,8 +395,7 @@ export async function recalcAndPrune(userId: string): Promise<{
   const now = new Date();
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
     SELECT * FROM "UserMemory"
-    WHERE user_id = ${userId}::uuid
-      AND state IN ('ACTIVE', 'WEAK')
+    WHERE user_id = ${userId}      AND state IN ('ACTIVE', 'WEAK')
       AND NOT (type = 'constraint' AND entity = '_system')
   `;
 
@@ -428,8 +415,7 @@ export async function recalcAndPrune(userId: string): Promise<{
         UPDATE "UserMemory"
         SET state = ${newState},
             updated_at = ${now.toISOString()}::timestamptz
-        WHERE id = ${row.id as string}::uuid
-      `;
+        WHERE id = ${row.id as string}      `;
       if (newState === "WEAK") demotedToWeak++;
       if (newState === "ARCHIVED") demotedToArchived++;
     }
@@ -450,7 +436,7 @@ async function enforceHardLimits(userId: string): Promise<void> {
     SELECT id, type, llm_confidence, importance_class, repetition_count,
            expires_at, last_accessed_at, state
     FROM "UserMemory"
-    WHERE user_id = ${userId}::uuid AND state = 'ACTIVE'
+    WHERE user_id = ${userId} AND state = 'ACTIVE'
       AND NOT (type = 'constraint' AND entity = '_system')
     ORDER BY created_at ASC
   `;
@@ -463,15 +449,14 @@ async function enforceHardLimits(userId: string): Promise<void> {
       await prisma.$executeRaw`
         UPDATE "UserMemory" SET state = 'WEAK',
           updated_at = ${now.toISOString()}::timestamptz
-        WHERE id = ${m.id}::uuid
-      `;
+        WHERE id = ${m.id}      `;
     }
   }
 
   // WEAK 上限
   const weakCount = await prisma.$queryRaw<{ count: number }[]>`
     SELECT COUNT(*)::int as count FROM "UserMemory"
-    WHERE user_id = ${userId}::uuid AND state = 'WEAK'
+    WHERE user_id = ${userId} AND state = 'WEAK'
   `;
   if (weakCount[0]?.count > 300) {
     const over = weakCount[0].count - 300;
@@ -481,7 +466,7 @@ async function enforceHardLimits(userId: string): Promise<void> {
           updated_at = ${now.toISOString()}::timestamptz
       WHERE id IN (
         SELECT id FROM "UserMemory"
-        WHERE user_id = ${userId}::uuid AND state = 'WEAK'
+        WHERE user_id = ${userId} AND state = 'WEAK'
         ORDER BY created_at ASC
         LIMIT ${over}
       )

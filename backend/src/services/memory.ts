@@ -3,6 +3,7 @@ import { todayStr, toDateOnly } from "../lib/dates";
 import { buildContextCard, type ContextCard } from "./summary";
 import { biasEnabled } from "./learning";
 import { PENDING_STALE_MS } from "./pending-resolve";
+import { loadActiveMemories, type MemoryGroups } from "./memory-store";
 
 // 份量倾向的显著性门槛：|μ|≥0.15（≈±16%）且 n_eff≥2 才算"习惯"，避免噪声进 prompt
 const HABIT_MU_MIN = 0.15;
@@ -126,6 +127,7 @@ export interface MemoryPack {
   recent_days: DaySummary[];   // 近3天每日汇总（不含今天）
   portion_habits: PortionHabit[]; // 学到的份量倾向（LEARNING_SPEC §6，T31），只影响 chosen_label
   pending: PendingSummary | null; // 最新未过期的待确认卡（T38），null=当前无待确认
+  active_memories?: MemoryGroups;  // 语义记忆注入（MEMORY_SPEC §7，T55）
 }
 
 async function buildPendingSummary(user_id: string): Promise<PendingSummary | null> {
@@ -160,7 +162,7 @@ export async function buildMemoryPack(user_id: string): Promise<MemoryPack> {
   const yesterday = new Date(todayDate);
   yesterday.setUTCDate(yesterday.getUTCDate() - 1);
 
-  const [user, card, foods, exercises, logs, summaryRows, liveAgg, portion_habits, pending, latestWeight] = await Promise.all([
+  const [user, card, foods, exercises, logs, summaryRows, liveAgg, portion_habits, pending, latestWeight, activeMemories] = await Promise.all([
     prisma.user.findUniqueOrThrow({ where: { id: user_id } }),
     buildContextCard(user_id),
     prisma.foodRecord.findMany({
@@ -193,6 +195,7 @@ export async function buildMemoryPack(user_id: string): Promise<MemoryPack> {
     // 最近一次实测体重点（record_weight 或设置页改体重留下的）：让 AI 答"现在体重多少"
     // 引用实测值而非档案初始体重，避免"当前记录里还是78kg"式的过时回答
     prisma.weightLog.findFirst({ where: { user_id }, orderBy: { date: "desc" } }),
+    loadActiveMemories(user_id),
   ]);
 
   // 合并：summary 优先，没有则用 foodRecord 实时聚合
@@ -304,5 +307,6 @@ export async function buildMemoryPack(user_id: string): Promise<MemoryPack> {
     recent_days,
     portion_habits,
     pending,
+    active_memories: activeMemories,
   };
 }

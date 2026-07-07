@@ -14,6 +14,7 @@ import { handleRecord } from "../services/intents/record";
 import { handleResolvePending } from "../services/intents/resolve-pending";
 import { handleRecordWeight } from "../services/intents/record-weight";
 import type { IntentCtx } from "../services/intents/types";
+import { constraintOnlyExtract, fullExtract, CONSTRAINT_KEYWORDS } from "../services/memory-extract";
 
 // ---------- 请求 schema ----------
 const MessageBodySchema = z.object({
@@ -47,9 +48,27 @@ export async function chatRoutes(app: FastifyInstance) {
     });
     messages.push(userMsg);
 
+    // ── 语义记忆：同步 constraint 提取（MEMORY_SPEC §4.1，T55）──
+    // 关键词命中 → 调 DeepSeek flash 提取 constraint → 写入 user_memory → 本轮立即可用（零窗口期）
+    // 必须 await：constraint 写入后才 buildMemoryPack，否则本轮注入不到刚提取的约束
+    if (CONSTRAINT_KEYWORDS.some((kw) => text.includes(kw))) {
+      try {
+        await constraintOnlyExtract(text, user_id);
+      } catch (err) {
+        console.warn("chat: constraintOnlyExtract failed", err);
+      }
+    }
+
     // 组装对话记忆包（L0 ai_parse_log / L1 今日记录 / L2 画像+卡），注入 prompt 消解指代
     // 此刻本条消息尚未写 ai_parse_log / food_record，记忆包反映的是「本条之前」状态，正合语义
+    // 注意：buildMemoryPack 内部调用 loadActiveMemories，会读到上面刚写入的 constraint
     const pack = await buildMemoryPack(user_id);
+
+    // ── 语义记忆：异步 full 提取（MEMORY_SPEC §4.1，T55）──
+    // 响应返回后跑，不阻塞主流程；失败静默
+    fullExtract(user_id).catch((err) =>
+      console.warn("chat: fullExtract async failed", err),
+    );
 
     // ─────────────────────────────────────────
     // Trace：创建执行链路（AI_TRACE=disabled 时 traceId=""，所有操作静默跳过）

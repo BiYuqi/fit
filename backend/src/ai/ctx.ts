@@ -1,5 +1,6 @@
 import { callDeepSeek, type ChatMessage, type CallOptions } from "./client";
 import type { MemoryPack } from "../services/memory";
+import type { MemoryGroups, ActiveMemory } from "../services/memory-store";
 import { todayStr, tzDateStr, tzTimeStr, tzMonthDayStr } from "../lib/dates";
 
 const RECORD_LIMIT = 20;
@@ -56,12 +57,66 @@ function pendingLine(pending: MemoryPack["pending"]): string | null {
   return null;
 }
 
+/** 渲染【关于你】段落（MEMORY_SPEC §7.2） */
+function renderMemorySection(memories: MemoryGroups): string | null {
+  const now = new Date();
+  const lines: string[] = [];
+
+  // constraint 永远排最前 + 全量注入
+  for (const m of memories.constraints) {
+    lines.push(`  🚫 务必避开：${m.content}`);
+  }
+
+  // 其他类型按 score 降序，最多 8 条
+  const others = [...memories.contextGoals, ...memories.prefsHabits]
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 8);
+
+  for (const m of others) {
+    const daysSince = Math.floor(
+      (now.getTime() - m.last_accessed_at.getTime()) / (1000 * 60 * 60 * 24),
+    );
+    let suffix = "";
+
+    let prefix: string;
+    switch (m.type) {
+      case "preference":
+        prefix = "偏好：";
+        break;
+      case "habit":
+        prefix = "习惯：";
+        break;
+      case "context_state":
+        prefix = "当前状态：";
+        if (daysSince > 30) suffix = `（${daysSince}天前更新）`;
+        break;
+      case "goal":
+        prefix = "目标：";
+        const expired = m.expires_at && new Date(m.expires_at) <= now;
+        if (daysSince > 30 || expired) suffix = "（可能已过期）";
+        break;
+      default:
+        prefix = `${m.type}：`;
+    }
+
+    lines.push(`  ${prefix}${m.content}${suffix}`);
+  }
+
+  return lines.length > 0 ? `【关于你】\n${lines.join("\n")}` : null;
+}
+
 export function compressContext(pack: MemoryPack): string {
   const { profile: p, card, recent_records, recent_turns, recent_days, portion_habits, pending } = pack;
   const lines: string[] = [];
 
   // 日期锚点：让 AI 知道"今天/昨天/前天"对应的实际日期
   lines.push(`【当前日期】今天是 ${todayStr()}（北京时间）`);
+
+  // 语义记忆注入（MEMORY_SPEC §7.2，T55）：constraint 全量 + 其他按 score 最多 8 条
+  if (pack.active_memories) {
+    const memSection = renderMemorySection(pack.active_memories);
+    if (memSection) lines.push(memSection);
+  }
 
   // L2 画像 + 今日进度
   const prof: string[] = [];

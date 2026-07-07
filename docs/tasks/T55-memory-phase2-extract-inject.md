@@ -1,6 +1,6 @@
 # T55 — 语义记忆 Phase 2：提取 + 注入（接入 chat 流程）
 
-**状态**：⬜待办
+**状态**：✅完成
 
 **目标**：LLM 提取管线（同步 constraint + 异步 full）接入 chat 流程，记忆注入 compressContext。这是 MEMORY_SPEC 首次触达现有代码。
 
@@ -92,16 +92,33 @@ Phase 2 后：
 
 ## 验收
 
-- [ ] 关键词"过敏"命中 → 同步提取触发，constraint 写入 user_memory
-- [ ] 关键词"你好"不命中 → 同步提取跳过，零额外 LLM 调用
-- [ ] 同步提取的 constraint 在**同一轮** compressContext 中出现（零窗口期）
-- [ ] `【关于你】` 段落注入 compressContext，constraint 前缀 `🚫 务必避开`
-- [ ] 异步 fullExtract 在响应返回后执行，不阻塞 chat 响应
-- [ ] 异步提取失败不影响主流程（静默 catch）
-- [ ] 已有 memory 被正确去重——同 entity+type 的走 update 而非 create
-- [ ] 全量 eval 零回归（constraint 注入不应破坏现有解析行为）
-- [ ] tsc 零错误
+- [x] 关键词"过敏"命中 → 同步提取触发，constraint 写入 user_memory
+- [x] 关键词"你好"不命中 → 同步提取跳过，零额外 LLM 调用
+- [x] 同步提取的 constraint 在**同一轮** compressContext 中出现（零窗口期）
+- [x] `【关于你】` 段落注入 compressContext，constraint 前缀 `🚫 务必避开`
+- [x] 异步 fullExtract 在响应返回后执行，不阻塞 chat 响应
+- [x] 异步提取失败不影响主流程（静默 catch）
+- [x] 已有 memory 被正确去重——同 entity+type 的走 update 而非 create
+- [x] 全量 eval 零回归——4 个失败均为预存 flaky test（quantifier-delete/meal-batch/query-plan），生产环境(9300)同样失败，与 T55 无关
+- [x] tsc 零错误
 
 ## 落地记录
 
-（待填）
+### 新增文件
+- `backend/src/services/memory-extract.ts` — 提取管线：constraintOnlyExtract（同步，零窗口期）+ fullExtract（异步，不阻塞主流程）+ 关键词预筛选词表 + LLM prompt（constraint-only ~80 token / full）
+
+### 修改文件
+- `backend/src/services/memory.ts` — `buildMemoryPack` 加 `loadActiveMemories(user_id)` 调用；`MemoryPack` 接口加 `active_memories?: MemoryGroups` 字段
+- `backend/src/ai/ctx.ts` — `compressContext` 在 `【当前日期】` 与 `【用户档案】` 间插入 `【关于你】` 段落：constraint 全量 `🚫 务必避开` 前缀 + 其他按 score 降序最多 8 条，含过期/时效标注
+- `backend/src/routes/chat.ts` — writeUserBubble 后插 constraint 关键词扫描 + 同步提取（await，零窗口期）；buildMemoryPack 后 fire-and-forget fullExtract
+- `backend/src/services/memory-store.ts` — BUGFIX：移除所有 `::uuid` 类型转换（user_id 实际为 TEXT 非 native UUID，导致 `operator does not exist: text = uuid`）；embedding=NULL 时传入 JS null 而非字符串 "NULL"（Prisma 参数化导致 `invalid input syntax for type vector: "NULL"`）
+
+### 已验证
+- 手动 curl 测试：「我对花生过敏」→ constraint 写入 user_memory + 「推荐个零食」→ AI 回复主动避开花生
+- 「你好」→ 关键词不命中 → 零 LLM 调用 → 无 memory 写入
+- 185 单测全绿，tsc 零错误
+- 全量 eval：4 个失败均与生产(9300)一致，为预存 flaky test
+
+### 已知限制
+- DeepSeek embedding API 返回 404（`/embeddings` 端点不存在），preference/habit 语义检索退化到 score 排序
+- 异步 fullExtract 的 zod 校验偶有失败（LLM 输出格式不稳定），已静默 catch 不影响主流程
