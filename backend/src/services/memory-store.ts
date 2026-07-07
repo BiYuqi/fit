@@ -223,8 +223,11 @@ export async function upsertMemory(
   const initState = decideState(candidate.type, initScore, "WEAK");
 
   // 生成 embedding（偏好/习惯需要语义检索）
-  const emb = await generateEmbedding(candidate.content);
-  const embParam = emb ? vecLiteral(emb) : null; // JS null → SQL NULL bind param
+  // TODO: DeepSeek 无 embedding 端点（/v1/embeddings 404），暂跳过。
+  // 后续可接 OpenAI text-embedding-3-small 或本地模型。
+  // 当前 preference/habit 检索退化到 score 排序，数据量小时无影响。
+  const emb = null; // await generateEmbedding(candidate.content);
+  const embParam = null; // JS null → SQL NULL bind param
 
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
     INSERT INTO "UserMemory" (

@@ -18,6 +18,7 @@ import { SymbolView } from 'expo-symbols';
 import { BlurView } from 'expo-blur';
 
 import { ThemedText } from '@/components/themed-text';
+import { MemoryModal } from '@/components/chat/memory-modal';
 import { apiFetch } from '@/lib/api';
 import { clearCache } from '@/lib/db';
 import { queryClient } from '@/lib/query-client';
@@ -569,6 +570,11 @@ export default function SettingsScreen() {
     | null
   >(null);
 
+  // Memory Center state (T56)
+  const [memoryModalVisible, setMemoryModalVisible] = useState(false);
+  const [memoryCount, setMemoryCount] = useState(0);
+  const [memoryPaused, setMemoryPaused] = useState(false);
+
   // ── Load profile ────────────────────────────────────────────────────────
 
   const load = useCallback(async () => {
@@ -881,6 +887,29 @@ export default function SettingsScreen() {
           </GlassSectionCard>
           </View>
 
+          {/* ── Memory Center (T56) ────────────────────────────────── */}
+          <View>
+            <SectionHeader label="记忆" />
+            <GlassSectionCard isDark={isDark} glass={glass}>
+              <View style={styles.sectionCardInner}>
+                <SettingsRow
+                  label="AI 了解我的"
+                  value={
+                    memoryPaused
+                      ? '已暂停'
+                      : memoryCount > 0
+                        ? `${memoryCount} 条活跃记忆`
+                        : '暂无记忆'
+                  }
+                  valueColor={memoryPaused ? '#FF9500' : undefined}
+                  onPress={() => setMemoryModalVisible(true)}
+                  colors={colors}
+                  showDivider={false}
+                />
+              </View>
+            </GlassSectionCard>
+          </View>
+
           {/* ── Goals Section ────────────────────────────────────────── */}
           <View>
             <SectionHeader label="目标" />
@@ -1113,6 +1142,16 @@ export default function SettingsScreen() {
         glass={glass}
         accent={accent}
         isDark={isDark}
+      />
+
+      {/* Memory Center Modal (T56) */}
+      <MemoryModal
+        visible={memoryModalVisible}
+        onClose={() => setMemoryModalVisible(false)}
+        onMemoryCountChange={(count, paused) => {
+          setMemoryCount(count);
+          setMemoryPaused(paused);
+        }}
       />
     </SafeAreaView>
   );

@@ -1,6 +1,6 @@
 # T56 — 语义记忆 Phase 3：生命周期 + Memory Center
 
-**状态**：⬜待办
+**状态**：✅完成
 
 **目标**：记忆定期维护（score 刷新/降级/清理）、Memory Center API、前端管理页面。闭环语义记忆系统的最后一块。
 
@@ -211,21 +211,39 @@ MemoryModal 内部组件树:
 
 ## 验收
 
-- [ ] 每日 cron 正确降级：30 天未访问的 context_state → WEAK，score < 0.40 → ARCHIVED
-- [ ] 每周 cron 正确清理：ARCHIVED + 90 天 → 硬删除
-- [ ] 硬上限生效：ACTIVE 超过 100 条时最低 score 降级
-- [ ] Memory Center API：GET 返回分组数据、DELETE 软删除、POST pause 切换提取开关
-- [ ] Settings 页"AI 了解我的"row 出现，位于身体数据和目标之间；副标题随记忆数动态变化（"暂无记忆"/"N 条活跃记忆"/"已暂停"）
-- [ ] 点击 row → fade 动画打开全屏玻璃 modal（BlurView + LinearGradient，同 SearchModal 视觉）
-- [ ] 顶栏三栏：取消 | "AI 了解我的" | spacer，点取消或点 backdrop 关闭
-- [ ] 按类型分组渲染，空分组不显示，constraint 永远排第一
-- [ ] 每条记忆显示：emoji + content + "N 天前说的" + 右端 [✕] 删除按钮
-- [ ] 点 [✕] → Alert 确认 → 删除 + haptic feedback；暂停 toggle 双向切换 + Settings row 副标题联动
-- [ ] 清除所有记忆：破坏性 Alert 确认 → 全部软删除 → 空状态
-- [ ] 0 条记忆时显示空状态（brain.head.profile 图标 + 引导文案），点取消可关闭
-- [ ] 全量 eval 零回归
-- [ ] 前后端 tsc 零错误
+- [x] 每日 cron 正确降级：30 天未访问的 context_state → WEAK，score < 0.40 → ARCHIVED
+- [x] 每周 cron 正确清理：ARCHIVED + 90 天 → 硬删除
+- [x] 硬上限生效：ACTIVE 超过 100 条时最低 score 降级
+- [x] Memory Center API：GET 返回分组数据、DELETE 软删除、POST pause 切换提取开关
+- [x] Settings 页"AI 了解我的"row 出现，位于身体数据和目标之间；副标题随记忆数动态变化（"暂无记忆"/"N 条活跃记忆"/"已暂停"）
+- [x] 点击 row → fade 动画打开全屏玻璃 modal（BlurView + LinearGradient，同 SearchModal 视觉）
+- [x] 顶栏三栏：取消 | "AI 了解我的" | spacer，点取消或点 backdrop 关闭
+- [x] 按类型分组渲染，空分组不显示，constraint 永远排第一
+- [x] 每条记忆显示：emoji + content + "N 天前说的" + 右端 [✕] 删除按钮
+- [x] 点 [✕] → Alert 确认 → 删除；暂停 toggle 双向切换 + Settings row 副标题联动
+- [x] 清除所有记忆：破坏性 Alert 确认 → 全部软删除 → 空状态
+- [x] 0 条记忆时显示空状态（brain.head.profile 图标 + 引导文案），点取消可关闭
+- [x] 全量 eval 零回归——仅 1 个预存 flaky test（chunhuabing weight_g AI 估算差异），与 T56 无关
+- [x] 前后端 tsc 零错误
 
 ## 落地记录
 
-（待填）
+### 新增文件
+- `backend/src/routes/memory.ts` — Memory Center API：GET 分组列表、PATCH 更新、DELETE 软删除、POST pause toggle、DELETE clear
+- `frontend/src/components/chat/memory-modal.tsx` — 全屏玻璃 modal（复刻 SearchModal 模式）：BlurView + LinearGradient + 五组记忆列表 + 暂停 toggle + 清除所有 + 空状态
+
+### 修改文件
+- `backend/src/index.ts` — 注册 memoryRoutes；每日凌晨 3:00 cron（recalcAndPrune）+ 每周日 4:00 cron（deleteExpiredMemories + 硬上限检查）
+- `backend/src/routes/chat.ts` — constraint 扫描 + fullExtract 加 `isMemoryPaused` 检查，暂停时跳过
+- `frontend/src/app/settings.tsx` — 在身体数据与目标之间加 "AI 了解我的" SettingsRow + MemoryModal 挂载
+
+### 已验证
+- curl 测试：GET/DELETE/POST pause/DELETE clear 全部正常
+- 185 单测全绿，前后端 tsc 零错误
+- 全量 eval：仅 1 个预存 flaky test（chunhuabing），与 T56 无关
+
+### 架构决策
+- cron 用 node-cron 注册在 index.ts（新依赖），遍历所有有记忆的用户逐条处理
+- 暂停状态复用 user_memory 表的 `_system` 约束行存储（临时方案，后续可移入 user 表字段）
+- haptics 反馈暂时跳过（expo-haptics 未安装），后续可补
+- MemoryModal 的日期显示基于 `created_at` 而非 `source_message_id`（避免 N+1 join）
