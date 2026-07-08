@@ -4,7 +4,7 @@
 > 用法：一次只做一个任务，按下方顺序，自测验收通过再下一个。
 > 状态：⬜待办 / 🔄进行中 / ✅完成。**任务验收通过后更新两处**：本表该行 + `tasks/Txx.md` 顶部状态行。
 
-**进度：54 / 56**　里程碑：✅ M1 命令行心跳(T07)　✅ M2 后端全通(T12)　✅ 前端可用(T19)　⬜ 可出包(T21)　✅ E 对话上下文(T23)　✅ L 学习闭环(T31)　✅ C 对话智能(T40)　✅ G 餐食卡(T48)　✅ M 语义记忆(T56)
+**进度：54 / 57**　里程碑：✅ M1 命令行心跳(T07)　✅ M2 后端全通(T12)　✅ 前端可用(T19)　⬜ 可出包(T21)　✅ E 对话上下文(T23)　✅ L 学习闭环(T31)　✅ C 对话智能(T40)　✅ G 餐食卡(T48)　✅ M 语义记忆(T56)
 
 ## 分轨
 - **基建 S**：T01
@@ -23,6 +23,7 @@
 - **录入采信 R（2026-07-04 真机使用立项）**：T50（record 阶段采信用户直报运动消耗：一句"打球65分钟消耗590卡"直接落 590，不必再『改成X卡』；食物侧同缺口但罕见且路径重，留待单独立项）
 - **体重记录 W（2026-07-05 真机死循环立项）**：T51（聊天 `record_weight` 意图：口头上报实测体重只 append `weight_log`、绝不改初始体重 + 最新实测点注入上下文 + 收敛 weight_log 采集口径：重看引导提交不当测点）
 - **餐食卡份数 G2（2026-07-05 真机观感立项）**：T52（AI 出结构化 `count/count_unit`，餐食卡明细主显示 `食物名 ×N` 替代 `raw_input` 长文案；份数只展示、不参与算账）
+- **性能优化 X（2026-07-08 真机体验立项）**：T57（全页面 SQLite 持久化缓存：Today/History/Settings/Profile 对标 Chat 本地优先，去全屏转圈）
 
 ## 依赖图
 ```
@@ -89,6 +90,7 @@ T01 → T02 → T03 → T04 → T05 → T06 → T07(✅M1)
     → T50   (录入采信 R：record 阶段直采用户自报运动消耗，消除"改成X卡"两步)
 	    → T51 → T52 → T53   (体重+餐食卡份数+批量修改)
 	    → T54 → T55 → T56   (语义记忆 M：用户画像层——地基→提取注入→生命周期+管理中心)
+    → T57   (性能优化 X：全页面 SQLite 持久化缓存，去转圈)
 ```
 
 ## 任务清单
@@ -150,3 +152,4 @@ T01 → T02 → T03 → T04 → T05 → T06 → T07(✅M1)
 | ✅ | T54 | tasks/T54-memory-phase1-foundation.md | 语义记忆地基：user_memory 表 + Scoring Engine 纯函数 + Memory Store CRUD（零侵入） |
 | ✅ | T55 | tasks/T55-memory-phase2-extract-inject.md | 语义记忆接入：提取管线（同步 constraint + 异步 full）+ compressContext 注入 |
 | ✅ | T56 | tasks/T56-memory-phase3-lifecycle-ui.md | 语义记忆闭环：cron 维护 + Memory Center API + 前端管理页 |
+| ⬜ | T57 | tasks/T57-sqlite-cache-for-all-pages.md | 全页面 SQLite 持久化缓存：Today/History/Settings/Profile 去转圈 |

@@ -6,6 +6,8 @@ import Svg, { Circle } from 'react-native-svg';
 import { GlassCard } from '@/components/glass-card';
 import { ThemedText } from '@/components/themed-text';
 import { apiFetch } from '@/lib/api';
+import { getCached, setCached } from '@/lib/db';
+import { appToday } from '@/lib/format';
 import { useAuthStore } from '@/stores/auth-store';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { Colors, Glass, BottomTabInset, Spacing, FontSize } from '@/constants/theme';
@@ -138,11 +140,22 @@ export default function TodayScreen({ isActive = true }: { isActive?: boolean })
 
   const load = useCallback(async () => {
     if (!token) return;
+    const cacheKey = `today|${appToday()}`;
+    // 1. SQLite — instant if cached (T57)
+    const cached = await getCached<{ summary: DailySummary | null; exercises: ExerciseRecord[] }>(cacheKey);
+    if (cached) {
+      setSummary(cached.summary);
+      setExercises(cached.exercises ?? []);
+      setLoading(false);
+    }
+    // 2. API — background refresh
     try {
       const res = await apiFetch<{ summary: DailySummary | null; exercises: ExerciseRecord[] }>('/api/daily/today', { token });
+      await setCached(cacheKey, res);
       setSummary(res.summary);
       setExercises(res.exercises ?? []);
-    } catch { /* keep stale */ } finally { setLoading(false); setRefreshing(false); }
+    } catch { /* keep cached */ }
+    finally { setLoading(false); setRefreshing(false); }
   }, [token]);
 
   const handleRefresh = useCallback(() => {

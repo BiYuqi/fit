@@ -46,6 +46,14 @@ export async function getDb(): Promise<SQLite.SQLiteDatabase> {
   try { await _db.execAsync('ALTER TABLE chat_messages ADD COLUMN record_id TEXT'); } catch {}
   // Normalize existing date values from full ISO → "YYYY-MM-DD"
   try { await _db.execAsync("UPDATE chat_messages SET date = substr(date, 1, 10) WHERE length(date) > 10"); } catch {}
+  // T57: API response cache for Today / History / Settings / Profile
+  await _db.execAsync(`
+    CREATE TABLE IF NOT EXISTS api_cache (
+      key TEXT PRIMARY KEY,
+      data TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+  `);
   return _db;
 }
 
@@ -150,4 +158,48 @@ export async function getMessageDateById(id: string): Promise<string | null> {
     [id],
   );
   return row?.date ?? null;
+}
+
+// ── T57: API response cache ────────────────────────────────────────────────
+
+/** Read a cached API response. Returns null on miss / parse error. */
+export async function getCached<T = unknown>(key: string): Promise<T | null> {
+  try {
+    const db = await getDb();
+    const row = await db.getFirstAsync<{ data: string }>(
+      'SELECT data FROM api_cache WHERE key = ?',
+      [key],
+    );
+    if (!row) return null;
+    return JSON.parse(row.data) as T;
+  } catch {
+    return null;
+  }
+}
+
+/** Write an API response to cache. */
+export async function setCached(key: string, data: unknown): Promise<void> {
+  try {
+    const db = await getDb();
+    await db.runAsync(
+      'INSERT OR REPLACE INTO api_cache (key, data, updated_at) VALUES (?, ?, ?)',
+      [key, JSON.stringify(data), new Date().toISOString()],
+    );
+  } catch { /* cache write is best-effort */ }
+}
+
+/** Delete a single cache key. */
+export async function delCached(key: string): Promise<void> {
+  try {
+    const db = await getDb();
+    await db.runAsync('DELETE FROM api_cache WHERE key = ?', [key]);
+  } catch { /* best-effort */ }
+}
+
+/** Clear all cached API responses (called on logout). */
+export async function clearApiCache(): Promise<void> {
+  try {
+    const db = await getDb();
+    await db.runAsync('DELETE FROM api_cache');
+  } catch { /* best-effort */ }
 }

@@ -15,6 +15,7 @@ import { SymbolView } from 'expo-symbols';
 import { GlassCard } from '@/components/glass-card';
 import { ThemedText } from '@/components/themed-text';
 import { apiFetch } from '@/lib/api';
+import { getCached, setCached } from '@/lib/db';
 import { useAuthStore } from '@/stores/auth-store';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { Colors, Glass, BottomTabInset, Spacing } from '@/constants/theme';
@@ -734,7 +735,20 @@ export default function HistoryScreen({ isActive = true }: { isActive?: boolean 
 
   const load = useCallback(async () => {
     if (!token) return;
-    setLoading(true);
+    const rangeKey = `range|${granularity}|${from}|${to}`;
+    const recordsKey = `records|${from}|${to}`;
+    // 1. SQLite — instant if cached (T57)
+    const [cachedRange, cachedRecords] = await Promise.all([
+      getCached<RangeItem[]>(rangeKey),
+      getCached<{ records: FoodRec[]; exercises: ExRec[] }>(recordsKey),
+    ]);
+    if (cachedRange) setRangeData(cachedRange);
+    if (cachedRecords) {
+      setFoodRecords(cachedRecords.records ?? []);
+      setExRecords(cachedRecords.exercises ?? []);
+    }
+    if (cachedRange || cachedRecords) setLoading(false);
+    // 2. API — background refresh
     try {
       const [rangeRes, recRes] = await Promise.all([
         apiFetch<RangeItem[]>(
@@ -746,16 +760,20 @@ export default function HistoryScreen({ isActive = true }: { isActive?: boolean 
           { token },
         ),
       ]);
+      await Promise.all([
+        setCached(rangeKey, rangeRes),
+        setCached(recordsKey, recRes),
+      ]);
       setRangeData(rangeRes);
       setFoodRecords(recRes.records ?? []);
       setExRecords(recRes.exercises ?? []);
     } catch {
-      /* keep stale data on error */
+      /* keep cached data on error */
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [token, from, to]);
+  }, [token, from, to, granularity]);
 
   const handleRefresh = useCallback(() => {
     setRefreshing(true);

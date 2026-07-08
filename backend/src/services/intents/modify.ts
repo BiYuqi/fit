@@ -233,9 +233,18 @@ export async function handleModify(
       });
     }
     const card = await buildContextCard(user_id);
-    const reply = records.length > 0
-      ? `已追加：${replyParts.join("，")}。`
-      : pending ? "请帮我确认追加内容。" : "好的。";
+    let reply: string;
+    if (records.length > 0) {
+      reply = `已追加：${replyParts.join("，")}。`;
+    } else if (pending) {
+      reply = "请帮我确认追加内容。";
+    } else {
+      reply = "没听清要加什么，能再说一遍吗？比如「加200ml纯奶」";
+      const aiMsg = await prisma.chatMessage.create({
+        data: { user_id, date: dateObj, role: "assistant", kind: "text", content: reply },
+      });
+      messages.push(aiMsg);
+    }
     tctx.ok("modify", { mealType: meal_type, tokenUsage: parseUsage, promptMessages: parseMessages });
     return { intent: "modify", reply, records: records.length ? records : undefined, pending: pending ?? undefined, summary_card: card, messages };
   }

@@ -52,7 +52,9 @@ modify 意图（改 / 删 / 追加已记录的食物或运动）：
   - 食物属性修正，影响营养口径的（"无油款"、"不是油煎的"、"是无糖的"、"去皮的"、"脱脂的"）→ change.food_desc 填修正描述本身（如"无油"），不要顺手填 food/grams。**纯口感/无关描述（"有点咸"、"挺好吃"）不算修正，不要用这条**，整体判 chat。
 - action=delete：删一条（"把那个蛋删了"、"那条记录删掉"）→ 只填 target，删的是整条记录。
 - **量词减量不是整条删除**（T49）：用户只想去掉部分数量（"删掉一个"、"少一个"、"其实只吃了一个"），且【今日已记录】里该记录的份量明显对应多份/多个（如"2个李子"记了60g）→ 判 action=update，change.grams 填按比例减去这部分后的新克数（"2个李子"60g，"删除一个"→ change.grams=30），**不要**判 delete。只有用户明确要清空整条（"把李子删了"、没有量词限定的删除）才判 action=delete。份量本就是单份/说不清具体几份时，无法判断"减一个"是多少 → 仍按 delete 处理（安全兜底）。
-- action=append：在 target 所属那一餐里追加新食物（"早餐再加个蛋"）→ items 填新食物，meal_type 继承 target 所在餐次。
+- action=append：在 target 所属那一餐里追加新食物。items **必填**，结构与 record 的 items 完全一致。meal_type 继承 target 所在餐次，不要重复填。
+  例："晚餐加一个200毫升的纯奶"→ action=append, target 指向晚餐餐次的 ref, items=[{canonical:"纯牛奶", portions:[{label:"custom",grams:200}], chosen_label:"custom"}]
+  例："午饭再加一份米饭"→ action=append, target→午餐 ref, items=[{canonical:"米饭", portions:[…]}]
 - **纯确认词处理**：若当前消息是极简确认（"好"、"改吧"、"修改吧"、"行"、"ok"、"是"、"确认"），且【最近对话】最后几轮的用户消息涉及对某条记录数值的讨论（如"不是50克吗"、"应该是50g"、"改成400"、"记录成180kcal"），则推断 target（从【今日已记录】ref 找最近被讨论的那条）和 change 内容（从讨论中提取数字，视 target 类型填 grams、calories_burned 或 calories），输出 intent=modify, action=update。若推断不出具体 target 或数值，走 chat。
 - 区分 append 与 record：点名某餐追加新食物（"早餐再加个蛋"）→ modify.append；无明确餐次的再次食用（"再来一碗"）→ record。
 - modify_confidence 给「改哪条+怎么改」的整体把握度。
@@ -214,6 +216,17 @@ export async function parseUserInput(
         delete obj.items;
         delete obj.exercise;
         delete obj.meal_type;
+      }
+    }
+    // 防御：modify + append 但 items 为空 → 降级为 chat，避免静默失败（2026-07-08 outoftoken 翻车）
+    if (obj.intent === "modify" && obj.action === "append") {
+      const hasItems = Array.isArray(obj.items) && obj.items.length > 0;
+      if (!hasItems) {
+        obj.intent = "chat";
+        delete obj.action;
+        delete obj.target;
+        delete obj.items;
+        delete obj.change;
       }
     }
     // 防御：target 数组只允许 modify 用（批量改餐次），discuss 误返回数组时取第一个

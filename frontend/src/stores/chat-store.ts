@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { apiFetch } from '@/lib/api';
-import { getMessagesInRange, getMessagesAround, getMessageDateById, upsertMessages } from '@/lib/db';
+import { getMessagesInRange, getMessagesAround, getMessageDateById, upsertMessages, delCached } from '@/lib/db';
 import { appToday, addDays, dateOnly } from '@/lib/format';
 import { mergeMessages } from '@/lib/messages';
 import type { ChatMessage, ContextCard, SendMessageResponse, ResolveResponse, UndoPrevState } from '@/types/chat';
@@ -347,6 +347,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         };
       });
       get().loadDates(token);
+      delCached(`today|${todayStr()}`); // T57: invalidate Today cache
     } catch (e) {
       set(s => ({ messages: s.messages.filter(m => m.id !== tempId) }));
       throw e;
@@ -390,6 +391,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           summaryCard: res.summary_card ?? s.summaryCard,
         };
       });
+      delCached(`today|${todayStr()}`); // T57: invalidate Today cache
     } catch {
       // On failure, still mark as resolved so the card doesn't look stuck
       set(s => ({
@@ -421,6 +423,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         messages: newMsgs.length > 0 ? mergeMessages(s.messages, newMsgs) : s.messages,
         summaryCard: res.summary_card ?? s.summaryCard,
       }));
+      delCached(`today|${todayStr()}`); // T57: invalidate Today cache
     } catch {
       set(s => {
         const next = { ...s.undoneRecords };
@@ -443,5 +446,6 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       messages: newMsgs.length > 0 ? mergeMessages(s.messages, newMsgs) : s.messages,
       summaryCard: res.summary_card ?? s.summaryCard,
     }));
+    delCached(`today|${todayStr()}`); // T57: invalidate Today cache
   },
 }));

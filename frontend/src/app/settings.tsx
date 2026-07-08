@@ -20,8 +20,7 @@ import { BlurView } from 'expo-blur';
 import { ThemedText } from '@/components/themed-text';
 import { MemoryModal } from '@/components/chat/memory-modal';
 import { apiFetch } from '@/lib/api';
-import { clearCache } from '@/lib/db';
-import { queryClient } from '@/lib/query-client';
+import { clearCache, getCached, setCached } from '@/lib/db';
 import { useAuthStore } from '@/stores/auth-store';
 import { useOnboardingReviewStore, type OnboardingFormData } from '@/stores/onboarding-review-store';
 import { useThemeStore, type ThemePreference } from '@/stores/theme-store';
@@ -580,11 +579,21 @@ export default function SettingsScreen() {
   const load = useCallback(async () => {
     if (!token) return;
     setError(null);
+    let hasCache = false;
+    // 1. SQLite — instant if cached (T57)
+    const cached = await getCached<Profile>('profile');
+    if (cached) {
+      setProfile(cached);
+      setLoading(false);
+      hasCache = true;
+    }
+    // 2. API — background refresh
     try {
       const data = await apiFetch<Profile>('/api/user/profile', { token });
+      await setCached('profile', data);
       setProfile(data);
     } catch {
-      setError('加载失败，请下拉重试');
+      if (!hasCache) setError('加载失败，请下拉重试');
     } finally {
       setLoading(false);
     }
@@ -605,7 +614,7 @@ export default function SettingsScreen() {
           body: JSON.stringify(patch),
         });
         setProfile(updated);
-        queryClient.invalidateQueries({ queryKey: ['profile'] });
+        await setCached('profile', updated); // T57: persist to cache
       } catch {
         // keep optimistic value
       }

@@ -3,6 +3,7 @@ import { Platform } from 'react-native';
 import { create } from 'zustand';
 
 import { apiFetch } from '@/lib/api';
+import { clearApiCache } from '@/lib/db';
 
 const TOKEN_KEY = 'auth_token';
 
@@ -59,6 +60,7 @@ export const useAuthStore = create<AuthState>((set) => ({
 
   logout: async () => {
     await storage.delete(TOKEN_KEY);
+    await clearApiCache();
     set({ token: null });
   },
 }));
