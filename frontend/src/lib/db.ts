@@ -54,6 +54,11 @@ export async function getDb(): Promise<SQLite.SQLiteDatabase> {
       updated_at TEXT NOT NULL
     );
   `);
+  // GC：today|日期、range|滚动窗口 这类日期键每天生成新键，不清理会无限增长
+  try {
+    const cutoff = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
+    await _db.runAsync('DELETE FROM api_cache WHERE updated_at < ?', [cutoff]);
+  } catch { /* best-effort */ }
   return _db;
 }
 
@@ -186,14 +191,6 @@ export async function setCached(key: string, data: unknown): Promise<void> {
       [key, JSON.stringify(data), new Date().toISOString()],
     );
   } catch { /* cache write is best-effort */ }
-}
-
-/** Delete a single cache key. */
-export async function delCached(key: string): Promise<void> {
-  try {
-    const db = await getDb();
-    await db.runAsync('DELETE FROM api_cache WHERE key = ?', [key]);
-  } catch { /* best-effort */ }
 }
 
 /** Clear all cached API responses (called on logout). */

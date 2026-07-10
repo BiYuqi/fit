@@ -20,7 +20,8 @@ import { BlurView } from 'expo-blur';
 import { ThemedText } from '@/components/themed-text';
 import { MemoryModal } from '@/components/chat/memory-modal';
 import { apiFetch } from '@/lib/api';
-import { clearCache, getCached, setCached } from '@/lib/db';
+import { clearCache } from '@/lib/db';
+import { useCachedQuery } from '@/hooks/use-cached-query';
 import { useAuthStore } from '@/stores/auth-store';
 import { useOnboardingReviewStore, type OnboardingFormData } from '@/stores/onboarding-review-store';
 import { useThemeStore, type ThemePreference } from '@/stores/theme-store';
@@ -549,7 +550,7 @@ function SectionHeader({ label }: { label: string }) {
 
 // ─── Main Screen ────────────────────────────────────────────────────────────
 
-export default function SettingsScreen() {
+export default function SettingsScreen({ isActive = true }: { isActive?: boolean }) {
   const { token } = useAuthStore();
   const scheme = useColorScheme();
   const isDark = scheme === 'dark';
@@ -557,9 +558,20 @@ export default function SettingsScreen() {
   const glass = Glass[isDark ? 'dark' : 'light'];
   const accent = glass.tint;
 
-  const [profile, setProfile] = useState<Profile | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  // T57：缓存秒出 + 后台静默刷新；'profile' 键与 _layout 共享，进页零等待
+  const {
+    data: profile,
+    loading,
+    error: loadFailed,
+    refetch,
+    mutate,
+  } = useCachedQuery<Profile>(
+    token ? 'profile' : null,
+    () => apiFetch<Profile>('/api/user/profile', { token }),
+  );
+  const error = loadFailed && !profile ? '加载失败，请稍后重试' : null;
+
+  useEffect(() => { if (isActive) refetch(); }, [isActive, refetch]);
 
   // Modal state
   const [modalType, setModalType] = useState<
@@ -574,52 +586,24 @@ export default function SettingsScreen() {
   const [memoryCount, setMemoryCount] = useState(0);
   const [memoryPaused, setMemoryPaused] = useState(false);
 
-  // ── Load profile ────────────────────────────────────────────────────────
-
-  const load = useCallback(async () => {
-    if (!token) return;
-    setError(null);
-    let hasCache = false;
-    // 1. SQLite — instant if cached (T57)
-    const cached = await getCached<Profile>('profile');
-    if (cached) {
-      setProfile(cached);
-      setLoading(false);
-      hasCache = true;
-    }
-    // 2. API — background refresh
-    try {
-      const data = await apiFetch<Profile>('/api/user/profile', { token });
-      await setCached('profile', data);
-      setProfile(data);
-    } catch {
-      if (!hasCache) setError('加载失败，请下拉重试');
-    } finally {
-      setLoading(false);
-    }
-  }, [token]);
-
-  useEffect(() => { void load(); }, [load]);
-
   // ── Save ────────────────────────────────────────────────────────────────
 
   const saveField = useCallback(
     async (patch: Record<string, unknown>) => {
       if (!token || !profile) return;
-      setProfile((p) => (p ? { ...p, ...patch } : p));
+      mutate({ ...profile, ...patch }, false); // 乐观值只更内存，服务端未确认不进缓存
       try {
         const updated = await apiFetch<Profile>('/api/user/profile', {
           method: 'PUT',
           token,
           body: JSON.stringify(patch),
         });
-        setProfile(updated);
-        await setCached('profile', updated); // T57: persist to cache
+        mutate(updated); // 服务端真值：内存 + 缓存
       } catch {
         // keep optimistic value
       }
     },
-    [token, profile],
+    [token, profile, mutate],
   );
 
   // ── Clear cache ─────────────────────────────────────────────────────────

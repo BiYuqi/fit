@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { ActivityIndicator, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Circle } from 'react-native-svg';
@@ -6,11 +6,12 @@ import Svg, { Circle } from 'react-native-svg';
 import { GlassCard } from '@/components/glass-card';
 import { ThemedText } from '@/components/themed-text';
 import { apiFetch } from '@/lib/api';
-import { getCached, setCached } from '@/lib/db';
-import { appToday } from '@/lib/format';
+import { todayCacheKey } from '@/lib/today-cache';
 import { useAuthStore } from '@/stores/auth-store';
+import { useCachedQuery } from '@/hooks/use-cached-query';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { Colors, Glass, BottomTabInset, Spacing, FontSize } from '@/constants/theme';
+import type { TodayResponse } from '@/types/daily';
 
 // ─── Nutrient palette (matches design) ───────────────────────────────────────
 const NUT_COLOR = { protein: '#34C759', fat: '#FF9F0A', carbs: '#5E5CE6' };
@@ -110,20 +111,6 @@ function todayLabel() {
   return `${d.getMonth() + 1}月${d.getDate()}日 ${WEEKDAYS[d.getDay()]}`;
 }
 
-// ─── Types ────────────────────────────────────────────────────────────────────
-interface DailySummary {
-  calories_in: number; total_out: number; deficit: number;
-  tdee: number; exercise_out: number; protein: number; fat: number; carbs: number;
-  target_calories: number; target_protein: number;
-}
-
-interface ExerciseRecord {
-  id: string;
-  type: string;
-  duration_min: number | null;
-  calories_burned: number;
-}
-
 // ─── Screen ───────────────────────────────────────────────────────────────────
 export default function TodayScreen({ isActive = true }: { isActive?: boolean }) {
   const { token } = useAuthStore();
@@ -132,38 +119,15 @@ export default function TodayScreen({ isActive = true }: { isActive?: boolean })
   const colors = Colors[isDark ? 'dark' : 'light'];
   const glass  = Glass[isDark ? 'dark' : 'light'];
 
-  const [summary, setSummary] = useState<DailySummary | null>(null);
-  const [exercises, setExercises] = useState<ExerciseRecord[]>([]);
-  const [loading, setLoading] = useState(true);
+  // T57：缓存秒出 + 后台静默刷新；Tab 激活时 refetch 拉新
+  const { data, loading, refreshing, refetch, refresh } = useCachedQuery<TodayResponse>(
+    token ? todayCacheKey() : null,
+    () => apiFetch<TodayResponse>('/api/daily/today', { token }),
+  );
+  const summary = data?.summary ?? null;
+  const exercises = data?.exercises ?? [];
 
-  const [refreshing, setRefreshing] = useState(false);
-
-  const load = useCallback(async () => {
-    if (!token) return;
-    const cacheKey = `today|${appToday()}`;
-    // 1. SQLite — instant if cached (T57)
-    const cached = await getCached<{ summary: DailySummary | null; exercises: ExerciseRecord[] }>(cacheKey);
-    if (cached) {
-      setSummary(cached.summary);
-      setExercises(cached.exercises ?? []);
-      setLoading(false);
-    }
-    // 2. API — background refresh
-    try {
-      const res = await apiFetch<{ summary: DailySummary | null; exercises: ExerciseRecord[] }>('/api/daily/today', { token });
-      await setCached(cacheKey, res);
-      setSummary(res.summary);
-      setExercises(res.exercises ?? []);
-    } catch { /* keep cached */ }
-    finally { setLoading(false); setRefreshing(false); }
-  }, [token]);
-
-  const handleRefresh = useCallback(() => {
-    setRefreshing(true);
-    void load();
-  }, [load]);
-
-  useEffect(() => { if (isActive) { void load(); } }, [isActive, load]);
+  useEffect(() => { if (isActive) refetch(); }, [isActive, refetch]);
 
   const calIn         = summary?.calories_in  ?? 0;
   const calTarget     = summary?.target_calories ?? 0;
@@ -201,7 +165,7 @@ export default function TodayScreen({ isActive = true }: { isActive?: boolean })
           contentContainerStyle={styles.content}
           showsVerticalScrollIndicator={false}
           refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />
+            <RefreshControl refreshing={refreshing} onRefresh={refresh} />
           }
         >
           {/* ── Card 1: ring + deficit ─────────────────────────────── */}

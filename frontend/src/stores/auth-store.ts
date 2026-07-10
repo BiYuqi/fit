@@ -3,7 +3,8 @@ import { Platform } from 'react-native';
 import { create } from 'zustand';
 
 import { apiFetch } from '@/lib/api';
-import { clearApiCache } from '@/lib/db';
+import { clearApiCache, clearCache } from '@/lib/db';
+import { useChatStore } from '@/stores/chat-store';
 
 const TOKEN_KEY = 'auth_token';
 
@@ -60,7 +61,9 @@ export const useAuthStore = create<AuthState>((set) => ({
 
   logout: async () => {
     await storage.delete(TOKEN_KEY);
-    await clearApiCache();
+    // 换号无泄漏：API 缓存 + 聊天 SQLite 表 + chat-store 内存态一起清
+    await Promise.all([clearApiCache(), clearCache()]);
+    useChatStore.getState().reset();
     set({ token: null });
   },
 }));

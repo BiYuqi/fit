@@ -1,8 +1,9 @@
 import { create } from 'zustand';
 import { apiFetch } from '@/lib/api';
-import { getMessagesInRange, getMessagesAround, getMessageDateById, upsertMessages, delCached } from '@/lib/db';
+import { getMessagesInRange, getMessagesAround, getMessageDateById, upsertMessages } from '@/lib/db';
 import { appToday, addDays, dateOnly } from '@/lib/format';
 import { mergeMessages } from '@/lib/messages';
+import { patchTodayCache } from '@/lib/today-cache';
 import type { ChatMessage, ContextCard, SendMessageResponse, ResolveResponse, UndoPrevState } from '@/types/chat';
 
 function todayStr() {
@@ -71,6 +72,7 @@ type ChatStore = {
   resolve: (pendingId: string, choice: string | { grams: number }, token: string) => Promise<void>;
   undo: (recordId: string, prevState: UndoPrevState | undefined, token: string) => Promise<void>;
   undoEvent: (messageId: string, token: string) => Promise<void>;
+  reset: () => void;
 };
 
 export const useChatStore = create<ChatStore>((set, get) => ({
@@ -347,7 +349,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         };
       });
       get().loadDates(token);
-      delCached(`today|${todayStr()}`); // T57: invalidate Today cache
+      void patchTodayCache(res.summary_card); // T57: 写穿 Today 缓存，切页秒出新数字
     } catch (e) {
       set(s => ({ messages: s.messages.filter(m => m.id !== tempId) }));
       throw e;
@@ -391,7 +393,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           summaryCard: res.summary_card ?? s.summaryCard,
         };
       });
-      delCached(`today|${todayStr()}`); // T57: invalidate Today cache
+      void patchTodayCache(res.summary_card); // T57: 写穿 Today 缓存
     } catch {
       // On failure, still mark as resolved so the card doesn't look stuck
       set(s => ({
@@ -423,7 +425,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         messages: newMsgs.length > 0 ? mergeMessages(s.messages, newMsgs) : s.messages,
         summaryCard: res.summary_card ?? s.summaryCard,
       }));
-      delCached(`today|${todayStr()}`); // T57: invalidate Today cache
+      void patchTodayCache(res.summary_card); // T57: 写穿 Today 缓存
     } catch {
       set(s => {
         const next = { ...s.undoneRecords };
@@ -446,6 +448,19 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       messages: newMsgs.length > 0 ? mergeMessages(s.messages, newMsgs) : s.messages,
       summaryCard: res.summary_card ?? s.summaryCard,
     }));
-    delCached(`today|${todayStr()}`); // T57: invalidate Today cache
+    void patchTodayCache(res.summary_card); // T57: 写穿 Today 缓存
   },
+
+  // 登出时重置内存态：zustand store 跨组件卸载存活，换号不清会把上个账号的
+  // 聊天流/上下文卡直接渲染给新账号（SQLite 侧由 auth-store 清表）
+  reset: () => set({
+    messages: [],
+    isSending: false,
+    isLoading: false,
+    chatDates: [],
+    summaryCard: null,
+    undoneRecords: {},
+    jumpTarget: null,
+    windowTo: null,
+  }),
 }));

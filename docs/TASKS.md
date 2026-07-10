@@ -4,7 +4,7 @@
 > 用法：一次只做一个任务，按下方顺序，自测验收通过再下一个。
 > 状态：⬜待办 / 🔄进行中 / ✅完成。**任务验收通过后更新两处**：本表该行 + `tasks/Txx.md` 顶部状态行。
 
-**进度：54 / 57**　里程碑：✅ M1 命令行心跳(T07)　✅ M2 后端全通(T12)　✅ 前端可用(T19)　⬜ 可出包(T21)　✅ E 对话上下文(T23)　✅ L 学习闭环(T31)　✅ C 对话智能(T40)　✅ G 餐食卡(T48)　✅ M 语义记忆(T56)
+**进度：54 / 61**　里程碑：✅ M1 命令行心跳(T07)　✅ M2 后端全通(T12)　✅ 前端可用(T19)　⬜ 可出包(T21)　✅ E 对话上下文(T23)　✅ L 学习闭环(T31)　✅ C 对话智能(T40)　✅ G 餐食卡(T48)　✅ M 语义记忆(T56)
 
 ## 分轨
 - **基建 S**：T01
@@ -24,6 +24,7 @@
 - **体重记录 W（2026-07-05 真机死循环立项）**：T51（聊天 `record_weight` 意图：口头上报实测体重只 append `weight_log`、绝不改初始体重 + 最新实测点注入上下文 + 收敛 weight_log 采集口径：重看引导提交不当测点）
 - **餐食卡份数 G2（2026-07-05 真机观感立项）**：T52（AI 出结构化 `count/count_unit`，餐食卡明细主显示 `食物名 ×N` 替代 `raw_input` 长文案；份数只展示、不参与算账）
 - **性能优化 X（2026-07-08 真机体验立项）**：T57（全页面 SQLite 持久化缓存：Today/History/Settings/Profile 对标 Chat 本地优先，去全屏转圈）
+- **对话可信 V（2026-07-09 真机体检立项，账号 outoftoken）**：T58（营养口径接地：prompt 注入系统事实 + RecordRef 补宏量素 + 欧包数据订正——修「系统按生重算」幻觉与聊天/记录数字打架）T59（显式记忆请求必存：「你得记住」触发词 + 提取 prompt 例外规则 + 记录约定归 preference）T60（省略句追问绑定最近实体：「50克蛋白有多少」不接错话题）T61（产品投诉分流：报障不再被「超出服务范围」怼回）
 
 ## 依赖图
 ```
@@ -67,6 +68,11 @@ T53(需T45/T47/T48)                  批量修改 G3：multi-modify 触发 + 后
 T54(无强依赖，需 pgvector)            语义记忆 M：地基——DB + Scoring Engine + Store（零侵入）
   └─ T55(需T54)                      语义记忆 M：接入——提取管线 + compressContext 注入
        └─ T56(需T55)                 语义记忆 M：闭环——cron 维护 + Memory Center API + 前端管理页
+
+T58(无强依赖，建议最先)               对话可信 V：营养口径接地（系统事实 + RecordRef 宏量素 + 数据订正）
+T59(需T55)                          对话可信 V：显式记忆请求必存（词表 + 提取 prompt 例外）
+T60(无强依赖，建议在 T58 后)          对话可信 V：省略句追问绑定最近实体
+T61(无依赖)                          对话可信 V：产品投诉分流话术
 ```
 说明：T13 前端骨架不依赖接口，可在后端推进时并行起；但真实联调要等对应后端任务（T15↔T09，T16↔T11/T12，T17/T18↔T12，T19↔T09）。
 
@@ -91,6 +97,7 @@ T01 → T02 → T03 → T04 → T05 → T06 → T07(✅M1)
 	    → T51 → T52 → T53   (体重+餐食卡份数+批量修改)
 	    → T54 → T55 → T56   (语义记忆 M：用户画像层——地基→提取注入→生命周期+管理中心)
     → T57   (性能优化 X：全页面 SQLite 持久化缓存，去转圈)
+    → T58 → T59 → T60 → T61   (对话可信 V：先修口径接地再修记忆/指代/话术；T60 复用 T58 的记录真值)
 ```
 
 ## 任务清单
@@ -152,4 +159,8 @@ T01 → T02 → T03 → T04 → T05 → T06 → T07(✅M1)
 | ✅ | T54 | tasks/T54-memory-phase1-foundation.md | 语义记忆地基：user_memory 表 + Scoring Engine 纯函数 + Memory Store CRUD（零侵入） |
 | ✅ | T55 | tasks/T55-memory-phase2-extract-inject.md | 语义记忆接入：提取管线（同步 constraint + 异步 full）+ compressContext 注入 |
 | ✅ | T56 | tasks/T56-memory-phase3-lifecycle-ui.md | 语义记忆闭环：cron 维护 + Memory Center API + 前端管理页 |
-| ⬜ | T57 | tasks/T57-sqlite-cache-for-all-pages.md | 全页面 SQLite 持久化缓存：Today/History/Settings/Profile 去转圈 |
+| 🔄 | T57 | tasks/T57-sqlite-cache-for-all-pages.md | 全页面 SQLite 持久化缓存：Today/History/Settings/Profile 去转圈（2026-07-10 设计重写：写穿+共享hook，待真机重验） |
+| ⬜ | T58 | tasks/T58-chat-nutrition-grounding.md | 营养口径接地：prompt 系统事实段 + RecordRef 补 p/f/c + 欧包重复条目订正 |
+| ⬜ | T59 | tasks/T59-memory-explicit-request.md | 显式记忆请求必存：「记住」触发词 + 提取 prompt 例外 + cooked_weight_reporting |
+| ⬜ | T60 | tasks/T60-ellipsis-followup-context.md | 省略句追问绑定最近实体：先复盘 prompt 供给再加指代规则 + eval 用例 |
+| ⬜ | T61 | tasks/T61-complaint-fallback.md | 产品投诉分流：报障话术承认+安抚，off-topic 模板只留给真无关请求 |

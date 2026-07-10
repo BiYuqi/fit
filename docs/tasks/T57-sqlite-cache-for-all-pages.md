@@ -1,6 +1,6 @@
 # T57 — 全页面 SQLite 持久化缓存：去转圈
 
-**状态**：⬜待办
+**状态**：🔄重写完成，待真机重验（2026-07-10 设计重写：删键失效 → 写穿 + 共享 hook）
 
 **目标**：Today / History / Settings / Profile 四块数据全部走 SQLite 缓存（对标 Chat 已有的本地优先模式），消除每次切 Tab 的全屏 loading 转圈。关了 App 再打开也秒出。
 
@@ -20,11 +20,13 @@ Chat 已经在 T26 完成了 SQLite 缓存（`chat_messages` 表 + 先读本地�
 
 微信式体验的核心逻辑：**数据早就在本地，打开直接渲染，网络请求在后台静默完成**。
 
+> **首版返工记录（2026-07-10）**：首版把「Chat 操作后失效 Today 缓存」实现为**删键**——结果冷启动后在 Chat 记一笔再切 Today 必然缓存 miss 转圈，恰好打在最高频路径上，任务目标在主流程失效；且同一加载模式在 4 个文件手写了 4 遍、各自走样（History 切粒度时旧粒度数据顶着新标签渲染）。本版重写为**写穿 + 共享 hook**。
+
 ## 方案设计
 
 ### SQLite 表
 
-在 `fit_cache.db` 新增一张轻量 KV 表（不建结构化表——数据本身就是 JSON 往返，存 JSON 最直接）：
+`fit_cache.db` 一张轻量 KV 表（数据本身就是 JSON 往返，存 JSON 最直接）：
 
 ```sql
 CREATE TABLE IF NOT EXISTS api_cache (
@@ -34,78 +36,75 @@ CREATE TABLE IF NOT EXISTS api_cache (
 );
 ```
 
+**GC**：`getDb()` 初始化时删除 `updated_at` 超过 14 天的行——`today|日期`、`range|滚动窗口` 这类日期键每天生成新键，不清理会无限增长。
+
 ### Cache Key 设计
 
-| Key | 数据 | 变动频率 | 失效策略 |
-|-----|------|----------|----------|
-| `profile` | `GET/PUT /api/user/profile` | 极低 | logout 时清整表；PUT 成功后覆盖 |
-| `today\|2026-07-08` | `GET /api/daily/today` | 高 | Chat send/resolve/undo 成功后删除；跨天 key 自动隔离 |
-| `range\|day\|2026-07-02\|2026-07-08` | `GET /api/daily/range` | 极低（过去日期不可变） | 无需失效 |
-| `records\|2026-07-02\|2026-07-08` | `GET /api/daily/records` | 极低（同上） | 无需失效 |
+| Key | 数据 | 一致性策略 |
+|-----|------|----------|
+| `profile` | `GET/PUT /api/user/profile` | PUT 成功后 `mutate` 写穿；logout 清整表 |
+| `today\|2026-07-08` | `GET /api/daily/today` | Chat send/resolve/undo 成功后用响应的 `summary_card` **写穿**（见下）；日期入键跨天自动隔离 |
+| `range\|day\|02\|08` | `GET /api/daily/range` | SWR：先渲染缓存，后台刷新触达真值（范围**含今天**，今天的柱子靠刷新更新） |
+| `records\|02\|08` | `GET /api/daily/records` | 同上 |
 
-> **Why date in key?** `today` 若不带日期，23:59 的缓存会被次日 00:01 打开 App 时误读。带了日期后跨天自动隔离，连主动失效都不是必须的（但我们仍然做主动失效以避免切 Tab 时 200ms 的陈旧闪烁）。
+> **Why date in key?** `today` 若不带日期，23:59 的缓存会被次日 00:01 打开 App 时误读。带日期后跨天自动隔离。
 
-### 统一缓存优先模式
+### 共享 hook：`useCachedQuery`（`src/hooks/use-cached-query.ts`）
 
-四块数据全部使用同一模式（和 Chat 的 `loadRecentMessages` 同构）：
+四块数据同一模式，**只写一遍**：
 
 ```
-load():
-  1. 读 SQLite
-     ├─ 命中 → setState(cached) → 页面秒出（0ms），loading=false
-     └─ 未命中（首次冷启动）→ loading 保持 true → 骨架占位
-
-  2. 后台调 API（不阻塞渲染）
-     ├─ 成功 → 写 SQLite → setState(fresh) → UI 静默更新
-     └─ 失败 → 保留缓存数据，用户无感知
+useCachedQuery(key, fetcher):
+  key 就绪/变化 → 读 SQLite
+     ├─ 命中 → data=cached，loading=false（秒出，不转圈）
+     └─ 未命中 → data=null，保持 loading（不许旧 key 数据顶着新 key 标签渲染）
+  随后后台 fetch → setCached → data=fresh（静默更新，不置 loading）
+  失败：有数据可展示则无感知；无数据才置 error
 ```
 
-关键：**第 2 步不设 setLoading(true)，不转圈**。
+暴露：`refetch()`（Tab 激活时静默刷新，同 key 并发去重）、`refresh()`（下拉刷新带 refreshing 态）、`mutate(next, persist?)`（PUT 成功回填；乐观值 persist=false 不进缓存）。内置 key 切换竞态防护（迟到响应丢弃）。
 
-### Profile 跨组件共享
+### Chat 操作后 Today 一致性：写穿，不删键
 
-`_layout.tsx` 和 `settings.tsx` 都需要 profile。同一份 SQLite key `profile`：
-- `_layout.tsx` 先读（冷启动第一个渲染），写入 SQLite
-- `settings.tsx` 再读时 SQLite 已有数据，瞬间返回，零网络请求
+send / resolve / undo / undoEvent 的响应都带 `summary_card`（ContextCard），其 `today.in/out/deficit/p/f/c` 与 `targets` 正是 Today 页 `DailySummary` 的主体字段。成功路径调 `patchTodayCache(res.summary_card)`（`src/lib/today-cache.ts`）把这些字段写进 `today|日期` 缓存——切到 Today **秒出且数字已是新的**。
 
-**`_layout.tsx` 去 React Query**：当前 `useQuery(['profile'])` 是纯内存缓存，关了 App 就没了。改为手动 fetch + SQLite，和另外三块同一模式。`queryClient` 仅保留（不动它，万一别处用到）。
+ContextCard 缺 `tdee` / `exercise_out` / `exercises`：保留缓存原值（tdee 只随档案变；运动明细靠 Today 激活后的后台刷新触达真值）。缓存不存在或当天还没 summary 时跳过（缺字段不合成），走网络首载。
 
-**onboarding 刷新**：`handleOnboardingComplete` 需要重新拉 profile（确认 `onboarded` 翻为 true）。用一个 `profileVersion` 计数器，onboarding 完成 / settings 保存后 bump，触发 `_layout.tsx` 重新 load。
+### Profile 跨组件共享 + React Query 下线
 
-### 主动失效
+`_layout.tsx` 与 `settings.tsx` 共用 key `profile`。React Query 唯一用途（layout 的 profile useQuery）被 hook 替代后，**连 Provider 带依赖一起移除**（`query-client.ts` 删除，`@tanstack/react-query` 卸载）——不留只剩空壳的依赖。
 
-Chat 操作（记餐/确认/撤销）成功后，主动删 `today|<date>` 缓存。在 `chat-store.ts` 四个 action 的成功路径里加一行 `delCached`：
+onboarding 完成 → `refetchProfile()`；settings 保存 → `mutate(updated)` 写穿缓存。
+_layout 冷启动无缓存且请求失败时渲染「加载失败 + 重试」，不再白屏。
 
-| Action | 失效 |
-|--------|------|
-| `send` | `delCached('today|<today>')` |
-| `resolve` | 同上 |
-| `undo` | 同上 |
-| `undoEvent` | 同上 |
+### 登出清除（换号无泄漏）
 
-### 登出清除
-
-`auth-store.ts` 的 `logout()` 调用 `clearApiCache()`（新增），清空 `api_cache` 整表，防止换账号后读到上个人的数据。
+`logout()`：`clearApiCache()`（api_cache 整表）+ `clearCache()`（chat_messages 表）+ `useChatStore.reset()`（zustand 内存态跨卸载存活，不清会把上个账号的聊天流渲染给新账号）。
 
 ## 侵入面
 
-| 文件 | 改动 | 侵入量 |
-|------|------|--------|
-| `src/lib/db.ts` | 加 `api_cache` 表 + `getCached` / `setCached` / `delCached` / `clearApiCache` | +30 行 |
-| `src/app/_layout.tsx` | profile 从 React Query 改为手动 SQLite 优先 | 重构 ~30 行 |
-| `src/app/today.tsx` | `load()` 读缓存秒出 + 后台刷新，去全屏转圈 | ~20 行改 |
-| `src/app/history.tsx` | 同上，key 带粒度+日期范围 | ~25 行改 |
-| `src/app/settings.tsx` | `load()` 读缓存秒出，去手动 fetch | ~15 行改 |
-| `src/stores/chat-store.ts` | send/resolve/undo/undoEvent 成功后 `delCached(todayKey)` | +5 行 |
-| `src/stores/auth-store.ts` | `logout()` 加 `clearApiCache()` | +2 行 |
+| 文件 | 改动 |
+|------|------|
+| `src/hooks/use-cached-query.ts` | **新增**：统一缓存优先加载 hook |
+| `src/lib/today-cache.ts` | **新增**：`todayCacheKey` + `patchTodayCache`（ContextCard 写穿） |
+| `src/types/daily.ts` | **新增**：`DailySummary/ExerciseRecord/TodayResponse`（Today 页与写穿共用） |
+| `src/lib/db.ts` | `api_cache` 表 + `getCached/setCached/clearApiCache` + 14 天 GC |
+| `src/app/_layout.tsx` | profile 走 hook；React Query 移除；失败重试兜底 |
+| `src/app/today.tsx` | 数据加载全交 hook（~40 行 → ~8 行） |
+| `src/app/history.tsx` | range/records 两个 hook 实例；粒度入 key |
+| `src/app/settings.tsx` | profile 走 hook（与 _layout 共键）；保存走 mutate；接 isActive 激活刷新 |
+| `src/stores/chat-store.ts` | 四个成功路径 `patchTodayCache` + `reset()` |
+| `src/stores/auth-store.ts` | logout 清 api_cache + chat_messages + chat-store 内存态 |
+| `src/lib/query-client.ts` | **删除**（连同 `@tanstack/react-query` 依赖） |
 
 ## 验收
 
 1. **冷启动秒出**：杀掉 App 重新打开 → Today / History / Settings 直接显示上次数据，不转圈
-2. **切 Tab 不转圈**：Chat ↔ Today ↔ History ↔ Settings 之间切换，每次都是瞬间显示，无 loading spinner
-3. **后台静默刷新**：页面打开后数据自动更新到最新（网络正常时 200-500ms 内刷新）
-4. **Chat 操作后 Today 新鲜**：在 Chat 记了一条餐 → 切到 Today → 数据已更新（无陈旧闪烁）
-5. **History 粒度切换**：日/周/月之间切换，已访问过的粒度瞬间显示（从缓存），新粒度走网络
-6. **断网可用**：开飞行模式 → Today / History / Settings 显示缓存数据，不白屏
-7. **换号无泄漏**：退出登录换另一个号 → 旧号的 Today/History/Profile 缓存被清除
-8. **Profile 修改后同步**：Settings 修改体重 → 切回 Today → Today 的目标热量基于新体重重新计算（因为 Today 读 API 会拿到新目标值）
+2. **切 Tab 不转圈**：Chat ↔ Today ↔ History ↔ Settings 之间切换瞬间显示，无 spinner——**含「冷启动 → Chat 记一笔 → 切 Today」这条主路径**（首版在这里转圈）
+3. **Chat 操作后 Today 数字即时正确**：记餐/撤销后切 Today，环形卡热量/宏量素已是新值（写穿），运动明细最迟后台刷新跟上
+4. **History 粒度切换**：访问过的粒度瞬间显示；未访问过的正确转圈，**不会**拿旧粒度数据顶新标签渲染
+5. **后台静默刷新**：页面打开后数据自动更新到最新，无 loading 闪烁
+6. **断网可用**：飞行模式下 Today / History / Settings 显示缓存数据不白屏；冷启动无缓存 + 断网 → 显示「加载失败 + 重试」
+7. **换号无泄漏**：退出登录换号 → 旧号的 Today/History/Profile 缓存、聊天记录（SQLite + 内存）全部不可见
+8. **Profile 修改后同步**：Settings 改体重 → Today 后台刷新拿到新目标值
+9. `cd frontend && npm test` 全绿；`npx tsc --noEmit` 无新增错误

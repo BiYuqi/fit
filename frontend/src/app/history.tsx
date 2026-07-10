@@ -15,8 +15,8 @@ import { SymbolView } from 'expo-symbols';
 import { GlassCard } from '@/components/glass-card';
 import { ThemedText } from '@/components/themed-text';
 import { apiFetch } from '@/lib/api';
-import { getCached, setCached } from '@/lib/db';
 import { useAuthStore } from '@/stores/auth-store';
+import { useCachedQuery } from '@/hooks/use-cached-query';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { Colors, Glass, BottomTabInset, Spacing } from '@/constants/theme';
 import { appToday, addDays, localDateStr } from '@/lib/format';
@@ -724,63 +724,37 @@ export default function HistoryScreen({ isActive = true }: { isActive?: boolean 
   const glass  = Glass[isDark ? 'dark' : 'light'];
 
   const [granularity, setGranularity] = useState<Granularity>('day');
-  const [rangeData,   setRangeData]   = useState<RangeItem[]>([]);
-  const [foodRecords, setFoodRecords] = useState<FoodRec[]>([]);
-  const [exRecords,   setExRecords]   = useState<ExRec[]>([]);
-  const [loading,     setLoading]     = useState(true);
-  const [refreshing,  setRefreshing]  = useState(false);
   const [chartWidth,  setChartWidth]  = useState(300);
 
   const { from, to } = useMemo(() => getDateRange(granularity), [granularity]);
 
-  const load = useCallback(async () => {
-    if (!token) return;
-    const rangeKey = `range|${granularity}|${from}|${to}`;
-    const recordsKey = `records|${from}|${to}`;
-    // 1. SQLite — instant if cached (T57)
-    const [cachedRange, cachedRecords] = await Promise.all([
-      getCached<RangeItem[]>(rangeKey),
-      getCached<{ records: FoodRec[]; exercises: ExRec[] }>(recordsKey),
-    ]);
-    if (cachedRange) setRangeData(cachedRange);
-    if (cachedRecords) {
-      setFoodRecords(cachedRecords.records ?? []);
-      setExRecords(cachedRecords.exercises ?? []);
-    }
-    if (cachedRange || cachedRecords) setLoading(false);
-    // 2. API — background refresh
-    try {
-      const [rangeRes, recRes] = await Promise.all([
-        apiFetch<RangeItem[]>(
-          `/api/daily/range?from=${from}&to=${to}&granularity=${granularity}`,
-          { token },
-        ),
-        apiFetch<{ records: FoodRec[]; exercises: ExRec[] }>(
-          `/api/daily/records?from=${from}&to=${to}`,
-          { token },
-        ),
-      ]);
-      await Promise.all([
-        setCached(rangeKey, rangeRes),
-        setCached(recordsKey, recRes),
-      ]);
-      setRangeData(rangeRes);
-      setFoodRecords(recRes.records ?? []);
-      setExRecords(recRes.exercises ?? []);
-    } catch {
-      /* keep cached data on error */
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, [token, from, to, granularity]);
+  // T57：缓存秒出 + 后台静默刷新。粒度入 key：切到访问过的粒度瞬间显示，
+  // 没访问过的正确转圈（hook 在新 key 无缓存时不会拿旧粒度数据顶着新标签渲染）。
+  const rangeQ = useCachedQuery<RangeItem[]>(
+    token ? `range|${granularity}|${from}|${to}` : null,
+    () => apiFetch<RangeItem[]>(`/api/daily/range?from=${from}&to=${to}&granularity=${granularity}`, { token }),
+  );
+  const recordsQ = useCachedQuery<{ records: FoodRec[]; exercises: ExRec[] }>(
+    token ? `records|${from}|${to}` : null,
+    () => apiFetch<{ records: FoodRec[]; exercises: ExRec[] }>(`/api/daily/records?from=${from}&to=${to}`, { token }),
+  );
+  const rangeData   = rangeQ.data ?? [];
+  const foodRecords = recordsQ.data?.records ?? [];
+  const exRecords   = recordsQ.data?.exercises ?? [];
+  const loading     = rangeQ.loading || recordsQ.loading;
+  const refreshing  = rangeQ.refreshing || recordsQ.refreshing;
+
+  const { refetch: refetchRange, refresh: refreshRange } = rangeQ;
+  const { refetch: refetchRecords, refresh: refreshRecords } = recordsQ;
 
   const handleRefresh = useCallback(() => {
-    setRefreshing(true);
-    void load();
-  }, [load]);
+    refreshRange();
+    refreshRecords();
+  }, [refreshRange, refreshRecords]);
 
-  useEffect(() => { if (isActive) { void load(); } }, [isActive, load]);
+  useEffect(() => {
+    if (isActive) { refetchRange(); refetchRecords(); }
+  }, [isActive, refetchRange, refetchRecords]);
 
   // ── Derived stats ───────────────────────────────────────────────────────────
   const avgDeficit = rangeData.length > 0
