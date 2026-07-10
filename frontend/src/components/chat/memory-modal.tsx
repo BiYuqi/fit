@@ -1,5 +1,6 @@
 // MemoryModal — 语义记忆管理中心（MEMORY_SPEC §9.4，T56）
 // 复刻 SearchModal 的全屏玻璃 modal 模式：BlurView + LinearGradient + 顶栏三栏布局。
+// 分组卡片视觉对齐 settings.tsx 的 GlassSectionCard 惯例（圆角18 + cardStroke描边 + 轻阴影）。
 
 import { useCallback, useEffect, useState } from 'react';
 import {
@@ -19,7 +20,7 @@ import { SymbolView } from 'expo-symbols';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
-import { Glass, Radius } from '@/constants/theme';
+import { Glass } from '@/constants/theme';
 import { apiFetch } from '@/lib/api';
 import { useAuthStore } from '@/stores/auth-store';
 import { useColorScheme } from '@/hooks/use-color-scheme';
@@ -100,16 +101,34 @@ export function MemoryModal({ visible, onClose, onMemoryCountChange }: Props) {
     ? (['rgba(94,94,102,0.42)', 'rgba(38,38,44,0.22)', 'rgba(58,58,66,0.34)'] as const)
     : (['rgba(255,255,255,0.82)', 'rgba(255,255,255,0.65)', 'rgba(255,255,255,0.75)'] as const);
   const glassStroke = isDark ? 'rgba(255,255,255,0.22)' : 'rgba(255,255,255,0.80)';
-  const accentColor = isDark ? '#0A84FF' : '#007AFF';
+
+  // Light nested-card shadow — distinct from Glass.shadow, which is tuned for
+  // cards floating over the gradient background, not cards nested inside a
+  // modal that's already blurred.
+  const cardShadow = isDark
+    ? { shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.28, shadowRadius: 18, elevation: 4 }
+    : { shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.06, shadowRadius: 14, elevation: 3 };
+  const cardFill = { backgroundColor: glass.backgroundStrong, borderColor: glass.cardStroke };
 
   const [data, setData] = useState<MemoryData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+
+  const toggleGroup = useCallback((type: string) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(type)) next.delete(type);
+      else next.add(type);
+      return next;
+    });
+  }, []);
 
   // Reset state when modal opens → fetch data
   useEffect(() => {
     if (visible) {
       setLoading(true);
       setData(null);
+      setCollapsed(new Set());
       loadMemories();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -213,20 +232,67 @@ export function MemoryModal({ visible, onClose, onMemoryCountChange }: Props) {
 
   // ── Render helpers ──
 
-  const renderMemoryRow = (item: MemoryItem) => {
-    const meta = GROUP_META[item.type] ?? { emoji: '📌', title: item.type };
+  const renderSectionHeader = (
+    emoji: string,
+    title: string,
+    count?: number,
+    toggle?: { collapsed: boolean; onPress: () => void },
+  ) => {
+    const content = (
+      <>
+        <ThemedText style={styles.groupEmoji}>{emoji}</ThemedText>
+        <ThemedText themeColor="textSecondary" style={styles.groupTitle}>
+          {title}
+        </ThemedText>
+        {count !== undefined && (
+          <ThemedText themeColor="textTertiary" style={styles.groupCount}>
+            · {count}
+          </ThemedText>
+        )}
+        {toggle && (
+          <>
+            <View style={styles.groupHeaderSpacer} />
+            <SymbolView
+              name={{ ios: 'chevron.down' as const, android: 'expand_more' as const, web: 'expand_more' as const }}
+              size={12}
+              tintColor={theme.textTertiary}
+              style={toggle.collapsed ? styles.chevronCollapsed : undefined}
+            />
+          </>
+        )}
+      </>
+    );
+    if (toggle) {
+      return (
+        <TouchableOpacity
+          style={styles.groupHeader}
+          onPress={toggle.onPress}
+          activeOpacity={0.6}
+          hitSlop={4}
+        >
+          {content}
+        </TouchableOpacity>
+      );
+    }
+    return <View style={styles.groupHeader}>{content}</View>;
+  };
+
+  const renderMemoryRow = (item: MemoryItem, isLast: boolean) => {
     return (
-      <View key={item.id} style={styles.memoryRow}>
-        <View style={styles.memoryRowLeft}>
-          <ThemedText style={styles.memoryEmoji}>{meta.emoji}</ThemedText>
-          <View style={styles.memoryRowContent}>
-            <ThemedText style={styles.memoryContent} numberOfLines={2}>
-              {item.content}
-            </ThemedText>
-            <ThemedText themeColor="textTertiary" style={styles.memorySource}>
-              {daysAgoStr(item.created_at)}
-            </ThemedText>
-          </View>
+      <View
+        key={item.id}
+        style={[
+          styles.memoryRow,
+          !isLast && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: theme.hairline },
+        ]}
+      >
+        <View style={styles.memoryRowContent}>
+          <ThemedText style={styles.memoryContent} numberOfLines={2}>
+            {item.content}
+          </ThemedText>
+          <ThemedText themeColor="textTertiary" style={styles.memorySource}>
+            {daysAgoStr(item.created_at)}
+          </ThemedText>
         </View>
         <TouchableOpacity
           style={styles.deleteBtn}
@@ -236,7 +302,7 @@ export function MemoryModal({ visible, onClose, onMemoryCountChange }: Props) {
         >
           <SymbolView
             name={{ ios: 'xmark' as const, android: 'close' as const, web: 'close' as const }}
-            size={16}
+            size={13}
             tintColor={theme.textTertiary}
           />
         </TouchableOpacity>
@@ -246,20 +312,18 @@ export function MemoryModal({ visible, onClose, onMemoryCountChange }: Props) {
 
   const renderGroup = (group: MemoryGroup) => {
     const meta = GROUP_META[group.type] ?? { emoji: '📌', title: group.type };
+    const isCollapsed = collapsed.has(group.type);
     return (
       <View key={group.type} style={styles.groupSection}>
-        <View style={styles.groupHeader}>
-          <ThemedText style={styles.groupEmoji}>{meta.emoji}</ThemedText>
-          <ThemedText style={styles.groupTitle}>
-            {meta.title}
-          </ThemedText>
-          <ThemedText themeColor="textTertiary" style={styles.groupCount}>
-            ({group.count})
-          </ThemedText>
-        </View>
-        <View style={[styles.groupCard, { borderColor: theme.hairline }]}>
-          {group.items.map(renderMemoryRow)}
-        </View>
+        {renderSectionHeader(meta.emoji, meta.title, group.count, {
+          collapsed: isCollapsed,
+          onPress: () => toggleGroup(group.type),
+        })}
+        {!isCollapsed && (
+          <View style={[styles.groupCard, cardShadow, cardFill]}>
+            {group.items.map((item, index) => renderMemoryRow(item, index === group.items.length - 1))}
+          </View>
+        )}
       </View>
     );
   };
@@ -311,11 +375,13 @@ export function MemoryModal({ visible, onClose, onMemoryCountChange }: Props) {
             ) : data && data.total === 0 ? (
               /* Empty state */
               <View style={styles.emptyState}>
-                <SymbolView
-                  name={{ ios: 'brain.head.profile' as const, android: 'person' as const, web: 'brain' as const }}
-                  size={48}
-                  tintColor={theme.textTertiary}
-                />
+                <View style={[styles.emptyIconBadge, { backgroundColor: theme.backgroundElement }]}>
+                  <SymbolView
+                    name={{ ios: 'brain.head.profile' as const, android: 'person' as const, web: 'brain' as const }}
+                    size={40}
+                    tintColor={theme.textTertiary}
+                  />
+                </View>
                 <ThemedText style={styles.emptyTitle}>AI 还不了解你</ThemedText>
                 <ThemedText themeColor="textSecondary" style={styles.emptyDesc}>
                   多在聊天里告诉它你的喜好、习惯和禁忌吧
@@ -330,26 +396,39 @@ export function MemoryModal({ visible, onClose, onMemoryCountChange }: Props) {
                 {/* Memory groups */}
                 {data?.groups.map(renderGroup)}
 
-                {/* Pause toggle row */}
-                <View style={[styles.toggleRow, { borderColor: theme.hairline }]}>
-                  <ThemedText style={styles.toggleLabel}>暂停 AI 记忆</ThemedText>
-                  <Switch
-                    value={data?.paused ?? false}
-                    onValueChange={handleTogglePause}
-                    trackColor={{ false: 'rgba(128,128,128,0.3)', true: accentColor }}
-                    thumbColor={Platform.OS === 'android' ? (isDark ? '#FFFFFF' : '#FFFFFF') : undefined}
-                    ios_backgroundColor="rgba(128,128,128,0.3)"
-                  />
+                {/* Manage section: pause toggle + clear all, styled as its own card */}
+                <View style={styles.groupSection}>
+                  {renderSectionHeader('⚙️', '管理')}
+                  <View style={[styles.groupCard, cardShadow, cardFill]}>
+                    <View
+                      style={[
+                        styles.toggleRow,
+                        { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: theme.hairline },
+                      ]}
+                    >
+                      <ThemedText style={styles.toggleLabel}>暂停 AI 记忆</ThemedText>
+                      <Switch
+                        value={data?.paused ?? false}
+                        onValueChange={handleTogglePause}
+                        trackColor={{ false: 'rgba(128,128,128,0.3)', true: glass.tint }}
+                        thumbColor={Platform.OS === 'android' ? '#FFFFFF' : undefined}
+                        ios_backgroundColor="rgba(128,128,128,0.3)"
+                      />
+                    </View>
+                    <TouchableOpacity
+                      style={styles.clearAllBtn}
+                      onPress={handleClearAll}
+                      activeOpacity={0.6}
+                    >
+                      <SymbolView
+                        name={{ ios: 'trash' as const, android: 'delete' as const, web: 'delete' as const }}
+                        size={15}
+                        tintColor="#FF3B30"
+                      />
+                      <ThemedText style={styles.clearAllText}>清除所有记忆</ThemedText>
+                    </TouchableOpacity>
+                  </View>
                 </View>
-
-                {/* Clear all button */}
-                <TouchableOpacity
-                  style={styles.clearAllBtn}
-                  onPress={handleClearAll}
-                  activeOpacity={0.7}
-                >
-                  <ThemedText style={styles.clearAllText}>清除所有记忆</ThemedText>
-                </TouchableOpacity>
 
                 <View style={{ height: insets.bottom + 32 }} />
               </ScrollView>
@@ -416,10 +495,17 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: 32,
   },
+  emptyIconBadge: {
+    width: 88,
+    height: 88,
+    borderRadius: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
+  },
   emptyTitle: {
     fontSize: 16,
     fontWeight: '600',
-    marginTop: 16,
     marginBottom: 6,
   },
   emptyDesc: {
@@ -434,10 +520,10 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     paddingHorizontal: 16,
-    gap: 18,
+    gap: 20,
   },
 
-  // Group
+  // Group section header — aligned with settings.tsx SectionHeader convention
   groupSection: {
     gap: 8,
   },
@@ -445,22 +531,30 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 6,
+    paddingVertical: 4,
     gap: 6,
   },
+  groupHeaderSpacer: {
+    flex: 1,
+  },
+  chevronCollapsed: {
+    transform: [{ rotate: '-90deg' }],
+  },
   groupEmoji: {
-    fontSize: 16,
+    fontSize: 14,
   },
   groupTitle: {
-    fontSize: 14,
+    fontSize: 12,
     fontWeight: '600',
+    letterSpacing: 0.3,
   },
   groupCount: {
-    fontSize: 13,
+    fontSize: 12,
   },
 
-  // Group card
+  // Group card — radius 18 to match GlassSectionCard in settings.tsx
   groupCard: {
-    borderRadius: Radius.md,
+    borderRadius: 18,
     borderWidth: StyleSheet.hairlineWidth,
     overflow: 'hidden',
   },
@@ -469,21 +563,9 @@ const styles = StyleSheet.create({
   memoryRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 12,
+    gap: 12,
+    paddingVertical: 11,
     paddingHorizontal: 14,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: 'rgba(128,128,128,0.12)',
-  },
-  memoryRowLeft: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  memoryEmoji: {
-    fontSize: 20,
-    width: 28,
-    textAlign: 'center',
   },
   memoryRowContent: {
     flex: 1,
@@ -497,31 +579,31 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   deleteBtn: {
-    width: 32,
-    height: 32,
+    width: 28,
+    height: 28,
     alignItems: 'center',
     justifyContent: 'center',
   },
 
-  // Toggle row
+  // Toggle row (inside manage card)
   toggleRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingVertical: 13,
-    paddingHorizontal: 6,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(128,128,128,0.12)',
+    paddingHorizontal: 14,
   },
   toggleLabel: {
     fontSize: 15,
   },
 
-  // Clear all
+  // Clear all (inside manage card)
   clearAllBtn: {
+    flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 14,
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 13,
   },
   clearAllText: {
     fontSize: 15,
