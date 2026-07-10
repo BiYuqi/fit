@@ -161,6 +161,6 @@ T01 → T02 → T03 → T04 → T05 → T06 → T07(✅M1)
 | ✅ | T56 | tasks/T56-memory-phase3-lifecycle-ui.md | 语义记忆闭环：cron 维护 + Memory Center API + 前端管理页 |
 | 🔄 | T57 | tasks/T57-sqlite-cache-for-all-pages.md | 全页面 SQLite 持久化缓存：Today/History/Settings/Profile 去转圈（2026-07-10 设计重写：写穿+共享hook，待真机重验） |
 | ✅ | T58 | tasks/T58-chat-nutrition-grounding.md | 营养口径接地：prompt 系统事实段 + RecordRef 补 p/f/c + 欧包重复条目订正 |
-| ⬜ | T59 | tasks/T59-memory-explicit-request.md | 显式记忆请求必存：「记住」触发词 + 提取 prompt 例外 + cooked_weight_reporting |
+| ✅ | T59 | tasks/T59-memory-explicit-request.md | 显式记忆请求必存：「记住」触发词 + 提取 prompt 例外 + cooked_weight_reporting |
 | ⬜ | T60 | tasks/T60-ellipsis-followup-context.md | 省略句追问绑定最近实体：先复盘 prompt 供给再加指代规则 + eval 用例 |
 | ⬜ | T61 | tasks/T61-complaint-fallback.md | 产品投诉分流：报障话术承认+安抚，off-topic 模板只留给真无关请求 |

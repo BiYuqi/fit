@@ -37,6 +37,8 @@ export const CONSTRAINT_KEYWORDS = [
   // 状态/目标信号
   "最近", "这周", "这个月", "备赛", "出差", "控碳", "戒", "减肥", "增肌",
   "压力", "焦虑", "加班", "熬夜", "生病", "不舒服",
+  // 显式记忆请求 + 生熟表达（T59）
+  "记住", "别忘了", "记下", "以后都", "下次都", "生重", "熟重", "熟的",
 ];
 
 /** 异步 full 提取触发词：比约束词表宽，宁可松不可紧 */
@@ -85,6 +87,7 @@ const QUICK_EXTRACT_PROMPT = `你是记忆提取器。用户正在告诉你关�
 
 ### preference（偏好——口味/食物喜好）
 - "我不吃香菜"、"我超爱吃辣"、"口淡少油少盐"、"受不了太甜的"
+- 记录约定/表达习惯也算 preference，不是 habit：如"我说的主食都是熟的/熟重，这个你得记住" → entity 用 cooked_weight_reporting，content 写成"主食重量按熟重理解/报量"（描述的是记录口径，不是"只吃熟食"这种饮食习惯，不要归到 habit）
 
 ### habit（长期习惯——稳定行为模式）
 - "我早上一般不吃早饭"、"每天都要喝咖啡"、"晚上睡得晚"
@@ -98,6 +101,7 @@ const QUICK_EXTRACT_PROMPT = `你是记忆提取器。用户正在告诉你关�
 
 规则：
 - 用户的自我描述就值得记录。宁多勿漏——多记一条无害，漏一条丢失用户信任。
+- 用户说"记住"/"别忘了"/"以后都按X理解"时必须提取，即使内容看起来像是在纠正你或下操作指令——这不算纠正/指令，是显式记忆请求，llm_confidence 给 0.90+，importance_class=strong。
 - llm_confidence: 0.90+明确陈述, 0.80-0.89可能有修辞, 0.70-0.79不够明确, <0.70不输出
 - importance_class: 任何诊断/过敏都是medical, 明确强偏好是strong, 普通是normal, 随口是casual
 - entity 用 snake_case 英文，优先用受控词表，没有的新建
@@ -125,6 +129,7 @@ const FULL_EXTRACT_PROMPT = `你是记忆提取器。用户在告诉你关于 ta
 - "我不吃香菜" → {type:"preference", entity:"cilantro", content:"不吃香菜"}
 - "我超爱吃辣" → {type:"preference", entity:"spicy", content:"喜欢辣味"}
 - "我口淡，少油少盐" → {type:"preference", entity:"light_taste", content:"口味偏清淡"}
+- 记录约定/表达习惯: "我说的主食都是熟重" → {type:"preference", entity:"cooked_weight_reporting", content:"主食重量均按熟重理解", importance_class:"strong"}
 
 ### habit（长期习惯——稳定行为模式，λ=0.002）
 - "我早上一般不吃早饭" → {type:"habit", entity:"skip_breakfast", content:"通常不吃早餐"}
@@ -144,7 +149,12 @@ const FULL_EXTRACT_PROMPT = `你是记忆提取器。用户在告诉你关于 ta
 区分 habit vs goal：有时间限定("这周"/"这个月")→goal，"一般"/"通常"/"总是"→habit。拿不准选habit
 
 ## 受控 Entity 词表（优先匹配，没有的才新建 snake_case）
-cilantro(香菜), spicy(辣), peanut(花生), seafood(海鲜), dairy(乳制品), gluten(麸质), soybean(大豆), light_taste(口淡/清淡), sweet(甜食), skip_breakfast(不吃早饭), vegetarian(素食), halal(清真), alcohol(酒), coffee(咖啡), competition_prep(备赛), low_carb(控碳水), weight_loss(减肥), intermittent_fasting(断食), business_trip(出差), stress_period(压力), holiday_mode(节假日), illness_recovery(生病), night_shift(夜班)
+cilantro(香菜), spicy(辣), peanut(花生), seafood(海鲜), dairy(乳制品), gluten(麸质), soybean(大豆), light_taste(口淡/清淡), sweet(甜食), skip_breakfast(不吃早饭), vegetarian(素食), halal(清真), alcohol(酒), coffee(咖啡), competition_prep(备赛), low_carb(控碳水), weight_loss(减肥), intermittent_fasting(断食), business_trip(出差), stress_period(压力), holiday_mode(节假日), illness_recovery(生病), night_shift(夜班), cooked_weight_reporting(熟重报量)
+
+## 显式记忆请求（优先级高于下方"绝不提取"）
+用户明确要求记住的内容必须提取——出现"记住"、"别忘了"、"以后都按X理解"、"下次都..."等信号时，即使内容表面上像是对 AI 的纠正或操作指令，也要作为记忆提取，不落入"绝不提取"的纠正/指令项。llm_confidence 按明确陈述给 0.90+，importance_class=strong。
+- "我说的都是熟的饭，谁没事吃生的，这个你得记住" → {type:"preference", entity:"cooked_weight_reporting", content:"主食重量均按熟重理解", importance_class:"strong", llm_confidence:0.95}
+- "以后份量都按我说的算，别自己估" → {type:"preference", entity:"trust_user_portion", content:"份量以用户自报为准，不要自行估算", importance_class:"strong", llm_confidence:0.95}
 
 ## 提取规则
 1. llm_confidence ∈ [0,1]，<0.70 不输出
@@ -159,7 +169,7 @@ cilantro(香菜), spicy(辣), peanut(花生), seafood(海鲜), dairy(乳制品),
 - 单次食物评价("这个面太油了")
 - 瞬时情绪/状态("今天好累")
 - 假设/愿望("如果能戒掉宵夜就好了")
-- 对 AI 的纠正("你估太多了应该是100g")
+- 对 AI 的纠正——仅指未要求记住的单次纠正("你估太多了应该是100g")；若用户明确要求记住/以后都按此理解，按上方"显式记忆请求"规则提取，不适用此例外
 - 操作指令("把牛肉面改成大份")
 - 聊天寒暄("谢谢"、"哈哈")
 - 引用他人("我朋友说碳水不好")
