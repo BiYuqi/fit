@@ -1,0 +1,30 @@
+# T60 2026-07-09 真机翻车（账号 outoftoken）：记完"全麦欧包"后紧跟着问"50克蛋白有多少啊"，
+# AI 却接回了 19:43 那轮"蛋白不够怎么补"的旧话题，回答"要吃8-9个鸡蛋白/喝700-800ml牛奶"，
+# 完全没绑定刚记的食物。修复：answers.ts PERSONA_BASE 加【追问指代】规则，省略句默认绑定最近实体。
+name: 省略句追问绑定最近实体（2026-07-09 真机翻车）
+turns:
+  # 先制造一个"更早话题"干扰源——泛化聊蛋白补充，此时还没有任何食物记录
+  - say: "最近蛋白吃得不够，怎么补啊"
+    expect:
+      intent: chat
+      db:
+        food_record_count: 0
+
+  # 记一条食物，明确克数直接入库（不经份量卡），数值特意选整数便于精确断言
+  - say: "晚上吃了100克鸡胸肉"
+    expect:
+      intent: record
+      db:
+        food_record: { where: { food_name: "鸡胸肉", meal_type: dinner }, weight_g: 100, calories: 133, protein: 31 }
+        pending_record: null
+
+  # 核心：省略句追问，没点名食物——应绑定刚记的鸡胸肉，不接回上面"蛋白不够"的旧话题
+  - say: "蛋白有多少啊"
+    expect:
+      intent: [chat, discuss, query]
+      reply_contain: ["鸡胸肉"]
+
+  # 反例不误伤：话题明确换回泛化咨询（"没有记录的话"），不该硬把回答焊死在刚才那条鸡胸肉记录上
+  - say: "那如果没记录、平时嘴馋随便吃呢，蛋白怎么补"
+    expect:
+      intent: chat

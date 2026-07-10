@@ -4,7 +4,7 @@
 > 用法：一次只做一个任务，按下方顺序，自测验收通过再下一个。
 > 状态：⬜待办 / 🔄进行中 / ✅完成。**任务验收通过后更新两处**：本表该行 + `tasks/Txx.md` 顶部状态行。
 
-**进度：55 / 61**　里程碑：✅ M1 命令行心跳(T07)　✅ M2 后端全通(T12)　✅ 前端可用(T19)　⬜ 可出包(T21)　✅ E 对话上下文(T23)　✅ L 学习闭环(T31)　✅ C 对话智能(T40)　✅ G 餐食卡(T48)　✅ M 语义记忆(T56)
+**进度：56 / 61**　里程碑：✅ M1 命令行心跳(T07)　✅ M2 后端全通(T12)　✅ 前端可用(T19)　⬜ 可出包(T21)　✅ E 对话上下文(T23)　✅ L 学习闭环(T31)　✅ C 对话智能(T40)　✅ G 餐食卡(T48)　✅ M 语义记忆(T56)
 
 ## 分轨
 - **基建 S**：T01
@@ -162,5 +162,5 @@ T01 → T02 → T03 → T04 → T05 → T06 → T07(✅M1)
 | 🔄 | T57 | tasks/T57-sqlite-cache-for-all-pages.md | 全页面 SQLite 持久化缓存：Today/History/Settings/Profile 去转圈（2026-07-10 设计重写：写穿+共享hook，待真机重验） |
 | ✅ | T58 | tasks/T58-chat-nutrition-grounding.md | 营养口径接地：prompt 系统事实段 + RecordRef 补 p/f/c + 欧包重复条目订正 |
 | ✅ | T59 | tasks/T59-memory-explicit-request.md | 显式记忆请求必存：「记住」触发词 + 提取 prompt 例外 + cooked_weight_reporting |
-| ⬜ | T60 | tasks/T60-ellipsis-followup-context.md | 省略句追问绑定最近实体：先复盘 prompt 供给再加指代规则 + eval 用例 |
+| ✅ | T60 | tasks/T60-ellipsis-followup-context.md | 省略句追问绑定最近实体：先复盘 prompt 供给再加指代规则 + eval 用例 |
 | ⬜ | T61 | tasks/T61-complaint-fallback.md | 产品投诉分流：报障话术承认+安抚，off-topic 模板只留给真无关请求 |
