@@ -159,7 +159,7 @@ export function compressContext(pack: MemoryPack): string {
     for (const r of shown) {
       if (r.kind === "food") {
         lines.push(
-          `  ${r.ref} ${MEAL_ZH[r.meal_type ?? ""] ?? ""}·${r.name} ${PORTION_ZH[r.portion ?? ""] ?? ""} ${r.weight_g}g ${r.calories}kcal [id=${r.record_id}]`
+          `  ${r.ref} ${MEAL_ZH[r.meal_type ?? ""] ?? ""}·${r.name} ${PORTION_ZH[r.portion ?? ""] ?? ""} ${r.weight_g}g ${r.calories}kcal 蛋白${r.p}g 脂肪${r.f}g 碳水${r.c}g [id=${r.record_id}]`
         );
       } else {
         lines.push(

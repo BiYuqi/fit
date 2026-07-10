@@ -84,6 +84,9 @@ export interface RecordRef {
   weight_g?: number;
   calories: number;
   duration_min?: number;
+  p?: number; // 蛋白(g，仅食物)——T58：AI 追问已记录食物的宏量素时引用，不得重新估算
+  f?: number; // 脂肪(g，仅食物)
+  c?: number; // 碳水(g，仅食物)
 }
 
 export interface TurnSummary {
@@ -246,6 +249,9 @@ export async function buildMemoryPack(user_id: string): Promise<MemoryPack> {
       portion: f.portion_label,
       weight_g: Math.round(f.weight_g),
       calories: Math.round(f.calories),
+      p: Math.round(f.protein),
+      f: Math.round(f.fat),
+      c: Math.round(f.carbs),
     })),
     ...exercises.map((e, i) => ({
       ref: `e${i + 1}`,

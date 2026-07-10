@@ -17,6 +17,10 @@ const PERSONA_BASE = `你是一名专业但不说教的减脂教练，用简洁�
 	3. 用户问**自制/混合食物**的热量概念（"A+B+C做的XX热量如何"）且明确只要模糊概念 → 你可以基于合理假设拆解原料并给热量范围，但**必须同时做到三点**：(a)开头显式声明假设配方（"按牛奶400g+凤梨90g+淀粉10g这组常用配比估算"），(b)末尾加⚠️提示（"以上为估算，实际取决于你的具体用料比例"），(c)引导记录实际用量。若用户**完全没给分量线索**（连"X为主/占大多数"这类都没说），不要凭空假设，诚实说需要知道大致比例才能估。
 	核心原则：估算只用于"答疑解惑"（用户在问知识性问题），不用于"记录摄入"（用户在报告自己吃了什么）。
 你是只读的：绝不能说"已记录/已更新/已修改/已删除"这类话，因为你没有改动任何数据。上下文里没有覆盖的数据要如实说"没有这条记录"/"这天没记录"，不能编造或估算凑数。用户想改数据时，引导 TA 用能触发真正修改的说法（如"改成X克"、"删掉那条"、"记成X千卡"）。
+【系统事实】回答"系统怎么算/记不记生熟"这类系统行为问题时只依据以下事实，没提到的如实说不知道，绝不编造系统行为：
+- 食物库主食（米饭/面条/馒头/粥等）canonical 存的都是熟重，你匹配到的每100g值本来就是熟的，不是生重，也不存在"默认按生重算"。
+- 已记录食物的热量/蛋白/脂肪/碳水由后端按食物库值×实际克数精确算出，是唯一真值——**仅当用户明确追问**某条已记录食物的营养（如"这条蛋白多少"）时，才引用【今日已记录】里该条的数字，不得重新估算出另一套；日常汇总/列明细类回复不必主动展开蛋白脂肪碳水，按原有排版规则来即可。
+- is_estimated（食物库无精确匹配、AI兜底估的）食物可如实说明"这是估算值"，但仍以已入库数字为准，不能再报别的数字。
 排版：只能用三种极简标记——\`**加粗**\`（突出关键数字/小标题）、行首 \`- \`（列表项）、空行（分段）；不要用标题#、表格、代码块等其它任何 markdown。短回答就正常说话，别硬凑格式。`;
 
 export async function answerQuery(question: string, pack: MemoryPack, userId: string, extraCtx?: string): Promise<{
@@ -117,7 +121,7 @@ export async function answerDiscuss(
     role = `用户对某条运动记录提出了疑问，请结合上面的记录详情，解释这条记录是如何产生的（基于 MET 值 × 体重 × 时长的热量估算）。若用户觉得时长或消耗不准确，告知可以说"改成X分钟"或"改成X卡"来调整——但你自己不要动手改，也不要说"已经改好了"。`;
   } else {
     const PORTION_ZH: Record<string, string> = { small: "小份", medium: "中份", large: "大份", custom: "自定" };
-    detail = `【被询问的记录】\n- 食物：${target.name}\n- 克数：${target.weight_g}g（${PORTION_ZH[target.portion ?? ""] ?? target.portion ?? "?"}份）\n- 热量：${target.calories}kcal`;
+    detail = `【被询问的记录】\n- 食物：${target.name}\n- 克数：${target.weight_g}g（${PORTION_ZH[target.portion ?? ""] ?? target.portion ?? "?"}份）\n- 热量：${target.calories}kcal\n- 蛋白：${target.p}g 脂肪：${target.f}g 碳水：${target.c}g`;
     if (fullRecord) {
       if (fullRecord.raw_input) detail += `\n- 用户原话："${fullRecord.raw_input}"`;
       detail += `\n- AI置信度：食物 ${fullRecord.food_confidence?.toFixed(2)}，份量 ${fullRecord.portion_confidence?.toFixed(2)}`;
