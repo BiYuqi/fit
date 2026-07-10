@@ -22,6 +22,19 @@ turns:
       intent: chat
       reply_contain_any: ["超出", "只能", "范围", "抱歉"]
 
+  # T61：故障投诉不该走 off-topic 模板，应承认+安抚
+  - say: "为啥不能用了"
+    expect:
+      intent: chat
+      reply_forbid: ["超出.{0,6}服务范围"]
+      reply_contain_any: ["问题", "反馈", "抱歉", "恢复"]
+
+  # T61：真无关请求（写作文）仍走 off-topic 拒答
+  - say: "帮我写个作文"
+    expect:
+      intent: chat
+      reply_contain_any: ["超出", "只能", "范围", "抱歉"]
+
   # 查询无记录的日期：不得编造数字，须如实说没有记录（T39）
   - say: "我6月1日吃了多少"
     expect:
