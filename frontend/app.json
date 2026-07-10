@@ -8,7 +8,7 @@
     "scheme": "frontend",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "bundleIdentifier": "com.byte.fit",
+      "bundleIdentifier": "com.byteapp.fit",
       "infoPlist": {
         "NSSpeechRecognitionUsageDescription": "允许 Fit 使用语音识别转文字",
         "NSMicrophoneUsageDescription": "允许 Fit 使用麦克风进行语音输入",
@@ -28,7 +28,7 @@
       "permissions": [
         "android.permission.RECORD_AUDIO"
       ],
-      "package": "com.byte.fit"
+      "package": "com.byteapp.fit"
     },
     "web": {
       "output": "static",
