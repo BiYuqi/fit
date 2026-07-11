@@ -109,7 +109,7 @@ async function adjudicateByAI(
 ): Promise<FoodStandard | null> {
   const opts = candidates.map((f, i) => ({ id: `c${i}`, food: f }));
   const optionsText = opts
-    .map((o) => `${o.id}: ${o.food.name}（类目:${o.food.category}，约 ${Math.round(Number(o.food.calories_100g) || 0)} kcal/100g）`)
+    .map((o) => `${o.id}: ${o.food.name}（类目:${o.food.category}，约 ${Math.round(Number(o.food.calories_100g) || 0)} kcal/100g，${o.food.is_composite ? "复合菜" : "单一食材"}）`)
     .join("\n");
 
   const adjudicateTool = {
@@ -142,6 +142,7 @@ async function adjudicateByAI(
 规则：
 - 类目/常识不符的不要选（如蛋清属蛋类，蛋白粉属补剂/乳类，二者热量差好几倍，不可互替）。类目信息供你参考。
 - **生/熟不符不要选**：候选是生食材/干货/生重条目（名称含"生""干""挂面"，或本就是未烹饪的干货如"糙米""大米""黄豆"），而用户描述的是吃的熟食/成品（如"糙米饭""一碗面""米饭"）→ 二者热量差 2~3 倍，**判不相符，选 none**（系统会按熟食估算）。除非用户明说"生的/干的"。
+- **复合菜不等于单一食材**：用户说的是炒/烧/焖/煮/卤/拌等加工成品（炒面、炒饭、黄焖鸡、麻辣烫……），候选却是"单一食材"标记的裸食材/半成品（如"熟面条""米饭"，没有油、肉、菜等配料）→ 二者热量能差几百大卡，**判不相符，选 none**（系统会把整道菜当复合菜估算，把油和配料都算进去）。只有候选本身就是"复合菜"标记、且确实是同一道菜时才能选。
 - 不确定，或候选里没有真正对应的 → **必须选 none**。选 none 完全正当，系统会改用营养估算；不要硬从候选里挑一个凑数。`,
       },
       {
