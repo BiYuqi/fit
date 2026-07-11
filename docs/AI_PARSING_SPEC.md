@@ -48,6 +48,7 @@ DeepSeek 输出（strict tool schema，zod 同构校验）：
 - `count` / `count_unit`：可数份量的**结构化份数 + 量词**，只供餐食卡展示 `食物名 ×count`（如「两个包子」→ `count:2, count_unit:"个"`；「一碗面」→ `1, "碗"`）。**仅在原话有明确可数份量时填**；纯重量/容量表达（"50克瘦肉"、"200ml 牛奶"）**留空**——克数已由 `portions` 承载，别硬凑量词。与热量计算完全无关（铁律 1），落 `food_record.count/count_unit`。`quantity_expr` 仍照旧保留（自由文本，护栏用），二者不互相替代。
 - `is_ambiguous`：AI 语义判断食物名是否有歧义（如"煎饼"可指多种，"粥"可指多种）。
 - 运动则输出 `{type, duration_min, intensity?}`，热量后端按 MET 估或简表。
+- `date_offset`（T62，补记跨天）：相对今天的天数偏移，仅在原话有相对日期词时填——"昨天/昨晚/昨日"→-1，"前天"→-2，"大前天"→-3；范围 -3~0，不填=当天。后端确定性正则（`extractDateOffsetFromText`）优先于这个字段，同 `meal_type` 的既有覆盖模式（正则比模型判断更可靠）。落 `food_record.date`/`exercise_record.date`；候选卡/份量卡等异步确认场景，这个日期会先存进 `pending_record.candidates.record_date` 再传到最终落库，不会因为确认延迟摔回发消息当天。
 
 ## 4. 歧义判定与路由规则
 
@@ -178,6 +179,7 @@ callDeepSeekCtx(pack, messages, opts)
 {"intent":"modify","action":"update","target":"r1","change":{"meal_type":"lunch"}}
 {"intent":"modify","action":"update","target":"r1","change":{"calories":180}}
 {"intent":"modify","action":"update","target":"r1","change":{"food_desc":"无油"}}
+{"intent":"modify","action":"update","target":"r1","change":{"date_offset":-1}}
 {"intent":"modify","action":"append","target":"r1","items":[ /* 蛋,结构同 §3 items */ ]}
 {"intent":"modify","action":"delete","target":"r1"}
 {"intent":"modify","action":"update","target":["r3","r4","r5"],"change":{"meal_type":"breakfast"}}
@@ -191,6 +193,8 @@ callDeepSeekCtx(pack, messages, opts)
 - `change.food_desc`：属性修正描述（"无油"、"无糖"、"去皮"、"脱脂"）。后端拼出具体变体名「原食物名（描述）」，只信任精确同名/别名命中，否则强制重新估算（**不走** §5 的弱匹配 AI 裁决——那条链路面对"字面像但营养口径不同"的候选容易误判为同一种，导致修正静默失效），产出新估算食物条目并按新食物×原克数重算。修正后 `upsertFoodAlias(原食物名 → 新food_id)`（见 LEARNING_SPEC §7），下次同名食物直连命中修正版。
 - 两者的撤销信息都写进该餐 `meal_card` 的 `payload.last_changes`（T47 单槽→T53 按 record_id 数组：批量改每条各留独立撤销态、同 record_id 覆盖、撤销后只清该条），不新增卡片类型；`prev_state` 带上改前的精确 `calories/protein/fat/carbs/calories_source`，撤销直接还原这些值，不按 food×grams 重算（否则会丢失 `user_override` 的用户真值）。
 - 纯口感/无关描述（"有点咸"、"挺好吃"）不算修正，不触发 `change.food_desc`，整体判 chat。
+
+**改日期**（T62，`change.date_offset`）：记录归属日错了（"是昨天的晚餐，不是今天的"、"这个记错天了"）→ `change.date_offset` 填相对今天的天数偏移，规则同 §3。**"日期词"（昨天/今天）与"餐次词"（早中晚）是两件独立的事**：用户只说错了天、没说错餐次时，`change` 里只填 `date_offset`，绝不能顺手也填 `meal_type`——这是 2026-07-11 真机事故的直接教训：四次"是昨天的晚餐"全被误判成 `change.meal_type` 且新旧值相同（记录本来就是 dinner），静默无回复，用户以为系统坏了。只有用户同时明确说错了具体哪一餐（"这是昨天中午吃的，不是晚上"）才两个都填。后端改日期是双日 `recompute`（新旧两天的 `daily_summary` 都变）+ 双卡刷新（旧日期餐卡少一项、新日期餐卡多一项），回执文案必须带出日期变化（"已把 X 改到 7月10日"），不能像改餐次改回同值那样哑火。`prev_state` 带 `date` 快照，撤销时一并还原并双日 recompute。
 
 ### 路由与确认（T49 起：免确认直删 + 事件行回执，不再弹确认卡）
 | action | 置信 | 行为 |

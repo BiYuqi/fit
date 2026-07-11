@@ -7,7 +7,7 @@ import { recordLearningEvent, resetFoodAliasStreak, upsertFoodAlias } from "../l
 import { processItems } from "./food-item";
 import { refreshMealCard } from "../meal-card";
 import { executeDelete } from "../delete-record";
-import { guessMealType, toDateOnly } from "../../lib/dates";
+import { guessMealType, toDateOnly, extractDateOffsetFromText, addOffsetDays, dateOnlyStr } from "../../lib/dates";
 import type { MealType, PortionLabel } from "@prisma/client";
 import type { ParseResult } from "../../ai/schema";
 import type { IntentCtx } from "./types";
@@ -214,10 +214,11 @@ export async function handleModify(
     const meal_type = (target.meal_type ?? guessMealType()) as MealType;
     await tctx.setMeal(meal_type); // trace: 关联 meal + 写入 state_snapshot
 
+    // target 只能来自 pack.recent_records（今日 L1 快照），所以被追加的那餐必然是今天的（T62 不变式）
     const { records, replyParts, pending, needsRecompute, pendingCreateFns } =
       await processItems(
         parsed.items ?? [],
-        { user_id, meal_type, source, dateObj },
+        { user_id, meal_type, source, dateObj, recordDate: dateObj },
         (idx) => tctx.itemTrace(idx),
       );
 
@@ -311,8 +312,20 @@ export async function handleModify(
   const prev_state = {
     food_id: rec.food_id, portion_label: rec.portion_label, weight_g: rec.weight_g, meal_type: rec.meal_type,
     calories: rec.calories, protein: rec.protein, fat: rec.fat, carbs: rec.carbs, calories_source: rec.calories_source,
+    date: rec.date.toISOString().slice(0, 10),
   };
   const change = parsed.change ?? {};
+
+  // T62：改日期（"是昨天的晚餐，不是今天的"）。文本里的相对日期词优先于 AI 的 change.date_offset，
+  // 同 record 侧的确定性覆盖模式。target 只能来自今日 L1 快照，rec.date 此刻必然是 today，
+  // 偏移相对 dateObj（今天）算即可。dateChanged 要求算出来的新日期真的和原日期不同——
+  // AI 偶尔即使没有日期词也会顺手填 date_offset:0（"改回今天"的字面默认值），
+  // 若不加这层比较，会对本来就没变过日期的记录误触发"改到 X 日"的回执文案和多余 recompute。
+  const dateOffsetResolved = extractDateOffsetFromText(text) ?? change.date_offset;
+  const candidateDateObj = dateOffsetResolved !== undefined ? addOffsetDays(dateObj, dateOffsetResolved) : rec.date;
+  const dateChanged = dateOnlyStr(candidateDateObj) !== dateOnlyStr(rec.date);
+  const newDateObj = dateChanged ? candidateDateObj : rec.date;
+  const newMealDateStr = dateChanged ? dateOnlyStr(newDateObj) : rec.date.toISOString().slice(0, 10);
   let food = await prisma.foodStandard.findUniqueOrThrow({ where: { id: rec.food_id } });
   const originalFoodName = food.name; // T40 自愈闭环：属性修正后 alias 指回这个原名（下次同名食物直连命中修正版）
   let weight_g = rec.weight_g;
@@ -363,9 +376,11 @@ export async function handleModify(
       fat: nutrition.fat_g, carbs: nutrition.carbs_g,
       calories_source,
       alias_canonical: (change.food || change.food_desc) ? null : undefined,
+      ...(dateChanged ? { date: newDateObj } : {}),
     },
   });
   await recompute(user_id, today);
+  if (dateChanged) await recompute(user_id, newMealDateStr); // 日期变了，新旧两天的 daily_summary 都要更新
   const card = await buildContextCard(user_id);
 
   // T49：回执降级为居中事件行（带 delta），撤销走 meal_card 项级 last_changes，事件行本身不带 undo
@@ -374,7 +389,10 @@ export async function handleModify(
   const delta = newCal - oldCal;
   const deltaStr = delta !== 0 ? `（${delta > 0 ? "+" : ""}${delta} kcal）` : "";
   let subject: string;
-  if (change.food || change.food_desc) {
+  if (dateChanged) {
+    // 日期变化必须在回执文案里明确带出（T62 教训：本次事故四次纠正全静默失败，用户完全看不到系统反应）
+    subject = `${food.name} 改到 ${newMealDateStr}${change.meal_type ? `${MEAL_ZH[meal_type]}` : ""}`;
+  } else if (change.food || change.food_desc) {
     subject = `${originalFoodName} → ${food.name}`;
   } else if (change.grams != null || change.portion_label) {
     subject = `${food.name} ${Math.round(prev_state.weight_g)}g → ${Math.round(weight_g)}g`;
@@ -394,18 +412,18 @@ export async function handleModify(
   });
   messages.push(aiMsg);
 
-  // 修改走原地刷新该餐 meal_card。改餐次是双卡刷新：
-  // 旧餐卡少一项（只 bump 已存在的），新餐卡多一项；撤销信息写进目标餐卡 last_changes（按 record_id）
-  // （单槽：再次修改覆盖，撤销后由 undo 接口清除）。跨天修改刷的是记录归属日那张卡。
-  const mealDate = rec.date.toISOString().slice(0, 10);
-  if (meal_type !== prev_state.meal_type) {
+  // 修改走原地刷新该餐 meal_card。改餐次或改日期都是双卡刷新：
+  // 旧卡少一项（只 bump 已存在的），新卡多一项；撤销信息写进目标餐卡 last_changes（按 record_id）
+  // （单槽：再次修改覆盖，撤销后由 undo 接口清除）。
+  const mealDate = rec.date.toISOString().slice(0, 10); // 改前所在日（=today，L1 不变式）
+  if (meal_type !== prev_state.meal_type || dateChanged) {
     await refreshMealCard(messages, {
       user_id, mealDate, meal_type: prev_state.meal_type as MealType,
       chatDate: toDateOnly(mealDate), createIfMissing: false,
     });
   }
   await refreshMealCard(messages, {
-    user_id, mealDate, meal_type, chatDate: toDateOnly(mealDate),
+    user_id, mealDate: newMealDateStr, meal_type, chatDate: dateObj,
     // T53：撤销=还原 prev_state，按 record_id set 进 last_changes（批量改时各条互不覆盖）
     lastChange: { op: "set", change: { record_id: updated.id, prev_state } },
   });

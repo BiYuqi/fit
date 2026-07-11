@@ -44,6 +44,10 @@ export async function resolvePendingRecord(params: {
   const dateObj = toDateOnly(today);
   const meal_type = (candidates.meal_type ?? guessMealType()) as MealType;
   const source: string = candidates.source ?? "text";
+  // T62：候选卡/份量卡是异步确认的，食物真正归属的自然日跟着 pending 走（建卡时存的 record_date），
+  // 不能等到这一刻（可能已经跨天）才按"今天"落；没存过（存量 pending）兜底今天。
+  const recordDateStr: string = candidates.record_date ?? today;
+  const recordDateObj = recordDateStr !== today ? toDateOnly(recordDateStr) : dateObj;
 
   // delete_confirm：存量兼容——T49 起新增删除不再走 pending 流程（见 modify.ts 直删 + executeDelete），
   // 这个分支只为历史上未 resolve 的卡片保留。不额外创建 event/text 消息——前端的
@@ -162,6 +166,7 @@ export async function resolvePendingRecord(params: {
           scene: candidates.scene ?? null,
           count: candidates.count ?? null,
           count_unit: candidates.count != null ? (candidates.count_unit ?? null) : null,
+          record_date: recordDateStr, // T62：候选卡→份量卡两步流转，归属日跟着传下去
         } as object,
       },
     });
@@ -210,7 +215,7 @@ export async function resolvePendingRecord(params: {
       carbs: nutrition.carbs_g,
       source,
       raw_input: pr.raw_input,
-      date: dateObj,
+      date: recordDateObj,
       predicted_grams: predictedGrams ?? null,
       scene: candidates.scene ?? null,
       count: candidates.count ?? null,
@@ -270,13 +275,13 @@ export async function resolvePendingRecord(params: {
     candidates: candidates as Record<string, unknown>,
   });
 
-  await recompute(user_id, today);
+  await recompute(user_id, recordDateStr);
   const summary_card = await buildContextCard(user_id);
 
   // 份量确认不再产文本回执（T49 降噪同类，当时漏掉此 case）：meal_card 原地 upsert 就是"已录入"的视觉反馈，
   // 用户刚亲手选的份量、无撤销诉求，再发一条「已确认：…」全气泡纯属噪音。聊天流只余刷新后的该餐卡。
   const messages: ChatMessage[] = [];
-  await refreshMealCard(messages, { user_id, mealDate: today, meal_type, chatDate: dateObj });
+  await refreshMealCard(messages, { user_id, mealDate: recordDateStr, meal_type, chatDate: dateObj });
 
   return { ok: true, record, summary_card, messages, action };
 }

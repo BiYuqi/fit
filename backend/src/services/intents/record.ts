@@ -3,7 +3,7 @@ import { recompute, buildContextCard } from "../summary";
 import { refreshMealCard } from "../meal-card";
 import { processItems } from "./food-item";
 import { resolveDuration, resolveExerciseCalories } from "./exercise";
-import { guessMealType, extractMealTypeFromText } from "../../lib/dates";
+import { guessMealType, extractMealTypeFromText, extractDateOffsetFromText, addOffsetDays, dateOnlyStr } from "../../lib/dates";
 import type { MealType } from "@prisma/client";
 import type { ParseResult } from "../../ai/schema";
 import type { IntentCtx } from "./types";
@@ -30,6 +30,13 @@ export async function handleRecord(
 
   const user = await prisma.user.findUniqueOrThrow({ where: { id: user_id } });
   const weight_kg = Number(user.weight_kg) || 70;
+
+  // 补记跨天（T62）：文本里的相对日期词（"昨天/前天"）优先于 AI 的 date_offset，
+  // 同 extractMealTypeFromText 的既有模式——确定性正则比模型判断更可靠。
+  // recordDate 是食物/运动真正归属的自然日；dateObj（发消息当天）继续只用于 chat_message（铁律3，聊天气泡不跟着记录倒退）。
+  const dateOffset = extractDateOffsetFromText(text) ?? parsed.date_offset ?? 0;
+  const recordDateObj = dateOffset !== 0 ? addOffsetDays(dateObj, dateOffset) : dateObj;
+  const recordDateStr = dateOffset !== 0 ? dateOnlyStr(recordDateObj) : today;
   // 餐次判定：文本时间词 > 续报继承 > 当前时间。
   // 刻意不信 AI 的 parsed.meal_type：模型常无视"无时间词就省略餐次"的指令，
   // 看到上下文卡里某餐已有几项，就把新食物也脑补进那餐（如 12 点多记血桃被塞进早餐）。
@@ -47,7 +54,7 @@ export async function handleRecord(
   const { records, replyParts, pending, needsRecompute: itemsNeedRecompute, pendingCreateFns } =
     await processItems(
       parsed.items ?? [],
-      { user_id, meal_type, source, dateObj, scene: parsed.scene ?? "unknown" },
+      { user_id, meal_type, source, dateObj, recordDate: recordDateObj, scene: parsed.scene ?? "unknown" },
       (idx) => tctx.itemTrace(idx),
     );
   let needsRecompute = itemsNeedRecompute;
@@ -67,7 +74,7 @@ export async function handleRecord(
         calories_burned,
         source,
         raw_input: text,
-        date: dateObj,
+        date: recordDateObj,
       },
     });
     needsRecompute = true;
@@ -98,18 +105,21 @@ export async function handleRecord(
   let isFirstMealCard = false;
   if (records.length > 0) {
     const refreshed = await refreshMealCard(messages, {
-      user_id, mealDate: today, meal_type, chatDate: dateObj,
+      user_id, mealDate: recordDateStr, meal_type, chatDate: dateObj,
     });
     isFirstMealCard = refreshed?.isFirst ?? false;
   }
 
-  if (needsRecompute) await recompute(user_id, today);
+  if (needsRecompute) await recompute(user_id, recordDateStr);
   const summary_card = await buildContextCard(user_id);
 
-  // 组织回复文本
+  // 组织回复文本。补记到别的自然日时（dateOffset!=0）明确带出日期，
+  // 不提"今日摄入"——那是当天的数，跟这条补记的归属日无关，混着说会让人以为记错了天（T62 教训）。
   let replyText: string;
   if (records.length > 0 && !pending) {
-    replyText = `已记录：${replyParts.join("，")}。今日摄入 ${summary_card.today.in} kcal，还可吃 ${summary_card.today.remaining} kcal。`;
+    replyText = dateOffset !== 0
+      ? `已记录到 ${recordDateStr}：${replyParts.join("，")}。`
+      : `已记录：${replyParts.join("，")}。今日摄入 ${summary_card.today.in} kcal，还可吃 ${summary_card.today.remaining} kcal。`;
   } else if (records.length > 0) {
     replyText = `部分已记录：${replyParts.join("，")}，还有内容需要确认。`;
   } else if (pending) {

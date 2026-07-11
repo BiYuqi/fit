@@ -134,6 +134,13 @@ async function runSetup(userId: string, setup: EvalCase["setup"]) {
 // ---------- 断言 ----------
 interface Failure { what: string; expected: unknown; actual: unknown }
 
+// 相对天数 → "YYYY-MM-DD"，与 runSetup 的 setup.food_record.days_ago 同一套本地日边界算法（T62）
+function daysAgoStr(n: number): string {
+  const local = new Date(Date.now() + 8 * 3600 * 1000);
+  const day = new Date(Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate() - n));
+  return day.toISOString().slice(0, 10);
+}
+
 function checkFields(failures: Failure[], label: string, expected: Record<string, unknown>, actual: Record<string, unknown> | null) {
   if (!actual) {
     failures.push({ what: label, expected, actual: null });
@@ -141,7 +148,18 @@ function checkFields(failures: Failure[], label: string, expected: Record<string
   }
   for (const [k, v] of Object.entries(expected)) {
     if (k === "where") continue;
-    const a = actual[k];
+    // date_days_ago：断言 actual.date 相对今天的天数偏移（用例不硬编码绝对日期，T62）
+    if (k === "date_days_ago") {
+      const rawDate = actual.date;
+      const aDate = rawDate instanceof Date ? rawDate.toISOString().slice(0, 10) : rawDate;
+      const expectedDate = daysAgoStr(v as number);
+      if (aDate !== expectedDate) failures.push({ what: `${label}.date`, expected: expectedDate, actual: aDate });
+      continue;
+    }
+    // @db.Date 字段（如 food_record.date）是 Date 对象，比较前落成 "YYYY-MM-DD"，
+    // 否则 String(a) 会给出带时区的完整时间戳，永远匹配不上用例里写的日期字符串（T62）
+    const rawA = actual[k];
+    const a = rawA instanceof Date ? rawA.toISOString().slice(0, 10) : rawA;
     // 比较器形态 { lt } / { gt } / { ne }：AI 估算值不确定，只能断言方向（如"比原值低"）
     // 或排除（如"不是被继承的那个餐次"），断言不了具体值
     if (v && typeof v === "object" && ("lt" in v || "gt" in v || "ne" in v)) {

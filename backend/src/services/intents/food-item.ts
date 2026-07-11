@@ -2,6 +2,7 @@ import { matchFood, matchFoodCandidates } from "../matcher";
 import { itemNutrition } from "../calc";
 import { prisma } from "../../lib/prisma";
 import { getFoodAlias, getBiases, applyBias, biasEnabled } from "../learning";
+import { dateOnlyStr } from "../../lib/dates";
 import type { FoodItem } from "../../ai/schema";
 import type { FoodStandard, MealType, PortionLabel, PendingRecord } from "@prisma/client";
 import type { ItemTrace } from "../trace";
@@ -50,8 +51,9 @@ export async function buildCandidateCardData(params: {
   scene?: string | null;
   count?: number | null;
   count_unit?: string | null;
+  recordDate: Date;
 }): Promise<CandidateCardData> {
-  const { user_id, query, raw, meal_type, source, portions, chosen_label, ai_candidates, scene, count, count_unit } = params;
+  const { user_id, query, raw, meal_type, source, portions, chosen_label, ai_candidates, scene, count, count_unit, recordDate } = params;
   const { foods: dbCandidates } = await matchFoodCandidates(query);
 
   const mediumGrams = (portions.find((p) => p.label === "medium") ?? portions[0])?.grams ?? 150;
@@ -70,7 +72,9 @@ export async function buildCandidateCardData(params: {
     data: {
       user_id, type: "food_choice", raw_input: raw,
       // candidate_names：T38 注入记忆包用，避免为了渲染【待确认】而重跑 matchFoodCandidates 或读 chat_message
-      candidates: { query, meal_type, source, portions, chosen_label, scene: scene ?? null, candidate_names: allNames, count: count ?? null, count_unit: count != null ? (count_unit ?? null) : null } as object,
+      // record_date（T62）：候选卡是异步确认的，食物真正归属的自然日必须跟着 pending 走，
+      // 不能等用户选定食物那一刻才按"今天"落——那一刻可能已经跨天，或本来就是在补记别的自然日。
+      candidates: { query, meal_type, source, portions, chosen_label, scene: scene ?? null, candidate_names: allNames, count: count ?? null, count_unit: count != null ? (count_unit ?? null) : null, record_date: dateOnlyStr(recordDate) } as object,
     },
   });
 
@@ -81,7 +85,8 @@ export interface ItemCtx {
   user_id: string;
   meal_type: MealType;
   source: string;
-  dateObj: Date;
+  dateObj: Date; // 发消息当天，只用于聊天气泡（铁律3，不跟着记录归属日倒退）
+  recordDate: Date; // 食物/运动真正归属的自然日（T62：补记跨天时与 dateObj 不同）
   scene?: string | null; // 进食场景 takeout/canteen/home/unknown，parser 提取（T32）；append 等无场景路径缺省
   itrace?: ItemTrace; // 由 processFoodItem 内部消费，不对外暴露
 }
@@ -95,7 +100,7 @@ export interface ItemResult {
 }
 
 export async function processFoodItem(item: FoodItem, ctx: ItemCtx): Promise<ItemResult> {
-  const { user_id, meal_type, source, dateObj, scene, itrace } = ctx;
+  const { user_id, meal_type, source, dateObj, recordDate, scene, itrace } = ctx;
   const { canonical, chosen_label, portions, food_confidence, portion_confidence, raw, is_ambiguous, ai_candidates, count, count_unit } = item;
   const query = canonical || raw;
 
@@ -158,7 +163,7 @@ export async function processFoodItem(item: FoodItem, ctx: ItemCtx): Promise<Ite
       }
 
       const { pendingRecord: pr, foodsPayload } = await buildCandidateCardData({
-        user_id, query, raw, meal_type, source, portions, chosen_label, ai_candidates, scene, count, count_unit,
+        user_id, query, raw, meal_type, source, portions, chosen_label, ai_candidates, scene, count, count_unit, recordDate,
       });
 
       if (itrace) {
@@ -266,7 +271,7 @@ export async function processFoodItem(item: FoodItem, ctx: ItemCtx): Promise<Ite
         user_id, food_id: food.id, meal_type, portion_label: chosen_label as PortionLabel,
         weight_g, calories: nutrition.calories, protein: nutrition.protein_g,
         fat: nutrition.fat_g, carbs: nutrition.carbs_g,
-        food_confidence, portion_confidence, source, raw_input: raw, date: dateObj,
+        food_confidence, portion_confidence, source, raw_input: raw, date: recordDate,
         parse_log_id: itrace?.traceId || null,
         alias_canonical: matchedByHabit ? query : null,
         predicted_grams: rawChosen.grams,
@@ -320,6 +325,7 @@ export async function processFoodItem(item: FoodItem, ctx: ItemCtx): Promise<Ite
         predicted_grams: rawChosen.grams, applied_grams: biasedChosen.grams,
         scene: scene ?? null,
         count: count ?? null, count_unit: count != null ? (count_unit ?? null) : null,
+        record_date: dateOnlyStr(recordDate), // T62：份量卡异步确认，归属日跟 pending 走，见 candidate 分支同注释
       } as object,
     },
   });

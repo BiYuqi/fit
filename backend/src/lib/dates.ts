@@ -49,6 +49,28 @@ export function toDateOnly(date: Date | string): Date {
   return new Date(s + "T00:00:00.000Z");
 }
 
+// UTC 午夜 Date 平移整数天（负数=过去），仍是 @db.Date 对齐的午夜时刻
+export function addOffsetDays(date: Date, offsetDays: number): Date {
+  return new Date(date.getTime() + offsetDays * 86400000);
+}
+
+// toDateOnly() 产出的 UTC 午夜 Date → "YYYY-MM-DD"。直接读 UTC 日期分量，
+// 不走 tzDateStr（那是给真实时刻按 APP_TZ 重新落算日期用的，对已经对齐好的
+// 日期值再套时区，遇到 UTC 负偏移的时区会把日期错着算前一天）。
+export function dateOnlyStr(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
+// 从原始文本中识别相对日期词，换算成相对今天的天数偏移（0=今天，负数=过去）
+// 优先级高于 AI 结果（同 extractMealTypeFromText 的既有模式）：封闭词表，正则比模型确定性更高。
+// 只覆盖高频"昨天/前天/大前天"补记场景，更早的日期没有可靠的相对说法，交给 AI 兜底或不支持。
+export function extractDateOffsetFromText(text: string): number | null {
+  if (/大前天/.test(text)) return -3;
+  if (/前天/.test(text)) return -2;
+  if (/昨天|昨晚|昨日|昨晚上/.test(text)) return -1;
+  return null;
+}
+
 // 按 APP_TZ 的当前小时推断餐次
 export function guessMealType(): MealType {
   const h = +tzTimeStr(new Date()).slice(0, 2);

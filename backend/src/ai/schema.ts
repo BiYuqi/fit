@@ -97,6 +97,7 @@ export const ModifyChangeSchema = z.preprocess(
     calories_burned: z.number().positive().optional(), // 改运动消耗时的新热量值（用户用穿戴设备数据纠正 AI 估算）
     calories: z.number().positive().optional(),        // T40：食物记录改热量，用户亲口给出的数字（用户真值），不由 AI 算
     food_desc: z.string().min(1).optional(),           // T40：食物属性修正描述（如"无油"），影响营养口径，触发重估
+    date_offset: z.number().int().min(-3).max(0).optional(), // T62：把记录改到别的自然日（"是昨天的晚餐"），相对今天的天数偏移，负数=过去
   }),
 );
 export type ModifyChange = z.infer<typeof ModifyChangeSchema>;
@@ -107,6 +108,7 @@ export const RecordVariantSchema = z.object({
   raw: z.string().optional(),                   // multi 时该动作对应的原文子句（餐次提取/兜底估算按子句而非全文）
   meal_type: MealTypeSchema.optional(),
   scene: SceneSchema.optional(),                // 原话提不出场景时 AI 填 unknown 或省略
+  date_offset: z.number().int().min(-3).max(0).optional(), // T62：补记"昨天/前天"，相对今天的天数偏移，负数=过去；不填=今天
   items: z.array(FoodItemSchema).optional(),
   exercise: z.array(ExerciseItemSchema).optional(),
 }).refine(
@@ -179,10 +181,14 @@ const targetProp = {
     { type: "array", items: { type: "string" } },
   ],
 };
+const dateOffsetProp = {
+  type: "number",
+  description: "相对今天的天数偏移，0或不填=今天，负数=过去第几天（-1=昨天，-2=前天，-3=大前天）。只从'昨天/昨晚/前天/大前天'这类相对日期词判断，别自己算绝对日期；没有日期词就不填。'早中晚/几点吃的'是餐次词(meal_type)不是日期词，两者别混淆——'是昨天的晚餐'指的是日期错了(date_offset=-1)，不是餐次错了，除非用户明确说错了具体是哪一餐才同时填 meal_type",
+};
 const changeProp = {
   type: "object",
   additionalProperties: false,
-  description: "仅 action=update 填。改份量填 portion_label+grams（grams 为该食物该档的估算净重）；改食物填 food（新标准名）；改餐次填 meal_type（如'粽子是中午吃的'→lunch，克数食物都不动、不要顺手填 grams）；改运动消耗填 calories_burned（用户用穿戴设备数据纠正）；用户直接指定食物记录最终热量填 calories（用户真值，如'记录成180kcal'）；营养口径的属性修正填 food_desc（如'无油'）",
+  description: "仅 action=update 填。改份量填 portion_label+grams（grams 为该食物该档的估算净重）；改食物填 food（新标准名）；改餐次填 meal_type（如'粽子是中午吃的'→lunch，克数食物都不动、不要顺手填 grams）；改运动消耗填 calories_burned（用户用穿戴设备数据纠正）；用户直接指定食物记录最终热量填 calories（用户真值，如'记录成180kcal'）；营养口径的属性修正填 food_desc（如'无油'）；记录的日期错了（'是昨天的'/'不是今天的'）填 date_offset，不要误填成 meal_type",
   properties: {
     portion_label: { type: "string", enum: ["small", "medium", "large", "custom"] },
     grams: { type: "number" },
@@ -191,6 +197,7 @@ const changeProp = {
     calories_burned: { type: "number" },
     calories: { type: "number", description: "食物记录的最终热量(kcal)，用户亲口给出的数值（用户真值，不是AI估算），如'记录成180kcal'、'按150卡记'。填这个时通常不要同时填 grams/portion_label（除非用户也确实说了新克数）" },
     food_desc: { type: "string", description: "食物属性修正描述，影响营养口径的（如'无油'、'无糖'、'去皮'、'脱脂'）。只填修正词本身，不要重复食物名；纯口感/无关描述（'有点咸'、'挺好吃'）不要填这个，应整体判 chat" },
+    date_offset: dateOffsetProp,
   },
 };
 const modifyConfidenceProp = {
@@ -201,6 +208,10 @@ const mealTypeProp = {
   type: "string",
   enum: ["breakfast", "lunch", "dinner", "snack"],
   description: "仅 intent=record 且能判断时填写",
+};
+const recordDateOffsetProp = {
+  ...dateOffsetProp,
+  description: "仅 intent=record 填。" + dateOffsetProp.description,
 };
 const sceneProp = {
   type: "string",
@@ -291,6 +302,7 @@ const opSchema = {
     modify_confidence: modifyConfidenceProp,
     meal_type: mealTypeProp,
     scene: sceneProp,
+    date_offset: recordDateOffsetProp,
     items: itemsProp,
     exercise: exerciseProp,
   },
@@ -335,6 +347,7 @@ export const parseToolSchema = {
         },
         meal_type: mealTypeProp,
         scene: sceneProp,
+        date_offset: recordDateOffsetProp,
         items: itemsProp,
         exercise: exerciseProp,
         ops: {

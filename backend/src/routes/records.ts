@@ -5,6 +5,7 @@ import { itemNutrition } from "../services/calc";
 import { recompute, buildContextCard } from "../services/summary";
 import { resetFoodAliasStreak } from "../services/learning";
 import { refreshMealCard } from "../services/meal-card";
+import { toDateOnly } from "../lib/dates";
 import type { ChatMessage, MealType, PortionLabel } from "@prisma/client";
 
 // ─────────────────────────────────────────────
@@ -24,6 +25,7 @@ const UndoBodySchema = z.object({
     fat: z.number().optional(),
     carbs: z.number().optional(),
     calories_source: z.string().optional(),
+    date: z.string().optional(), // T62：改日期的撤销还原，"YYYY-MM-DD"
   }).or(z.object({
     calories_burned: z.number().positive(),
     kind: z.literal("exercise"),
@@ -70,27 +72,31 @@ export async function recordsRoutes(app: FastifyInstance) {
             meal_type: (prev.meal_type as MealType | undefined) ?? undefined,
             calories: nutrition.calories, protein: nutrition.protein_g, fat: nutrition.fat_g, carbs: nutrition.carbs_g,
             calories_source: prev.calories_source ?? "computed",
+            ...(prev.date ? { date: toDateOnly(prev.date) } : {}), // T62：改日期的撤销还原
           },
         });
       } else {
         // append 撤销 → 删新记录
         await prisma.foodRecord.delete({ where: { id } });
       }
+      // T62：撤销的目标日（改日期前的原归属日），没改过日期就还是 recDate 本身
+      const restoredDate = (prev && "food_id" in prev ? prev.date : undefined) ?? recDate;
       await recompute(user_id, recDate);
+      if (restoredDate !== recDate) await recompute(user_id, restoredDate);
       const summary_card = await buildContextCard(user_id);
 
       // T47/T53：撤销后原地刷新受影响餐卡并随响应返回；本条撤销态已消费 → 只 clear 这一条
-      // （批量改时同卡其他记录的撤销态保留）。改餐次的撤销是双卡：撤销前所在餐（卡上挂着撤销
-      // 按钮的那张）先 bump，还原后所在餐（prev_state.meal_type）后 bump 浮到最末。只 bump 已存在的卡。
+      // （批量改时同卡其他记录的撤销态保留）。改餐次/改日期的撤销是双卡：撤销前所在餐（卡上挂着撤销
+      // 按钮的那张）先 bump，还原后所在餐（prev_state.meal_type/date）后 bump 浮到最末。只 bump 已存在的卡。
       const messages: ChatMessage[] = [];
       const restoredMeal = (prev && "food_id" in prev ? (prev.meal_type as MealType | undefined) : undefined) ?? foodRec.meal_type;
       await refreshMealCard(messages, {
         user_id, mealDate: recDate, meal_type: foodRec.meal_type,
         chatDate: foodRec.date, lastChange: { op: "clear", record_id: id }, createIfMissing: false,
       });
-      if (restoredMeal !== foodRec.meal_type) {
+      if (restoredMeal !== foodRec.meal_type || restoredDate !== recDate) {
         await refreshMealCard(messages, {
-          user_id, mealDate: recDate, meal_type: restoredMeal,
+          user_id, mealDate: restoredDate, meal_type: restoredMeal,
           chatDate: foodRec.date, lastChange: { op: "clear", record_id: id }, createIfMissing: false,
         });
       }

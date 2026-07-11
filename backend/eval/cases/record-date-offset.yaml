@@ -1,0 +1,43 @@
+# T62：补记跨天。2026-07-11 真机翻车（账号 outoftoken）：用户说"昨晚/昨天中午"，record 仍写成
+# 发消息当天；发现记错后连续四次"是昨天的晚餐，不是今天的"，全被解析成 modify.change.meal_type
+# （新旧值相同=空操作，静默无回复）。因为 change 协议里压根没有 date 字段可填。
+name: 补记跨天——record识别相对日期词落对自然日 + modify能把记录改到别的自然日
+turns:
+  # 场景1：record 直接带"昨晚"，应直接落在昨天，不是发消息当天
+  # 用"苹果"而不是"粽子"：粽子在本系统里 is_ambiguous 判定偶发抖动（走候选卡而非直接入库），
+  # 与 T62 无关的既有 LLM 抖动，换个稳定不歧义的食物避免用例假红
+  - say: "昨晚吃了一个苹果"
+    expect:
+      intent: record
+      db:
+        food_record: { where: { food_name: "苹果" }, date_days_ago: 1 }
+        food_record_count: 1
+
+  # 场景2：复现事故——先按当天记（无日期词，正常落今天；明确毫升数避免走份量待确认卡）
+  - say: "晚饭喝了一杯200毫升的纯牛奶"
+    expect:
+      intent: record
+      db:
+        food_record: { where: { food_name: "纯牛奶", meal_type: dinner }, date_days_ago: 0 }
+
+  # 核心：用"是昨天的...不是今天的"纠正日期，不该被误判成改餐次（原值本来就是 dinner，误判会静默空操作）
+  - say: "你记错了，是昨天的晚餐，不是今天的"
+    expect:
+      intent: modify
+      db:
+        food_record: { where: { food_name: "纯牛奶" }, date_days_ago: 1, meal_type: dinner }
+        food_record_count: 2
+
+  # 负控：纯改餐次、不提日期时，date 不该被牵连着变（用新鲜的今日记录测，避免上面已改到昨天的记录掉出今日上下文）
+  # food_name 用"蛋"而不是"鸡蛋"：canonical 偶发归一成"水煮蛋"（LLM 熟形选择抖动，与 T62 无关），用能同时命中两种写法的子串
+  - say: "早上吃了一个鸡蛋"
+    expect:
+      intent: record
+      db:
+        food_record: { where: { food_name: "蛋", meal_type: breakfast }, date_days_ago: 0 }
+
+  - say: "鸡蛋是中午吃的"
+    expect:
+      intent: modify
+      db:
+        food_record: { where: { food_name: "蛋", meal_type: lunch }, date_days_ago: 0 }
