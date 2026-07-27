@@ -1,0 +1,13 @@
+# T66：用户在 record 时直接报出该条目最终热量——一句话记进去，不弹份量卡
+# 背景（2026-07-13 真机，账号 outoftoken）：以前这句话要吵4轮才记进去一个数字
+# （先被判成 chat 白问一轮，再走 record 却弹份量卡问"小/中/大"，最后靠 modify.calories 才生效）。
+name: T66 用户直接报出该条目最终热量——一句话记成，不弹份量卡
+turns:
+  - say: "晚上吃了一个自制冰激淋80卡"
+    expect:
+      intent: record
+      reply_forbid: ["小份", "中份", "大份", "请问.*份量", "请确认.*份量"]
+      db:
+        food_record: { where: { food_name: "冰", meal_type: dinner }, calories: 80, calories_source: "user_override", calories_computed: { gt: 0 } }
+        food_record_count: 1
+        pending_record: null

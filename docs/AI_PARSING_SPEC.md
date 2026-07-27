@@ -47,6 +47,7 @@ DeepSeek 输出（strict tool schema，zod 同构校验）：
 - `scene`：进食场景 `takeout | canteen | home | unknown`，**只从原话提取，不靠常识猜**（"点了个外卖麻辣香锅"→takeout；"食堂打的饭"→canteen；"自己煮的"→home；提不出→unknown）。落 `food_record.scene`，scene 层偏差参与份量修正融合（unknown 不参与），见 LEARNING_SPEC §4（T32）。
 - `count` / `count_unit`：可数份量的**结构化份数 + 量词**，只供餐食卡展示 `食物名 ×count`（如「两个包子」→ `count:2, count_unit:"个"`；「一碗面」→ `1, "碗"`）。**仅在原话有明确可数份量时填**；纯重量/容量表达（"50克瘦肉"、"200ml 牛奶"）**留空**——克数已由 `portions` 承载，别硬凑量词。与热量计算完全无关（铁律 1），落 `food_record.count/count_unit`。`quantity_expr` 仍照旧保留（自由文本，护栏用），二者不互相替代。
 - `is_ambiguous`：AI 语义判断食物名是否有歧义（如"煎饼"可指多种，"粥"可指多种）。
+- `calories_override`（T66）：用户在描述食物时**直接给出该条目最终热量**（"一个自制冰激淋80卡"），是用户真值，不是 AI 估算。后端不再按 `food×grams` 算，直接按此值入库（`food_record.calories_source=user_override`），宏量素按系统本会算出的比例回推（`scaleNutritionToCalories`，同 §8 `change.calories` 口径）；填了这个不代表可以省略 `portions`/`chosen_label`——克数估算仍要正常填，只供展示与学习基准，不参与算账。**给了 `calories_override` 就不再弹份量卡**：食物已确定（或经候选卡确认）时直接采信入库，不因份量置信度低而追问份量。意图判定边界：陈述吃了什么并报出热量是 `record`（"一个自制冰激淋80卡"），**问**热量才是 `chat`（"自制冰激淋一般多少卡"）——2026-07-13 真机曾把陈述句整句判成 `chat`，用户被迫吵4轮才记进去一个数字。
 - 运动则输出 `{type, duration_min, intensity?}`，热量后端按 MET 估或简表。
 - `date_offset`（T62，补记跨天）：相对今天的天数偏移，仅在原话有相对日期词时填——"昨天/昨晚/昨日"→-1，"前天"→-2，"大前天"→-3；范围 -3~0，不填=当天。后端确定性正则（`extractDateOffsetFromText`）优先于这个字段，同 `meal_type` 的既有覆盖模式（正则比模型判断更可靠）。落 `food_record.date`/`exercise_record.date`；候选卡/份量卡等异步确认场景，这个日期会先存进 `pending_record.candidates.record_date` 再传到最终落库，不会因为确认延迟摔回发消息当天。
 

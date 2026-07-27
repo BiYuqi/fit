@@ -392,6 +392,7 @@ export async function handleModify(
       calories: nutrition.calories, protein: nutrition.protein_g,
       fat: nutrition.fat_g, carbs: nutrition.carbs_g,
       calories_source,
+      calories_computed: calories_source === "user_override" ? baseNutrition.calories : null, // T66：偏差三元组一角
       alias_canonical: (change.food || change.food_desc) ? null : undefined,
       ...(dateChanged ? { date: newDateObj } : {}),
     },

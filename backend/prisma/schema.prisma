@@ -130,6 +130,7 @@ model FoodRecord {
   predicted_grams    Float? // AI 原估克数（applyBias 之前）；隐式确认 job 与 discuss 偏差说明的 predicted 基准（T31）
   scene              String? // takeout | canteen | home | unknown，parser 从原话提取（T32）
   calories_source    String       @default("computed") // computed | user_override，modify.update change.calories 落库后置 user_override，防止后续 food×grams 重算覆盖（T40）
+  calories_computed  Float? // calories_source=user_override 时，系统本会按 food×grams 算出的值（B轨偏差三元组的一角，T66）；存量记录与非 override 记录为空，不回填
   date               DateTime     @db.Date
   created_at         DateTime     @default(now())
 

@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { bmr, tdee, itemNutrition, dailyTargets, scaleNutritionToCalories } from "./calc";
+import { bmr, tdee, itemNutrition, dailyTargets, scaleNutritionToCalories, resolveNutrition } from "./calc";
 import type { UserProfile, FoodNutrient } from "./calc";
 
 // 浮点数近似比较（误差 < 0.001）
@@ -421,4 +421,40 @@ test("T40-回推：fiber_g 原为 null 时保持 null（不是 0）", () => {
   const n: ReturnType<typeof itemNutrition> = { calories: 100, protein_g: 5, fat_g: 2, carbs_g: 10, fiber_g: null, incomplete: false };
   const out = scaleNutritionToCalories(n, 200);
   assert.equal(out.fiber_g, null);
+});
+
+// ============================================================
+// T66：resolveNutrition —— record 侧用户终值采信统一入口
+// ============================================================
+
+test("resolveNutrition — override 为空时原样返回，标记 computed", () => {
+  const n = itemNutrition(白米饭, 200);
+  const { nutrition, calories_source } = resolveNutrition(n, undefined);
+  assert.equal(calories_source, "computed");
+  assert.deepEqual(nutrition, n);
+});
+
+test("resolveNutrition — override 为 null 时同 undefined，标记 computed", () => {
+  const n = itemNutrition(鸡蛋, 60);
+  const { nutrition, calories_source } = resolveNutrition(n, null);
+  assert.equal(calories_source, "computed");
+  assert.deepEqual(nutrition, n);
+});
+
+test("resolveNutrition — 有 override 时按比例回推宏量素，标记 user_override", () => {
+  const n = itemNutrition(油条, 70); // 系统算出的基准值（食材计算出的量）
+  const { nutrition, calories_source } = resolveNutrition(n, 80); // 用户报"80卡"
+  assert.equal(calories_source, "user_override");
+  assert.equal(nutrition.calories, 80);
+  const ratio = 80 / n.calories;
+  approx(nutrition.protein_g, n.protein_g * ratio);
+  approx(nutrition.fat_g, n.fat_g * ratio);
+  approx(nutrition.carbs_g, n.carbs_g * ratio);
+});
+
+test("resolveNutrition — 与直接调用 scaleNutritionToCalories 结果一致（等价实现，不是重复逻辑）", () => {
+  const n = itemNutrition(白米饭, 150);
+  const { nutrition } = resolveNutrition(n, 300);
+  const expected = scaleNutritionToCalories(n, 300);
+  assert.deepEqual(nutrition, expected);
 });

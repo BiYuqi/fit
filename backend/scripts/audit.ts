@@ -229,7 +229,7 @@ async function main() {
       // 葱花饼（无油）跑一次多一条），不滤掉会把真实用户的少量样本淹没
       where: { calories_source: "user_override", user: { account: { not: { startsWith: "eval_" } } } },
       select: {
-        weight_g: true, calories: true, created_at: true,
+        weight_g: true, calories: true, calories_computed: true, created_at: true,
         food: { select: { name: true, calories_100g: true, is_estimated: true } },
         user: { select: { account: true } },
       },
@@ -261,31 +261,35 @@ async function main() {
 
   if (overrides.length) {
     // 按食物聚合：同一食物被同一用户反复覆盖只说明这个条目一直不准，不该按次数刷屏
-    const agg = new Map<string, { n: number; devs: number[]; est: boolean }>();
+    // T66：calories_computed 有值就是写入当时存下的精确三元组一角，直接用；
+    // 为空（存量记录，T66 上线前写入的）才回退按**当前** food_standard 反算，且标记出来别混为一谈。
+    const agg = new Map<string, { n: number; exactN: number; devs: number[]; est: boolean }>();
     for (const o of overrides) {
       if (!o.food) continue;
-      const sys = (Number(o.food.calories_100g) * Number(o.weight_g)) / 100;
+      const exact = o.calories_computed != null;
+      const sys = exact ? Number(o.calories_computed) : (Number(o.food.calories_100g) * Number(o.weight_g)) / 100;
       const usr = Number(o.calories);
       if (!(sys > 0) || !(usr > 0)) continue;
-      const e = agg.get(o.food.name) ?? { n: 0, devs: [], est: o.food.is_estimated };
+      const e = agg.get(o.food.name) ?? { n: 0, exactN: 0, devs: [], est: o.food.is_estimated };
       e.n++;
+      if (exact) e.exactN++;
       e.devs.push(((sys - usr) / usr) * 100);
       agg.set(o.food.name, e);
     }
     console.log(`\n用户手动覆盖热量的食物（共 ${overrides.length} 条覆盖 / ${agg.size} 种食物）`);
     console.log("——这是食物库估值偏差目前唯一的 ground truth：");
-    console.log(`  ${"食物".padEnd(26)}${"次数".padStart(6)}${"中位偏差".padStart(10)}  来源`);
+    console.log(`  ${"食物".padEnd(26)}${"次数".padStart(6)}${"中位偏差".padStart(10)}  来源      精确度`);
     const sorted = [...agg.entries()].sort((a, b) => Math.abs(med(b[1].devs)) - Math.abs(med(a[1].devs)));
     for (const [name, e] of sorted) {
       const d = med(e.devs);
+      const precision = e.exactN === e.n ? "精确" : e.exactN === 0 ? "反算" : `${e.exactN}/${e.n}精确`;
       console.log(
         `  ${name.slice(0, 24).padEnd(26)}${String(e.n).padStart(6)}` +
-        `${((d >= 0 ? "+" : "") + d.toFixed(0) + "%").padStart(10)}  ${e.est ? "AI估算" : "成分表"}`,
+        `${((d >= 0 ? "+" : "") + d.toFixed(0) + "%").padStart(10)}  ${e.est ? "AI估算" : "成分表"}    ${precision}`,
       );
     }
     console.log("  正偏差=系统高估（用户往下改），负偏差=系统低估。");
-    console.log("  注：系统值按**当前** food_standard 反算，条目若事后被改过则不精确。");
-    console.log("  → 要精确采集，需在写 user_override 时同时存下当时的 food_id / 系统值 / 用户值三元组。");
+    console.log("  「精确」= calories_computed 写入时存下的当时系统值（T66）；「反算」= T66 上线前的存量记录，按**当前** food_standard 反算，条目若事后被改过则不准。");
   } else {
     console.log("\n暂无 user_override 记录——食物库偏差无 ground truth 可用。");
   }

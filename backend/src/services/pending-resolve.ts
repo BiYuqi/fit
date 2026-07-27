@@ -4,7 +4,7 @@
 import { prisma } from "../lib/prisma";
 import { todayStr, toDateOnly, guessMealType } from "../lib/dates";
 import { matchFood } from "./matcher";
-import { itemNutrition } from "./calc";
+import { itemNutrition, resolveNutrition } from "./calc";
 import { recompute, buildContextCard, type ContextCard } from "./summary";
 import { recordResolveCorrection } from "./trace";
 import { recordLearningEvent, upsertFoodAlias, getBiases, applyBias, biasEnabled } from "./learning";
@@ -166,6 +166,7 @@ export async function resolvePendingRecord(params: {
           scene: candidates.scene ?? null,
           count: candidates.count ?? null,
           count_unit: candidates.count != null ? (candidates.count_unit ?? null) : null,
+          calories_override: candidates.calories_override ?? null, // T66：候选卡阶段用户已报的最终热量，原样透传到份量卡
           record_date: recordDateStr, // T62：候选卡→份量卡两步流转，归属日跟着传下去
         } as object,
       },
@@ -200,7 +201,9 @@ export async function resolvePendingRecord(params: {
   const food = await prisma.foodStandard.findUnique({ where: { id: food_id } });
   if (!food) return { ok: false, reason: "invalid_food" };
 
-  const nutrition = itemNutrition(food, weight_g);
+  const baseNutrition = itemNutrition(food, weight_g);
+  // T66：候选卡/份量卡阶段透传下来的用户终值热量，此刻食物与克数都已确定，直接采信
+  const { nutrition, calories_source } = resolveNutrition(baseNutrition, candidates.calories_override);
 
   const record = await prisma.foodRecord.create({
     data: {
@@ -220,6 +223,8 @@ export async function resolvePendingRecord(params: {
       scene: candidates.scene ?? null,
       count: candidates.count ?? null,
       count_unit: candidates.count != null ? (candidates.count_unit ?? null) : null,
+      calories_source,
+      calories_computed: calories_source === "user_override" ? baseNutrition.calories : null,
     },
   });
 

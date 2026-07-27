@@ -59,7 +59,8 @@
 | count_unit | text? | 与 count 配套的量词（「个/碗/片/根」）；count 为空时同为空。 |
 | calories | float | 后端算：calories_100g/100*weight_g；若 `calories_source=user_override` 则是用户直接指定的值（modify.update change.calories，T40，见 LEARNING_SPEC §3） |
 | protein / fat / carbs | float | 同理；`user_override` 时按新旧热量比例回推，不是重新估算 |
-| calories_source | text | computed（默认，food×grams 算出）/ user_override（用户直接报的热量，T40）；modify 改 food/grams/food_desc 时会被重置回 computed |
+| calories_source | text | computed（默认，food×grams 算出）/ user_override（用户直接报的热量，T40/T66）；modify 改 food/grams/food_desc 时会被重置回 computed |
+| calories_computed | float? | 仅 `calories_source=user_override` 时有值：系统本会按 food×grams 算出的热量（偏差三元组的一角，与 `food_id`/`calories` 一起构成 food_id/系统值/用户值，供 LEARNING_SPEC 食物库偏差学习用，T66）。T66 上线前的存量 `user_override` 记录为空，不回填——回填只能靠反算，会把不精确的数据固化成"精确采集"，`scripts/audit.ts` 对空值行退回按当前 food_standard 反算并标注 |
 | food_confidence | float? | 食物识别把握度 |
 | portion_confidence | float? | 份量把握度 |
 | source | text | text / voice |

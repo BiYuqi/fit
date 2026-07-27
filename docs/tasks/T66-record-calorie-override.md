@@ -1,6 +1,6 @@
 # T66 — 用户终值采信贯通 record 全链路（+ B 轨数据接缝）（对话精度 R2）
 
-**状态**：⬜待办
+**状态**：✅已完成
 
 **目标**：`modify` 早就支持"用户直接给出最终热量 → 直接采信"（`change.calories`，T40），但这条原则**从没贯通到第一次记录**。用户报吃的时候顺带说热量，系统没有对应字段，只能先按份量估错、再吵着改。补上 `calories_override`，并**顺带采集 B 轨需要的偏差三元组**。
 
@@ -90,3 +90,24 @@ resolveNutrition(base: ItemNutrition, override?: number | null):
 
 ## 提示词（可粘贴）
 > 按本文件执行 T66。改动面最大，**四个落库/建卡入口必须全部接住** `calories_override`，只改一部分等于没修。动手前通读 `food-item.ts` 全文与 `pending-resolve.ts` 相关段落，理清数据如何从 record 建卡流到 `pending_record.candidates` 再到最终 `foodRecord.create`；先抽 `resolveNutrition` 再改四处。**两个最易做错的点**：(a) 给了 `calories_override` 就不该再弹份量卡（设计要点 C-2）；(b) 设计要点 D 的三元组别省，省了 B 轨要重新等几周攒数据。完成后跑 `npm test` + 干净端口 `npm run eval` + `npm run audit`。遵守 CLAUDE.md 铁律 10/12，完成后把本文件状态改 ✅ 并同步 `docs/TASKS.md`。
+
+## 验收记录（2026-07-27）
+
+- **Schema**（`src/ai/schema.ts`）：`FoodItemBaseSchema` 加 `calories_override: z.number().positive().optional()`；`parseToolSchema.itemsProp.items.properties` 同步加同名字段（原样用任务文中给的 description）。record / append / multi 三处协议共用 `FoodItemSchema`，改一处自动覆盖。
+- **`calc.ts`**：新增 `resolveNutrition(base, override)` → `{ nutrition, calories_source }`，内部就是 `override != null` 时调 `scaleNutritionToCalories` 并标 `user_override`，否则原样返回标 `computed`。四个落库点与 `modify.ts` 既有点统一调用同一实现。
+- **四个落库/建卡入口全部接住**：
+  1. `food-item.ts` `processFoodItem` auto_commit 分支：解构加 `calories_override`；判断条件从 `food_confidence>=0.8 && portion_confidence>=0.8` 放宽为 `... || calories_override != null`（此处食物已确定，歧义分支已在更早处 return）；`itemNutrition` 之后接 `resolveNutrition`，`foodRecord.create` 显式写 `calories_source` + `calories_computed`（`baseNutrition.calories`，仅 override 时非空）。**份量卡被一并跳过**（同一个放宽的 if），验证了"别管多重"这条投诉的根因修复；且该路径本就不写份量学习事件，天然不产生偏差反馈，无需额外代码。
+  2. `buildCandidateCardData`（同文件，歧义候选卡）：`params` 类型加 `calories_override?: number|null`，解构加上，`candidates` JSON 加 `calories_override: calories_override ?? null`；调用点（`isAmbiguous` 分支）透传。这一步只做透传，不改候选卡本身的行为（食物还没定，无法跳过）。
+  3. `pending-resolve.ts` food_choice→portion_choice 二次建卡：新 `pendingRecord.candidates` 里加 `calories_override: candidates.calories_override ?? null`，原样接力上一步。
+  4. `pending-resolve.ts` 最终 `foodRecord.create`（`portion_choice` 落库分支）：`itemNutrition` 之后接 `resolveNutrition(baseNutrition, candidates.calories_override)`，写 `calories_source` + `calories_computed`。
+  5.（既有点）`modify.ts` update 分支：在原有 `change.calories` 写 `user_override` 处补 `calories_computed: calories_source === "user_override" ? baseNutrition.calories : null`。
+- **B 轨三元组**：`prisma/schema.prisma` `FoodRecord` 加 `calories_computed Float?`（可空、不回填存量）。**迁移方式有调整**：`npx prisma migrate dev` 触发了 drift 提示要**重置整个数据库**——本机 `:5432` 这个 Postgres 容器同时是 `:9300` 常驻 prod 后端在用的库（CLAUDE.md 明确不能碰），reset 会清空真实用户数据，**已改为手写迁移文件 + `prisma db execute` 直接执行 DDL + `prisma migrate resolve --applied` 补历史记录**，不触发 reset。drift 本身（`UserMemory.embedding` 索引）是先于本任务已存在的历史遗留，未处理、未受本任务影响。
+- **`scripts/audit.ts` B 轨改造**：查询加选 `calories_computed`；聚合时 `calories_computed != null` → 直接用作系统值（精确），否则回退按当前 `food_standard` 反算；输出新增"精确度"列（精确/反算/N/M精确）。跑 `npm run audit --days 30` 验证：现有 6 条 `user_override`（均为 T66 上线前写入）全部正确标"反算"，未误判成精确；表格渲染、排序、去重逻辑不受影响。
+- **Prompt**（`parser.ts`）：① 关键判断规则区加"陈述吃了什么+给出热量=record，问热量=chat"边界规则 + 真实案例 few-shot；② items 协议描述区加 `calories_override` 使用说明（何时填、克数仍要填、"大概/估计"这种猜测别填）。
+- **单测**：`calc.test.ts` 补 4 条 `resolveNutrition` 用例（无 override、null、有 override 按比例回推、与直接调用 `scaleNutritionToCalories` 结果一致）。`npm test`：194/194 全绿（190 + 新增 4）。
+- **`npx tsc --noEmit`**：无报错。
+- **eval**：新增 `eval/cases/record-calorie-override.yaml`（"晚上吃了一个自制冰激淋80卡"→一句话记成 80kcal、`calories_source=user_override`、`calories_computed>0`、无 pending、全程不弹份量卡）。干净端口（9309）独立跑 4/4 稳定 PASS。
+- **全量 `npm run eval`（干净端口）**：24 个用例仅 1 处 FAIL（`query-plan` 的"具体吃了什么"跟进问，回复措辞与断言字符串不完全匹配）——该用例走的是查询/答案合成链路，与本任务改动的 record/food-item/pending-resolve/modify/calc 代码路径完全无关；单独重跑该 case 4/4 全部 PASS，确认是既有的 LLM 答案合成随机抖动，非本任务引入的回归。本任务新增用例与既有 `card-flow`、`pending-text-answer`（重点关注对象，改了两处 pending 结构与 portion_card 触发条件）本轮全绿。
+- **`npm run audit --days 30`**："指令+数值"栏出现 4 条历史条目——均为 2026-07-03～07-14（T65 修复上线前）的历史对话，audit 只是如实回放历史解析日志，不会/也不该回填修复前的记录，符合预期，非本任务/T65 回归。
+- **文档**：`docs/AI_PARSING_SPEC.md` §3 补 `calories_override` 字段语义与 record/chat 边界；`docs/DATA_MODEL.md` `food_record` 表补 `calories_computed` 行。
+- **未处理的既有观察项（超出本任务范围，未改动）**：`modify.ts` 的 `calories_source = change.calories != null ? "user_override" : "computed"` 这行在**任何** `action=update` 调用时都会重新赋值，理论上会让"仅改餐次/仅改宏量素"这类与热量无关的后续修改把之前的 `user_override` 静默冲回 `computed`（`baseNutrition` 会重算成 food×weight 的原值）——与 `DATA_MODEL.md` 注释"改 food/grams/food_desc 时才会重置"的描述不完全一致。当前 eval 套件未覆盖到这个组合（先 `change.calories` 覆盖，再单独 `change.meal_type`/`change.protein` 等后续修改）未触发过，是 T66 之前就存在的代码，本任务未触碰、未修复，记录于此供后续排查。

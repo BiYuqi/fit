@@ -39,6 +39,8 @@ const FoodItemBaseSchema = z.object({
   portion_confidence: z.number().min(0).max(1),
   is_ambiguous: z.boolean(),
   ai_candidates: z.array(z.string()).optional(),
+  // T66：用户直接给出的该条目最终热量（"一个自制冰激淋80卡"），用户真值，后端直接采信不再按 food×grams 算。
+  calories_override: z.number().positive().optional(),
 });
 export type FoodItem = z.infer<typeof FoodItemBaseSchema>;
 
@@ -267,6 +269,7 @@ const itemsProp = {
         description: "is_ambiguous=true时，列出该泛称最可能指的具体食物名（标准中文名，最多3个，按可能性降序），供用户选择。例如'煎饼'→['煎饼果子','鸡蛋煎饼','酱香饼']",
         items: { type: "string" },
       },
+      calories_override: { type: "number", description: "用户直接给出的该条目最终热量(kcal)，如'80卡'。这是用户真值不是AI估算——后端直接采信，不再按食物库×克数计算。同时报了克数也照常填 portions/chosen_label（供展示与学习），但入库热量以此字段为准。" },
     },
   },
 };

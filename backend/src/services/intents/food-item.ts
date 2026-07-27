@@ -1,5 +1,5 @@
 import { matchFood, matchFoodCandidates } from "../matcher";
-import { itemNutrition } from "../calc";
+import { itemNutrition, resolveNutrition } from "../calc";
 import { prisma } from "../../lib/prisma";
 import { getFoodAlias, getBiases, applyBias, biasEnabled } from "../learning";
 import { dateOnlyStr } from "../../lib/dates";
@@ -51,9 +51,10 @@ export async function buildCandidateCardData(params: {
   scene?: string | null;
   count?: number | null;
   count_unit?: string | null;
+  calories_override?: number | null;
   recordDate: Date;
 }): Promise<CandidateCardData> {
-  const { user_id, query, raw, meal_type, source, portions, chosen_label, ai_candidates, scene, count, count_unit, recordDate } = params;
+  const { user_id, query, raw, meal_type, source, portions, chosen_label, ai_candidates, scene, count, count_unit, calories_override, recordDate } = params;
   const { foods: dbCandidates } = await matchFoodCandidates(query);
 
   const mediumGrams = (portions.find((p) => p.label === "medium") ?? portions[0])?.grams ?? 150;
@@ -74,7 +75,7 @@ export async function buildCandidateCardData(params: {
       // candidate_names：T38 注入记忆包用，避免为了渲染【待确认】而重跑 matchFoodCandidates 或读 chat_message
       // record_date（T62）：候选卡是异步确认的，食物真正归属的自然日必须跟着 pending 走，
       // 不能等用户选定食物那一刻才按"今天"落——那一刻可能已经跨天，或本来就是在补记别的自然日。
-      candidates: { query, meal_type, source, portions, chosen_label, scene: scene ?? null, candidate_names: allNames, count: count ?? null, count_unit: count != null ? (count_unit ?? null) : null, record_date: dateOnlyStr(recordDate) } as object,
+      candidates: { query, meal_type, source, portions, chosen_label, scene: scene ?? null, candidate_names: allNames, count: count ?? null, count_unit: count != null ? (count_unit ?? null) : null, calories_override: calories_override ?? null, record_date: dateOnlyStr(recordDate) } as object,
     },
   });
 
@@ -101,7 +102,7 @@ export interface ItemResult {
 
 export async function processFoodItem(item: FoodItem, ctx: ItemCtx): Promise<ItemResult> {
   const { user_id, meal_type, source, dateObj, recordDate, scene, itrace } = ctx;
-  const { canonical, chosen_label, portions, food_confidence, portion_confidence, raw, is_ambiguous, ai_candidates, count, count_unit } = item;
+  const { canonical, chosen_label, portions, food_confidence, portion_confidence, raw, is_ambiguous, ai_candidates, count, count_unit, calories_override } = item;
   const query = canonical || raw;
 
   // 初始化 ItemTrace state
@@ -163,7 +164,7 @@ export async function processFoodItem(item: FoodItem, ctx: ItemCtx): Promise<Ite
       }
 
       const { pendingRecord: pr, foodsPayload } = await buildCandidateCardData({
-        user_id, query, raw, meal_type, source, portions, chosen_label, ai_candidates, scene, count, count_unit, recordDate,
+        user_id, query, raw, meal_type, source, portions, chosen_label, ai_candidates, scene, count, count_unit, calories_override, recordDate,
       });
 
       if (itrace) {
@@ -250,21 +251,26 @@ export async function processFoodItem(item: FoodItem, ctx: ItemCtx): Promise<Ite
     );
   }
 
-  if (food_confidence >= 0.8 && portion_confidence >= 0.8) {
+  if ((food_confidence >= 0.8 && portion_confidence >= 0.8) || calories_override != null) {
     // ── decision + output：auto_commit 分支 ──
+    // T66：用户直接报出该条目最终热量时，食物已确定（歧义分支已在上方 return），
+    // 不该再因份量置信度低而弹份量卡——"别管多重"，重量只供展示/学习，不参与算账。
     if (itrace) {
       const da = { ...itrace.getState(), routing_action: "auto_commit", threshold_food_high: 0.8, threshold_portion_high: 0.8 };
       await itrace.decision(
         da,
         { food_level: foodLevel, portion_level: portionLevel, is_ambiguous, calorie_spread },
         { action: "auto_commit" },
-        { reason: `food_confidence (${food_confidence}) >= 0.8 && portion_confidence (${portion_confidence}) >= 0.8` },
+        { reason: calories_override != null
+          ? "用户直接给出该条目最终热量(calories_override)，跳过份量置信度门槛"
+          : `food_confidence (${food_confidence}) >= 0.8 && portion_confidence (${portion_confidence}) >= 0.8` },
       );
     }
 
     const weight_g = biasedChosen.grams;
     const unit = (biasedChosen as any)?.unit ?? "g";
-    const nutrition = itemNutrition(food, weight_g);
+    const baseNutrition = itemNutrition(food, weight_g);
+    const { nutrition, calories_source } = resolveNutrition(baseNutrition, calories_override);
 
     const record = await prisma.foodRecord.create({
       data: {
@@ -278,6 +284,8 @@ export async function processFoodItem(item: FoodItem, ctx: ItemCtx): Promise<Ite
         scene: scene ?? null,
         count: count ?? null,
         count_unit: count != null ? (count_unit ?? null) : null,
+        calories_source,
+        calories_computed: calories_source === "user_override" ? baseNutrition.calories : null,
       },
     });
 

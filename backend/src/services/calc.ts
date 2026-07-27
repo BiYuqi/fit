@@ -86,6 +86,19 @@ export function scaleNutritionToCalories(nutrition: ItemNutrition, calories: num
   };
 }
 
+// T66：食物侧用户终值采信统一入口——record/append/multi/pending 四个落库入口共用，避免各抄一遍。
+// override 非空即用户报了该条目的最终热量（真值），按比例回推宏量素并标记 user_override，
+// 防止后续被 food×grams 静默重算覆盖（同 T40 modify.change.calories 的口径）。
+export function resolveNutrition(
+  base: ItemNutrition,
+  override?: number | null,
+): { nutrition: ItemNutrition; calories_source: "computed" | "user_override" } {
+  if (override != null) {
+    return { nutrition: scaleNutritionToCalories(base, override), calories_source: "user_override" };
+  }
+  return { nutrition: base, calories_source: "computed" };
+}
+
 export function dailyTargets(user: UserProfile): DailyTargets {
   const deficit = user.daily_deficit ?? 500;
   const pFactor = user.protein_factor ?? 1.8;

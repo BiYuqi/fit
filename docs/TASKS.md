@@ -4,7 +4,7 @@
 > 用法：一次只做一个任务，按下方顺序，自测验收通过再下一个。
 > 状态：⬜待办 / 🔄进行中 / ✅完成。**任务验收通过后更新两处**：本表该行 + `tasks/Txx.md` 顶部状态行。
 
-**进度：61 / 72**　里程碑：✅ M1 命令行心跳(T07)　✅ M2 后端全通(T12)　✅ 前端可用(T19)　⬜ 可出包(T21)　✅ E 对话上下文(T23)　✅ L 学习闭环(T31)　✅ C 对话智能(T40)　✅ G 餐食卡(T48)　✅ M 语义记忆(T56)　⬜ 对话精度 R2(T72)　⬜ 估值层 E(T71)
+**进度：62 / 72**　里程碑：✅ M1 命令行心跳(T07)　✅ M2 后端全通(T12)　✅ 前端可用(T19)　⬜ 可出包(T21)　✅ E 对话上下文(T23)　✅ L 学习闭环(T31)　✅ C 对话智能(T40)　✅ G 餐食卡(T48)　✅ M 语义记忆(T56)　⬜ 对话精度 R2(T72)　⬜ 估值层 E(T71)
 
 ## 分轨
 - **基建 S**：T01
@@ -190,7 +190,7 @@ T01 → T02 → T03 → T04 → T05 → T06 → T07(✅M1)
 | ✅ | T63 | tasks/T63-conversation-audit-tool.md | 对话审计工具 `npm run audit`：明示信号采纳率扫描，零 LLM，把发现路径从「用户骂」换成「跑一遍」 |
 | ✅ | T64 | tasks/T64-macro-nutrient-modify.md | 宏量素修改协议缺失：「把蛋白质改成8克」→ 系统把重量改成200克，**唯一会静默写错数据**，最高优先 |
 | ✅ | T65 | tasks/T65-explicit-instruction-priority.md | 显式指令优先级：「改成850卡」夹在长说理文本里被整句判成 discuss，指令被吞 |
-| ⬜ | T66 | tasks/T66-record-calorie-override.md | 用户终值采信贯通 record/append/multi 四个落库入口 + 采集偏差三元组（B 轨接缝，兑现 T50 挂起项） |
+| ✅ | T66 | tasks/T66-record-calorie-override.md | 用户终值采信贯通 record/append/multi 四个落库入口 + 采集偏差三元组（B 轨接缝，兑现 T50 挂起项） |
 | ⬜ | T67 | tasks/T67-composite-dish-ingredient-guard.md | 复合菜主料丢失：确定性校验替代虚高自评置信度（「煎鸡胸肉汤面条」→「熟面条」still 0.85） |
 | ⬜ | T68 | tasks/T68-meal-attribution.md | 餐次归属：item 级 meal_type（一句跨两餐）+ 正则多信号时交还 AI（别覆盖掉 AI 判对的答案） |
 | ⬜ | T69 | tasks/T69-persona-warmth-rewrite.md | PERSONA_BASE 去禁令堆叠换 few-shot 正例，保留三条硬底线 |
