@@ -7,6 +7,7 @@ import {
   parseToolSchema,
 } from "../ai/schema";
 import { recordTokenUsage } from "./token";
+import { extractExplicitSignals, ingredientCovered } from "./explicit-signals";
 
 export const SYSTEM_PROMPT = `你是一个减脂 App 的饮食助手，帮助用户记录饮食与运动。
 
@@ -115,6 +116,9 @@ canonical 对**主食默认取"熟形"且名称要明确是熟的**（用户吃�
 - "米粉/河粉"（煮熟）→ "熟米粉"；"燕麦"（煮的）→ "燕麦粥"；"意面/通心粉"→ "熟意面"。
 - 已是熟成品名的（米饭、馒头、包子、饺子、面包、粥）保持不变。
 - 例外：用户明确说"生的/干的/泡前/没煮"才用生/干形。
+复合菜（肉/蛋/海鲜等主料 + 主食/汤/菜的组合）的 canonical 必须覆盖原话里出现的主料，不能只留主食部分：
+- "煎鸡胸肉汤面条"不能简化成"熟面条"——会把整块鸡胸肉的营养弄丢，应保留复合菜全名"鸡胸肉汤面条"，交给估算走复合菜口径。
+- "牛肉面加个鸡蛋"：无论拆成几个 item，主料词（牛肉）必须在某个 item 的 canonical 里出现，不能只剩"熟面条"+"鸡蛋"丢了牛肉。
 portions 估算小/中/大三档份量，chosen_label 根据用户表达选档。
 chosen_label 指向的档位**必须真实存在于 portions 里**：用户给出精确数量（"100克"、"200ml"）时，portions 须额外包含一条 label 为 "custom"、grams 等于该数值的条目，且 chosen_label 填 "custom"；没有精确数量就从小/中/大三档里选，不要填 portions 里不存在的档位。
 份量单位 unit 判断规则：
@@ -175,12 +179,29 @@ portion_confidence 判断依据：
   类似食物：鸡腿去骨、虾去壳、橙子去皮等，均按净食用重估算。
 - 若用户描述"大个/比较大"→选 large 档；"小/迷你"→small；无特别说明→medium。`;
 
+// T67：复合菜主料丢失确定性校验——不依赖模型自评的 food_confidence（会虚高，安全网形同虚设）。
+// 直接比对原话（record 用整条消息，multi 的 record op 用该 op 的原文子句）里出现的主料词
+// 是否被这个 record 的 canonical 集合覆盖（同义词表见 explicit-signals.ts）。
+// derivedRequest（"纯肉不算骨头"）整体跳过——这是 audit 首版栽过的最大误报来源。
+export function hasIngredientLoss(rawText: string, items?: Array<{ canonical: string }>): boolean {
+  if (!items || items.length === 0) return false;
+  const sig = extractExplicitSignals(rawText);
+  if (sig.derivedRequest || sig.ingredients.length === 0) return false;
+  const canonicals = items.map((i) => i.canonical);
+  return sig.ingredients.some((ing) => !ingredientCovered(ing, canonicals));
+}
+
 export async function parseUserInput(
   text: string,
   pack: MemoryPack,
   model = "deepseek-v4-flash",
   userId: string,
-): Promise<{ result: ParseResult; usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number }; messages?: Array<{ role: string; content: string }> }> {
+): Promise<{
+  result: ParseResult;
+  usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+  messages?: Array<{ role: string; content: string }>;
+  needsUpgrade: boolean;
+}> {
   const messages: Array<{ role: "system" | "user"; content: string }> = [
     { role: "system", content: SYSTEM_PROMPT },
     { role: "user", content: text },
@@ -283,5 +304,15 @@ export async function parseUserInput(
   }
 
   const result = ParseResultSchema.parse(raw);
-  return { result, usage, messages: sent };
+
+  let needsUpgrade = false;
+  if (result.intent === "record") {
+    needsUpgrade = hasIngredientLoss(text, result.items);
+  } else if (result.intent === "multi") {
+    needsUpgrade = result.ops.some(
+      (op) => op.intent === "record" && hasIngredientLoss(op.raw ?? text, op.items),
+    );
+  }
+
+  return { result, usage, messages: sent, needsUpgrade };
 }

@@ -1,6 +1,6 @@
 # T67 — 复合菜主料丢失：确定性校验替代不可靠的自评置信度（对话精度 R2）
 
-**状态**：⬜待办
+**状态**：✅已完成
 
 **目标**：复合菜的核心食材被 `canonical` 静默丢弃时（"煎鸡胸肉汤面条"→"熟面条"），`food_confidence` 却给 0.85 高分，导致"低置信度升 pro"这道安全网**完全没触发**。加一道不依赖模型自评分的确定性校验。
 
@@ -76,3 +76,23 @@ const hasLow = pr.needsUpgrade || parsed.items.some((i) => i.food_confidence < 0
 
 ## 提示词（可粘贴）
 > 按本文件执行 T67。复用 T63 落地的 `src/services/explicit-signals.ts`，**不要另写一份主料词表**。两个必须避开的坑：(a) 校验只看 `canonical` 不看 `raw`；(b) 别在 item 上挂内部标记（会被 zod 剥掉），走 `parseUserInput` 返回值的 `needsUpgrade`，且**不要改 `food_confidence`**（原因见设计要点 B）。规则要保守——验收第 3 条的误报护栏用例必须过。完成后跑干净端口 `npm run eval` + `npm run audit`。遵守 CLAUDE.md 铁律 10/12，完成后把本文件状态改 ✅ 并同步 `docs/TASKS.md`。
+
+## 验收记录（2026-07-27）
+
+**改动**：
+- `backend/src/services/explicit-signals.ts`：未改——同义词表/`ingredientCovered`/`derivedRequest` 均已由 T63 落地，直接复用。
+- `backend/src/services/parser.ts`：新增导出函数 `hasIngredientLoss(rawText, items)`——`extractExplicitSignals(rawText).ingredients` 逐个比对是否被该 record 全部 `item.canonical` 覆盖（`ingredientCovered`），`derivedRequest` 为真整体跳过。`parseUserInput` 在 zod parse 之后计算 `needsUpgrade`：`intent=record` 用整条消息 `text`；`intent=multi` 对每个 `op.intent==="record"` 用 `op.raw`（缺省回退整条 `text`）逐个判定，任一命中即 `needsUpgrade=true`。返回值新增 `needsUpgrade: boolean` 字段，**不碰 `food_confidence`、不挂 item 内部标记**（严格遵循设计要点 B）。`SYSTEM_PROMPT` 的 canonical 熟形规则段（原第112-117行附近，"已是熟成品名的...保持不变"之后）就地追加复合菜主料覆盖规则 + 两个真实 few-shot（"煎鸡胸肉汤面条"、"牛肉面加个鸡蛋"），未新增独立段落、未触碰其他任务已加的规则。
+- `backend/src/routes/chat.ts`：flash 解析成功分支捕获 `pr.needsUpgrade` 到外层变量；`record` 意图的升级判断行由 `parsed.items.some(i => i.food_confidence < 0.5)` 改为 `needsUpgrade || parsed.items.some(...)`，两信号并列触发升 pro，互不替代。**未扩展到 multi 分支的升级逻辑**——multi 目前本就没有任何 pro 升级路径（预先确认过，非本任务引入的缺口），按任务原定范围只改 record 路径这一行。
+- `backend/eval/cases/composite-dish-ingredient.yaml`（新增）：3 轮对话，覆盖真实丢主料案例 + 两个误报护栏（同义归一、derivedRequest）。
+- `backend/src/services/parser.test.ts`（新增）：7 个单测直接覆盖 `hasIngredientLoss` 纯函数——真实丢主料两例（单 item / 多 item）、两个误报护栏、无主料词、无 items 防御。这是验收第 2 点"失败兜底"的落地方式（单测覆盖组合逻辑，比构造"逼真实 pro 也丢主料"的 LLM 输入更确定、不吃 token）。
+- `docs/AI_PARSING_SPEC.md` §5：追加"主料覆盖校验（T67）"小节，说明校验独立于置信度、复用 explicit-signals、只看 canonical、结果走 needsUpgrade 返回值不写回 item。
+
+**验证**：
+- `npm test`：200/200 通过（194 基线 + 6 新增，其中 1 条为 T66 遗留未计入基线故实际净增 6）。
+- `npx tsc --noEmit`：无输出，通过。
+- 干净端口（复用会话内已在跑的 `PORT=9309` tsx watch，热重载已生效，`curl` 确认存活）：
+  - `composite-dish-ingredient` 单独跑 2 次，6/6 全绿（含误报护栏两轮）。
+  - 抽查 `AiTrace`/`AiParseLog`：本次 3 次真实调用 `model_used` 均为 `deepseek-v4-flash`——即 prompt 补充（设计点 C）已经让 flash 直接输出正确 `canonical="鸡胸肉汤面条"`（`food_confidence` 0.85~0.9），**没有触发到 `needsUpgrade` 升级路径**。这是好结果（prompt 修复起效更早），但也意味着这次真机验证没有实测到"needsUpgrade 真正拉了一次 pro 重试"这条支路本身——该支路的正确性改由 `parser.test.ts` 的纯函数单测保证（`hasIngredientLoss` 对错误 canonical 输入判定为 true 已验证），逻辑正确性有保证，只是没有在真实 flash 输出里触发到。
+  - 全量 `npm run eval`：21 用例，1 个新回归 `batch-modify`（"瘦肉改成70克，玉米改成150克"→期望70实际50，multi-modify 消歧路径，与本任务改动的文件均无交集）。单独重跑 4 次全部 4/4 绿，判定为与本任务无关的预置 LLM 抖动，非回归。
+  - `npm run audit -- --days 90`：主料词栏 6.1%（3/49，历史真实消息静态扫描口径，与任务背景记录一致，未上升）。
+- 未修复但记录：设计点 B 明确该机制目前**只在 chat.ts 的顶层 `record` 分支生效**，`multi` 里的 `record` op 即使 `needsUpgrade=true` 也不会触发升级（因为 multi 现状本就没有升级判断这条逻辑，属于任务范围外的既有缺口，未在本任务内扩展修复）。

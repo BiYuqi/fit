@@ -88,11 +88,13 @@ export async function chatRoutes(app: FastifyInstance) {
     let parseUsage: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | undefined;
     let upgraded = false;
     let modelUsed = "deepseek-v4-flash";
+    let needsUpgrade = false;
     try {
       const pr = await parseUserInput(text, pack, "deepseek-v4-flash", user_id);
       parsed = pr.result;
       parseUsage = pr.usage;
       parseMessages = pr.messages as object;
+      needsUpgrade = pr.needsUpgrade;
     } catch {
       // flash 解析失败（zod 校验 / tool call JSON 解析失败），升 pro 重试
       modelUsed = "deepseek-v4-pro";
@@ -109,7 +111,9 @@ export async function chatRoutes(app: FastifyInstance) {
       }
     }
     if (!upgraded && parsed.intent === "record" && parsed.items && parsed.items.length > 0) {
-      const hasLow = parsed.items.some((i) => i.food_confidence < 0.5);
+      // T67：食物 confidence 会因复合菜丢主料而虚高（"煎鸡胸肉汤面条"→"熟面条"仍给 0.85），
+      // needsUpgrade 是不依赖模型自评的确定性校验，与置信度阈值并列触发升级，互不替代。
+      const hasLow = needsUpgrade || parsed.items.some((i) => i.food_confidence < 0.5);
       if (hasLow) {
         modelUsed = "deepseek-v4-pro";
         try {

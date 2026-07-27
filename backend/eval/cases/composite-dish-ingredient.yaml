@@ -1,0 +1,28 @@
+# T67：复合菜主料被 canonical 静默丢弃——确定性校验替代不可靠的自评 food_confidence
+# 背景（2026-07-14 真机，npm run audit 发现）："煎鸡胸肉汤面条850克" 曾被归一成 canonical="熟面条"，
+# food_confidence 却给 0.85（虚高），850g 全按纯面条算=1190kcal，整块鸡胸肉的营养凭空消失。
+# 置信度本身不可靠，加了不依赖模型自评的确定性校验（parser.ts hasIngredientLoss，单测见 parser.test.ts）。
+name: T67 复合菜主料丢失确定性校验——鸡胸肉不再被 canonical 静默丢弃
+turns:
+  - say: "晚上吃了煎鸡胸肉汤面条850克"
+    expect:
+      intent: record
+      db:
+        food_record: { where: { food_name: "鸡胸", meal_type: dinner } }
+        food_record_count: 1
+
+  # 误报护栏1：同义归一（鸡蛋→水煮蛋）是正常归一，不该被判成丢主料
+  - say: "中午吃了千张80克，一个鸡蛋"
+    expect:
+      intent: record
+      db:
+        food_record: { where: { food_name: "蛋", meal_type: lunch } }
+        food_record_count: 3
+
+  # 误报护栏2：derivedRequest（用户自己说"纯肉不算骨头"）应整体跳过校验
+  - say: "中午吃了排骨瘦肉80克，纯肉不算骨头"
+    expect:
+      intent: record
+      db:
+        food_record: { where: { food_name: "瘦肉", meal_type: lunch } }
+        food_record_count: 4

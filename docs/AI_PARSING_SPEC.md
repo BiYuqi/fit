@@ -98,6 +98,13 @@ matchFood（单一最佳匹配）—— 字面只召回，AI 裁决（防"蛋白
 > 这是"字面误匹配"，与 §4 的"一对多变体歧义（煎饼）"是两个不同的病，分开处理。
 匹配命中后，后端按 chosen_label 的克数交给计算引擎算账。
 
+### 主料覆盖校验（T67，不依赖模型自评的确定性校验）
+复合菜（肉/蛋/海鲜等主料 + 主食/汤/菜的组合）的 `canonical` 可能把主料静默简化掉（"煎鸡胸肉汤面条"→"熟面条"），此时 `food_confidence` 仍可能给高分——**置信度是模型自评的，本身就可能是虚高、错的**，§4 里"食物低置信 (<0.5)"这道安全网因此形同虚设。
+- 校验独立于置信度，在 `parseUserInput`（`parser.ts`）完成，零额外 LLM 调用：复用 `explicit-signals.ts` 的 `extractExplicitSignals(原话).ingredients` 拿到原话里的主料名，`ingredientCovered(主料, canonicals)` 判断是否被该 record（或 multi 的某个 record op）的全部 item `canonical` 覆盖（内置同义词表，"鸡蛋"能被"水煮蛋"满足）；`derivedRequest` 为真（"纯肉不算骨头"）时整体跳过，避免用户主动要求派生值被误判成丢主料。
+- 校验对象只能是 `canonical`，绝不能是 `raw`——`raw` 是用户原话回显，必然包含主料词，用它判会永远全绿。
+- 结果通过 `parseUserInput` 返回值的 `needsUpgrade: boolean` 带出（不写回 item、不改 `food_confidence`——归一化跑在 zod parse 之前，挂在 item 上的内部标记会被 `z.object()` 剥掉）。`chat.ts` 的 flash→pro 升级判断改为 `needsUpgrade || food_confidence < 0.5`，两个信号并列触发，互不替代。
+- 规则刻意保守，宁可漏报不可误报（`npm run audit` 首版曾把该栏报成 25.6%，人工复核后 6.1%，多数是"鸡蛋→水煮蛋"这类正常同义归一或用户明说的派生值）。
+
 ## 6. 上下文卡（查询用，且适配无状态 API）
 进 Chat 页时后端预生成，**只放聚合值不放原始记录**，token 极小，每记一条刷新，随请求一并传给 DeepSeek。
 ```json
