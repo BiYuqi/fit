@@ -4,6 +4,9 @@ import { dateOnly } from '@/lib/format';
 
 let _db: SQLite.SQLiteDatabase | null = null;
 
+/** 本地镜像缓存保留天数（服务端保留 365 天，见 ARCHITECTURE §5/§6） */
+const CACHE_KEEP_DAYS = 90;
+
 type MessageRow = {
   id: string;
   date: string;
@@ -46,6 +49,14 @@ export async function getDb(): Promise<SQLite.SQLiteDatabase> {
   try { await _db.execAsync('ALTER TABLE chat_messages ADD COLUMN record_id TEXT'); } catch {}
   // Normalize existing date values from full ISO → "YYYY-MM-DD"
   try { await _db.execAsync("UPDATE chat_messages SET date = substr(date, 1, 10) WHERE length(date) > 10"); } catch {}
+  // 本地只是镜像缓存：超过 CACHE_KEEP_DAYS 的行清掉，更早的历史上翻时按需回源。
+  try {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - CACHE_KEEP_DAYS);
+    await _db.runAsync('DELETE FROM chat_messages WHERE date(date) < date(?)', [
+      cutoff.toISOString().slice(0, 10),
+    ]);
+  } catch { /* best-effort */ }
   // T57: API response cache for Today / History / Settings / Profile
   await _db.execAsync(`
     CREATE TABLE IF NOT EXISTS api_cache (
@@ -85,15 +96,6 @@ export async function isFreshInstall(): Promise<boolean> {
   return true;
 }
 
-export async function getCachedMessages(date: string): Promise<ChatMessage[]> {
-  const db = await getDb();
-  const rows = await db.getAllAsync<MessageRow>(
-    'SELECT * FROM chat_messages WHERE date = ? ORDER BY created_at ASC',
-    [date],
-  );
-  return rows.map(parseRow);
-}
-
 export async function upsertMessages(date: string, messages: ChatMessage[]): Promise<void> {
   const db = await getDb();
   const d = dateOnly(date); // normalize at write boundary
@@ -114,24 +116,9 @@ export async function upsertMessages(date: string, messages: ChatMessage[]): Pro
   }
 }
 
-export async function pruneOldMessages(): Promise<void> {
-  const db = await getDb();
-  const cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() - 30);
-  await db.runAsync('DELETE FROM chat_messages WHERE date < ?', [cutoff.toISOString().slice(0, 10)]);
-}
-
 export async function clearCache(): Promise<void> {
   const db = await getDb();
   await db.runAsync('DELETE FROM chat_messages');
-}
-
-export async function getAllMessages(): Promise<ChatMessage[]> {
-  const db = await getDb();
-  const rows = await db.getAllAsync<MessageRow>(
-    'SELECT * FROM chat_messages ORDER BY date ASC, created_at ASC',
-  );
-  return rows.map(parseRow);
 }
 
 /** 精确日期范围查询。from/to 均包含，接受 "YYYY-MM-DD" 和完整 ISO 两种格式。 */
@@ -148,24 +135,7 @@ export async function getMessagesInRange(
   return rows.map(parseRow);
 }
 
-/** 居中窗口查询——加载目标日期前后各 windowDays 天的消息。 */
-export async function getMessagesAround(
-  date: string,
-  windowDays = 3,
-): Promise<ChatMessage[]> {
-  const d = new Date(dateOnly(date) + 'T12:00:00');
-  if (isNaN(d.getTime())) return [];
-  const from = new Date(d);
-  from.setDate(from.getDate() - windowDays);
-  const to = new Date(d);
-  to.setDate(to.getDate() + windowDays);
-  return getMessagesInRange(
-    from.toISOString().slice(0, 10),
-    to.toISOString().slice(0, 10),
-  );
-}
-
-/** 搜索消息 — SQLite LIKE，按日期倒序。 */
+/** 搜索消息 — SQLite LIKE，按日期倒序。仅作服务端搜索失败时的离线兜底。 */
 export async function searchMessages(
   query: string,
   limit = 50,
@@ -176,16 +146,6 @@ export async function searchMessages(
     ['text', `%${query}%`, limit],
   );
   return rows.map(parseRow);
-}
-
-/** 根据 id 查消息日期。不存在返回 null。返回 "YYYY-MM-DD"。 */
-export async function getMessageDateById(id: string): Promise<string | null> {
-  const db = await getDb();
-  const row = await db.getFirstAsync<{ date: string }>(
-    'SELECT date FROM chat_messages WHERE id = ?',
-    [id],
-  );
-  return row?.date ?? null;
 }
 
 // ── T57: API response cache ────────────────────────────────────────────────

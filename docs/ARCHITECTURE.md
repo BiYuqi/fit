@@ -72,11 +72,13 @@
 
 ## 5. 本地缓存与同步（数据本地化 + SQLite 搜索）
 
-- 服务端 Postgres 是聊天记录的**权威副本**；本地 SQLite 是镜像缓存（全量 90 天）。
-- 进 Chat 页：读本地 SQLite **7 天窗口**秒显示（`getMessagesInRange`），再调服务端同步今日新消息、写入 SQLite。FlatList 只渲染当前窗口，不渲染全量。
-- **上翻加载**：`onEndReached` → 查 SQLite 加载更早 7 天窗口、prepend 到列表。SQLite 无数据时 fallback 服务端。
-- **搜索走 SQLite LIKE**：`searchMessages` 直接查 `chat_messages` 表返回摘要，不依赖内存数组。结果点选后调 `getMessagesAround` 加载目标 ±3 天窗口替换列表。
-- **跳转走窗口替换**：`jumpToMessage` / `jumpToDate` → SQLite 读目标窗口 → 替换 FlatList 数据 → `scrollToIndex` 定位。
+- 服务端 Postgres 是聊天记录的**权威副本**；本地 SQLite 是镜像缓存（最近 90 天，超期行在 `getDb()` 初始化时清掉）。
+- 进 Chat 页：读本地 SQLite **7 天窗口**秒显示（`getMessagesInRange`），再调服务端同步今日新消息、写入 SQLite。FlatList 只渲染当前窗口，不渲染全量。这 7 天一条都没有（断更多日）时自动往前翻一页，不把空问候语留给用户。
+- **上翻加载**：`onEndReached` → 按 `/api/chat/dates` 拿到的**有聊天的日期**往前翻 `PAGE_CHAT_DAYS` 个日子，先查 SQLite、空则回源服务端并写缓存。
+  - 翻页路标必须是日期表，**不能按自然周往前退**：断更十几天很正常，撞进空档就会把更早的历史整段判成"没有更多"（曾因此把 700+ 条历史锁死）。
+  - "到头"只由日期表判定，且日期表没取到（离线）时不判——不留任何进程级的永久熔断开关。
+- **搜索走服务端** `/api/chat/search`（本地只镜像 90 天，搜不全）；断网时退回 `searchMessages` 的 SQLite LIKE 兜底。
+- **跳转走窗口替换**：`jumpToMessage` / `jumpToDate` → 读目标 ±1 天窗口（本地空则回源；目标那条不在本地则强制回源）→ 替换 FlatList 数据 → `scrollToIndex` 定位。
 - FlatList 使用 `inverted` + `reverse`（微信模式）：新消息自动在底部出现，无需手动 scrollToEnd。
 - 离线：可看本地缓存的历史；但**记录新食物需联网**（要调 DeepSeek），离线只读不写。
 - "清除本地缓存"只删本地镜像，服务端不动，重进可拉回。
@@ -84,7 +86,7 @@
 ## 6. 聊天记录保留策略（机制）
 - 服务端：`chat_message` 带 `created_at`，每日定时任务删除 **365 天前**的聊天行。
 - **只清 `chat_message`，绝不级联 `food_record`/`daily_summary`**：一年前对话被清后，那天的热量统计与 History 数字照常保留。
-- 本地：超过 30 天的缓存自动清，无需用户操作。
+- 本地：超过 90 天的缓存自动清（`CACHE_KEEP_DAYS`），无需用户操作；清掉的部分上翻时按需回源。
 
 ## 7. 部署
 | 部分 | 方案 |

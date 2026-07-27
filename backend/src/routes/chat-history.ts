@@ -56,6 +56,11 @@ const RangeQuerySchema = z.object({
   to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
 });
 
+const SearchQuerySchema = z.object({
+  q: z.string().min(1),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+});
+
 export async function chatHistoryRoutes(app: FastifyInstance) {
   const auth = (req: any, reply: any) => app.authenticate(req, reply);
 
@@ -122,6 +127,28 @@ export async function chatHistoryRoutes(app: FastifyInstance) {
 
     const enriched = await enrichMealCards(await enrichResolved(messages));
     return { messages: enriched };
+  });
+
+  // ─────────────────────────────────────────────
+  // GET /api/chat/search?q=&limit=
+  // 全量历史搜索：本地 SQLite 只镜像最近 90 天，新设备刚登录时更是空的，
+  // 纯本地 LIKE 搜不到更早的对话。只搜文本气泡（卡片消息点开也没法展示）。
+  // ─────────────────────────────────────────────
+  app.get("/api/chat/search", { preHandler: [auth] }, async (req, reply) => {
+    const { sub: user_id } = req.user as { sub: string };
+    const qParsed = SearchQuerySchema.safeParse(req.query);
+    if (!qParsed.success) {
+      return reply.status(400).send({ error: { code: "invalid_params", message: qParsed.error.message } });
+    }
+    const { q, limit } = qParsed.data;
+
+    const messages = await prisma.chatMessage.findMany({
+      where: { user_id, kind: "text", content: { contains: q, mode: "insensitive" } },
+      orderBy: [{ date: "desc" }, { created_at: "desc" }],
+      take: limit,
+    });
+
+    return { messages };
   });
 
   // ─────────────────────────────────────────────

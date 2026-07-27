@@ -16,22 +16,30 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
 import { Glass, Radius } from '@/constants/theme';
-import { formatChatTime, formatDateLabel, localDateStr } from '@/lib/format';
+import { apiFetch } from '@/lib/api';
+import { dateOnly, formatChatTime, formatDateLabel, localDateStr } from '@/lib/format';
 import { searchMessages } from '@/lib/db';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useTheme } from '@/hooks/use-theme';
+import { useAuthStore } from '@/stores/auth-store';
+import { CHAT_HISTORY_DAYS } from '@/stores/chat-store';
 import type { ChatMessage } from '@/types/chat';
 
 type Props = {
   visible: boolean;
   onClose: () => void;
   chatDates: string[];
-  onSearchResult: (messageId: string) => void;
+  onSearchResult: (message: ChatMessage) => void;
   onDateSelect: (date: string) => void;
 };
 
 const TODAY = new Date();
-const MIN_DATE = new Date(TODAY.getFullYear(), TODAY.getMonth(), TODAY.getDate() - 89);
+const MIN_DATE = new Date(
+  TODAY.getFullYear(),
+  TODAY.getMonth(),
+  TODAY.getDate() - (CHAT_HISTORY_DAYS - 1),
+);
+const SEARCH_DEBOUNCE_MS = 250;
 
 export function SearchModal({
   visible,
@@ -53,6 +61,7 @@ export function SearchModal({
   const glassStroke = isDark ? 'rgba(255,255,255,0.22)' : 'rgba(255,255,255,0.80)';
   const topHighlight = isDark ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.95)';
 
+  const { token } = useAuthStore();
   const [searchQuery, setSearchQuery] = useState('');
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [results, setResults] = useState<ChatMessage[]>([]);
@@ -66,17 +75,30 @@ export function SearchModal({
     }
   }, [visible]);
 
+  // 搜服务端：本地 SQLite 只镜像最近 90 天，新设备刚登录时更是空的，纯本地 LIKE 搜不到早期对话。
+  // 断网时退回本地缓存搜索。
   useEffect(() => {
-    if (!searchQuery.trim()) {
+    const q = searchQuery.trim();
+    if (!q) {
       setResults([]);
       return;
     }
     let cancelled = false;
-    searchMessages(searchQuery, 50).then(rows => {
+    const timer = setTimeout(async () => {
+      let rows: ChatMessage[];
+      try {
+        const data = await apiFetch<{ messages: ChatMessage[] }>(
+          `/api/chat/search?q=${encodeURIComponent(q)}&limit=50`,
+          { token },
+        );
+        rows = data.messages.map(m => ({ ...m, date: dateOnly(m.date) }));
+      } catch {
+        rows = await searchMessages(q, 50);
+      }
       if (!cancelled) setResults(rows);
-    });
-    return () => { cancelled = true; };
-  }, [searchQuery]);
+    }, SEARCH_DEBOUNCE_MS);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [searchQuery, token]);
 
   const handleSelectDate = useCallback(
     (_event: DateTimePickerEvent, date?: Date) => {
@@ -90,8 +112,8 @@ export function SearchModal({
   );
 
   const handleResultPress = useCallback(
-    (messageId: string) => {
-      onSearchResult(messageId);
+    (message: ChatMessage) => {
+      onSearchResult(message);
       // onSearchResult already calls setSearchOpen(false) — don't double-close
     },
     [onSearchResult],
@@ -113,7 +135,7 @@ export function SearchModal({
           )}
           <TouchableOpacity
             style={styles.resultItem}
-            onPress={() => handleResultPress(item.id)}
+            onPress={() => handleResultPress(item)}
             activeOpacity={0.6}
           >
             <ThemedText style={styles.resultContent} numberOfLines={1}>

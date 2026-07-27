@@ -195,15 +195,15 @@ export default function ChatScreen({ isActive = true }: { isActive?: boolean }) 
   );
 
   // ── Search result handlers ──
-  const handleSearchResult = useCallback((messageId: string) => {
+  const handleSearchResult = useCallback((message: ChatMessage) => {
     setSearchOpen(false);
-    jumpToMessage(messageId);
-  }, [jumpToMessage]);
+    if (token) jumpToMessage(message.id, message.date, token);
+  }, [jumpToMessage, token]);
 
   const handleDateSelect = useCallback((date: string) => {
     setSearchOpen(false);
-    jumpToDate(date);
-  }, [jumpToDate]);
+    if (token) jumpToDate(date, token);
+  }, [jumpToDate, token]);
 
   // ── Respond to jumpTarget after messages window loads ──
   // inverted 列表里 viewPosition 是 content 坐标：0 = 视觉底部，1 = 视觉顶部。

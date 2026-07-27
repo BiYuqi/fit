@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { apiFetch } from '@/lib/api';
-import { getMessagesInRange, getMessagesAround, getMessageDateById, upsertMessages } from '@/lib/db';
+import { getMessagesInRange, upsertMessages } from '@/lib/db';
 import { appToday, addDays, dateOnly } from '@/lib/format';
 import { mergeMessages } from '@/lib/messages';
 import { patchTodayCache } from '@/lib/today-cache';
@@ -25,10 +25,40 @@ async function persistMessages(msgs: ChatMessage[]): Promise<void> {
   }
 }
 
+/** 聊天历史可回溯的天数，与服务端 chat_message 保留期一致（见 ARCHITECTURE §6） */
+export const CHAT_HISTORY_DAYS = 365;
+
+// 一次上翻加载几个「有聊天的日期」——按自然日翻页会撞进空档（断更十几天很正常），
+// 这里翻的是 chatDates 里真正有消息的日子。
+const PAGE_CHAT_DAYS = 3;
+// 跳转窗口取目标日期前后各几天
+const JUMP_WINDOW_DAYS = 1;
+
+// 取一段日期范围的消息：本地 SQLite 优先，本地空则回源服务端并写入缓存。
+async function fetchRange(from: string, to: string, token: string): Promise<ChatMessage[]> {
+  const local = await getMessagesInRange(from, to);
+  if (local.length > 0) return local;
+  return fetchRangeFromServer(from, to, token);
+}
+
+// 强制回源——本地可能只缓存了这一天的部分消息（如搜索命中的是服务端才有的那条）
+async function fetchRangeFromServer(from: string, to: string, token: string): Promise<ChatMessage[]> {
+  try {
+    const data = await apiFetch<{ messages: ChatMessage[] }>(
+      `/api/chat/messages/range?from=${from}&to=${to}`,
+      { token },
+    );
+    if (data.messages.length === 0) return [];
+    await persistMessages(data.messages);
+    return getMessagesInRange(from, to);
+  } catch {
+    return [];
+  }
+}
+
 // Prevent concurrent loadMoreMessages calls + cooldown after each load
 let _loadingMore = false;
 let _loadMoreCooldown: ReturnType<typeof setTimeout> | null = null;
-let _noMoreData = false;
 
 // Same guards for the newer direction (after a search jump)
 let _loadingNewer = false;
@@ -54,6 +84,8 @@ type ChatStore = {
   isSending: boolean;
   isLoading: boolean;
   chatDates: string[];
+  /** chatDates 是否已成功从服务端拿到——没拿到时不能判定「没有更早的了」 */
+  datesLoaded: boolean;
   summaryCard: ContextCard | null;
   // T53：撤销乐观态按 record_id 记（一张餐卡可同时有多条被批量改的记录各自撤销），不再按 messageId
   undoneRecords: Record<string, true>;
@@ -65,8 +97,8 @@ type ChatStore = {
   loadDates: (token: string) => Promise<void>;
   loadMoreMessages: (token: string) => Promise<void>;
   loadNewerMessages: (token: string) => Promise<void>;
-  jumpToMessage: (messageId: string) => Promise<void>;
-  jumpToDate: (date: string) => Promise<void>;
+  jumpToMessage: (messageId: string, date: string, token: string) => Promise<void>;
+  jumpToDate: (date: string, token: string) => Promise<void>;
   clearJumpTarget: () => void;
   send: (text: string, token: string) => Promise<void>;
   resolve: (pendingId: string, choice: string | { grams: number }, token: string) => Promise<void>;
@@ -80,6 +112,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   isSending: false,
   isLoading: false,
   chatDates: [],
+  datesLoaded: false,
   summaryCard: null,
   undoneRecords: {},
   jumpTarget: null,
@@ -88,15 +121,18 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   loadDates: async (token: string) => {
     try {
       const to = todayStr();
-      const fromStr = addDays(to, -89);
+      // 窗口对齐服务端保留期（365 天）——这份日期表同时是上翻分页的路标，
+      // 截短了就等于把更早的历史锁在墙后面。
+      const fromStr = addDays(to, -(CHAT_HISTORY_DAYS - 1));
       const data = await apiFetch<{ dates: string[] }>(
         `/api/chat/dates?from=${fromStr}&to=${to}`,
         { token },
       );
       const dates = data.dates.includes(to) ? data.dates : [...data.dates, to];
-      set({ chatDates: dates });
+      set({ chatDates: dates, datesLoaded: true });
     } catch {
-      set({ chatDates: [todayStr()] });
+      // 拿不到就保持原样并维持 datesLoaded=false：分页据此重试，不会误判到头
+      set(s => ({ chatDates: s.chatDates.length > 0 ? s.chatDates : [todayStr()] }));
     }
   },
 
@@ -123,15 +159,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         { token },
       );
       if (_syncGeneration !== gen) return; // cancelled by jump
-      const byDate = new Map<string, ChatMessage[]>();
-      for (const m of data.messages) {
-        const list = byDate.get(m.date);
-        if (list) list.push(m);
-        else byDate.set(m.date, [m]);
-      }
-      for (const [date, msgs] of byDate) {
-        await upsertMessages(date, msgs);
-      }
+      await persistMessages(data.messages);
       if (_syncGeneration !== gen) return; // cancelled by jump
       // 3. Re-read window (includes server's new messages, each card carrying its own resolved status)
       const window = await getMessagesInRange(from, to);
@@ -140,61 +168,38 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     } catch { /* keep cache on error */ }
 
     if (_syncGeneration !== gen) return; // cancelled by jump
+    // 最近 7 天一条没有（断更多日）→ 直接翻到最近有聊天的那几天。
+    // 否则开屏就是空问候语，而空列表连 onEndReached 都不一定触发，用户无路可走。
+    if (get().messages.length === 0) await get().loadMoreMessages(token);
+
+    if (_syncGeneration !== gen) return; // cancelled by jump
     set({ isLoading: false });
   },
 
+  // 上翻加载：以 chatDates（有消息的日期）为路标，一次翻 PAGE_CHAT_DAYS 个有聊天的日子。
+  // 不按自然周往前退——中间的空档会被整段跳过，不再被误判成「没有更多了」。
   loadMoreMessages: async (token: string) => {
-    if (_loadingMore || _loadMoreCooldown || _noMoreData) return;
-    const { messages } = get();
-    if (messages.length === 0) return;
-
-    const gen = _syncGeneration; // 跳转会换掉整个窗口，中途返回的旧数据必须丢弃
+    if (_loadingMore || _loadMoreCooldown) return;
     _loadingMore = true;
 
     try {
-      const earliestDate = dateOnly(messages[0].date);
-      const toDate = new Date(earliestDate + 'T12:00:00');
-      if (isNaN(toDate.getTime())) return; // invalid date guard
-      toDate.setDate(toDate.getDate() - 1);
-      const fromDate = new Date(toDate);
-      fromDate.setDate(fromDate.getDate() - 6);
+      if (!get().datesLoaded) await get().loadDates(token);
+      const { messages, chatDates, datesLoaded } = get();
+      if (!datesLoaded) return; // 日期表没拿到，这次不翻；下次触底重试
 
-      const fromStr = fromDate.toISOString().slice(0, 10);
-      const toStr = toDate.toISOString().slice(0, 10);
+      const gen = _syncGeneration; // 跳转会换掉整个窗口，中途返回的旧数据必须丢弃
+      // 列表为空时以「今天之后」为锚，让今天也进入候选
+      const anchor = messages.length > 0 ? dateOnly(messages[0].date) : addDays(todayStr(), 1);
+      const older = chatDates.filter(d => d < anchor);
+      if (older.length === 0) return; // 到头了
 
-      let older = await getMessagesInRange(fromStr, toStr);
-
-      // SQLite empty (fresh install) → fallback to server
-      if (older.length === 0) {
-        try {
-          const data = await apiFetch<{ messages: ChatMessage[] }>(
-            `/api/chat/messages/range?from=${fromStr}&to=${toStr}`,
-            { token },
-          );
-          if (data.messages.length > 0) {
-            const byDate = new Map<string, ChatMessage[]>();
-            for (const m of data.messages) {
-              const list = byDate.get(m.date);
-              if (list) list.push(m);
-              else byDate.set(m.date, [m]);
-            }
-            for (const [date, msgs] of byDate) {
-              await upsertMessages(date, msgs);
-            }
-            older = await getMessagesInRange(fromStr, toStr);
-          }
-        } catch { /* stay empty */ }
-      }
-
+      const batch = older.slice(-PAGE_CHAT_DAYS);
+      const rows = await fetchRange(batch[0], batch[batch.length - 1], token);
       if (_syncGeneration !== gen) return; // cancelled by jump
 
-      if (older.length === 0) {
-        _noMoreData = true; // prevent further loads
-      } else {
-        set(s => ({ messages: [...older, ...s.messages] }));
-        // Cooldown before next load — prevents onEndReached loop
-        _loadMoreCooldown = setTimeout(() => { _loadMoreCooldown = null; }, 500);
-      }
+      if (rows.length > 0) set(s => ({ messages: [...rows, ...s.messages] }));
+      // Cooldown before next load — prevents onEndReached loop
+      _loadMoreCooldown = setTimeout(() => { _loadMoreCooldown = null; }, 500);
     } finally {
       _loadingMore = false;
     }
@@ -225,21 +230,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         return;
       }
 
-      let newer = await getMessagesInRange(fromStr, toStr);
-
-      // SQLite empty (fresh install) → fallback to server
-      if (newer.length === 0) {
-        try {
-          const data = await apiFetch<{ messages: ChatMessage[] }>(
-            `/api/chat/messages/range?from=${fromStr}&to=${toStr}`,
-            { token },
-          );
-          if (data.messages.length > 0) {
-            await persistMessages(data.messages);
-            newer = await getMessagesInRange(fromStr, toStr);
-          }
-        } catch { /* stay empty */ }
-      }
+      const newer = await fetchRange(fromStr, toStr, token);
 
       if (_syncGeneration !== gen) return; // cancelled by jump
 
@@ -256,23 +247,23 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }
   },
 
-  jumpToMessage: async (messageId: string) => {
+  // date 由调用方带上（搜索结果自带）：命中的那条可能只在服务端有，本地查不出日期。
+  jumpToMessage: async (messageId: string, date: string, token: string) => {
     _syncGeneration++; // cancel any in-flight loadRecentMessages
     try {
-      const targetDateFull = await getMessageDateById(messageId);
-      if (!targetDateFull) {
-        console.warn('[jumpToMessage] message not found in SQLite:', messageId);
-        set({ isLoading: false });
-        return;
+      const targetDate = dateOnly(date);
+      const from = addDays(targetDate, -JUMP_WINDOW_DAYS);
+      const to = addDays(targetDate, JUMP_WINDOW_DAYS);
+      let window = await fetchRange(from, to, token);
+      // 本地缓存了这几天的一部分但没有目标那条 → 强制回源补全，否则跳过去定位不到
+      if (!window.some(m => m.id === messageId)) {
+        window = await fetchRangeFromServer(from, to, token);
       }
-      const targetDate = dateOnly(targetDateFull);
-      const window = await getMessagesAround(targetDate, 1);
       if (window.length === 0) {
         console.warn('[jumpToMessage] empty window for date:', targetDate);
         set({ isLoading: false });
         return;
       }
-      _noMoreData = false;
       set({
         messages: window,
         jumpTarget: { type: 'message', id: messageId },
@@ -285,17 +276,20 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }
   },
 
-  jumpToDate: async (date: string) => {
+  jumpToDate: async (date: string, token: string) => {
     _syncGeneration++; // cancel any in-flight loadRecentMessages
     try {
       const targetDate = dateOnly(date);
-      const window = await getMessagesAround(targetDate, 1);
+      const window = await fetchRange(
+        addDays(targetDate, -JUMP_WINDOW_DAYS),
+        addDays(targetDate, JUMP_WINDOW_DAYS),
+        token,
+      );
       if (window.length === 0) {
         console.warn('[jumpToDate] empty window for date:', targetDate);
         set({ isLoading: false });
         return;
       }
-      _noMoreData = false;
       set({
         messages: window,
         jumpTarget: { type: 'date', date: targetDate },
@@ -458,6 +452,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     isSending: false,
     isLoading: false,
     chatDates: [],
+    datesLoaded: false,
     summaryCard: null,
     undoneRecords: {},
     jumpTarget: null,

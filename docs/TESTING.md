@@ -27,7 +27,28 @@ frontend/
 └── src/components/**/__tests__/
     ├── exercise-card.test.tsx   # 9 tests，参考模板
     └── record-card.test.tsx     # 13 tests，参考模板
+└── src/stores/__tests__/
+    └── chat-store.test.ts       # store 逻辑测试参考模板（见下）
 ```
+
+## Store 逻辑测试（不渲染组件）
+
+组件测试是 mock 掉 store；**store 自身的逻辑**（分页、窗口、同步）反过来——跑真 store，mock 掉 `@/lib/db`（假 SQLite）和 `@/lib/api`（假服务端），直接 `useChatStore.getState().xxx()` 调 action、断言 state。参考 `src/stores/__tests__/chat-store.test.ts`。
+
+两条硬要求：
+
+1. **mock 工厂引用的外部变量名必须以 `mock` 开头**（`mockServer` / `mockLocal`）。`jest.mock()` 会被提升到 import 之前，引用普通变量名直接编译报错，只有 `mock*` 前缀被放行。
+2. **模块级状态要按用例隔离**。store 里的并发锁、冷却计时器是模块级变量，跨用例会串味：
+
+```typescript
+function freshStore(): typeof import('@/stores/chat-store').useChatStore {
+  let store: typeof import('@/stores/chat-store').useChatStore | undefined;
+  jest.isolateModules(() => { store = require('@/stores/chat-store').useChatStore; });
+  return store!;
+}
+```
+
+> 用 `jest.isolateModules` + `require`，**不要用 `await import()`** —— jest-expo 跑在 CJS 环境，动态 import 会报 `A dynamic import callback was invoked without --experimental-vm-modules`。
 
 ## 架构原则
 
@@ -197,6 +218,8 @@ expect(screen.getByText(/150g/)).toBeOnTheScreen();
 | `toBeOnTheScreen` 报 undefined | `expect(...).toBeOnTheScreen is not a function` | `extend-expect` 没 import | 测试文件顶部加 import |
 | 中文 `getByText` 失败 | 明明有文字但 `Unable to find` | Text 节点合并，精确匹配失败 | 用 regex：`getByText(/中文/)` |
 | `setupFiles` 里 import jest-native | `expect is not defined` | `expect` 在 setup 阶段还不存在 | 在每个测试文件里 import |
+| `jest.mock` 工厂引用外部变量 | `The module factory of jest.mock() is not allowed to reference out-of-scope variables` | 工厂被提升到 import 之前 | 变量名加 `mock` 前缀 |
+| 测试里 `await import()` | `dynamic import callback was invoked without --experimental-vm-modules` | jest-expo 跑 CJS | `jest.isolateModules` + `require` |
 
 ## 与 CI 的关系
 

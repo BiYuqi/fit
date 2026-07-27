@@ -108,4 +108,9 @@ resp: `{ messages: chat_message[], resolved_pending_ids: string[] }`，按 creat
 > 包含 `resolved_pending_ids`（和单日查询逻辑一致）供前端隐藏已处理的 pending 卡。
 
 ### GET /api/chat/dates?from=&to=
-resp: `{ dates: ["YYYY-MM-DD", ...] }`，有对话的日期列表，供线程选择器。
+resp: `{ dates: ["YYYY-MM-DD", ...] }`（升序），有对话的日期列表。
+> 既供线程选择器，也是**上翻分页的路标**：前端按这份列表一次翻 N 个「有聊天的日期」，中间的空档整段跳过。前端取的窗口 = 服务端保留期（365 天）。
+
+### GET /api/chat/search?q=&limit=（默认 50，上限 100）
+resp: `{ messages: chat_message[] }`，只含 `kind=text`，按 `date desc, created_at desc`。
+> 全量历史搜索。本地 SQLite 只镜像最近 90 天，新设备刚登录时更是空的，纯本地 LIKE 搜不到早期对话；前端断网时才退回本地缓存搜索。
