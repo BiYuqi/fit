@@ -18,6 +18,8 @@ export function inferMatchPath(
   query: string,
   dbCandidates: Array<{ id: string; name: string }>,
 ): string {
+  // T70：精确/alias 命中的是已入库的估算条目（复用旧估算） vs 本次现估——区分开供 discuss/回流机制用
+  if ((food as any)._estimateReused) return "ai_estimate_reuse";
   // AI 硬估（库里无匹配）
   if (food.is_estimated) return "ai_estimate";
   // AI 裁决（有候选但未精确命中，由 AI 从候选中选择）

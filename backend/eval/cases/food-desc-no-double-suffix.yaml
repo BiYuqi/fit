@@ -1,0 +1,24 @@
+# T70：变体命名叠加 bug 回归用例。曾经的缺陷：modify.update 每次应用 change.food_desc 都往
+# food.name 后面拼一次后缀，同一属性改第二次会把"葱花饼（无油）"变成"葱花饼（无油）（无油）"
+# 这种脏名（真机存量脏数据两条：葱花饼、炖鸡胸肉，已清理，见 scripts/t70-cleanup-dirty-food-variants.ts）。
+name: 属性修正连改两次不产生叠加后缀
+turns:
+  - say: "晚上吃了100克葱花饼"
+    expect:
+      intent: record
+      db:
+        food_record: { weight_g: 100, meal_type: dinner }
+
+  - say: "改成无油版"
+    expect:
+      intent: modify
+      db:
+        food_record: { where: { food_name: "葱花饼" }, food_name: "葱花饼（无油）" }
+
+  # 用户重复强调同一个属性修正——food.name 此刻已经是"葱花饼（无油）"，
+  # 不该再叠一次后缀变成"葱花饼（无油）（无油）"
+  - say: "还是无油版，你还没改对"
+    expect:
+      intent: modify
+      db:
+        food_record: { where: { food_name: "葱花饼" }, food_name: "葱花饼（无油）" }

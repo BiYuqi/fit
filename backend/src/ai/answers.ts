@@ -116,7 +116,7 @@ export async function answerChat(text: string, pack: MemoryPack, userId: string)
 export async function answerDiscuss(
   question: string,
   target: RecordRef,
-  fullRecord: { portion_label: string; food_confidence: number; portion_confidence: number; raw_input: string | null; predicted_grams?: number | null; food: { name: string; calories_100g: unknown } | null } | null,
+  fullRecord: { portion_label: string; food_confidence: number; portion_confidence: number; raw_input: string | null; predicted_grams?: number | null; food: { name: string; calories_100g: unknown; is_estimated: boolean } | null } | null,
   pack: MemoryPack,
   userId: string,
 ): Promise<{
@@ -138,7 +138,7 @@ export async function answerDiscuss(
       if (fullRecord.raw_input) detail += `\n- 用户原话："${fullRecord.raw_input}"`;
       detail += `\n- AI置信度：食物 ${fullRecord.food_confidence?.toFixed(2)}，份量 ${fullRecord.portion_confidence?.toFixed(2)}`;
       if (fullRecord.food) {
-        detail += `\n- 食物库：${fullRecord.food.name} 每100g ${Math.round(Number(fullRecord.food.calories_100g))}kcal`;
+        detail += `\n- 食物库：${fullRecord.food.name} 每100g ${Math.round(Number(fullRecord.food.calories_100g))}kcal${fullRecord.food.is_estimated ? "（这个值是 AI 估算的，不是成分表标准值——如实说是估算，不要说“食物库标准值”）" : "（成分表标准值）"}`;
       }
       // 偏差校准说明（LEARNING_SPEC §7，T31）：后端调过克数而 AI 不知情会编造错误解释
       if (

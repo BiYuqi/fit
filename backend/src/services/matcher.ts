@@ -252,16 +252,24 @@ export async function matchFoodExactOrEstimate(canonical: string, raw: string = 
   return estimateByAI(canonical, raw, userId);
 }
 
+// T70：精确/alias 命中的是一条已入库的 is_estimated=true 条目时，打一个不落库的标记——
+// 供上层（food-item.ts 的 inferMatchPath）区分"复用旧估算"与"本次现估"，供 discuss 如实说明
+// 这个数是估算值而非成分表标准值，也供后续回流机制识别哪些估算值被复用得多、更该优先复核。
+function tagEstimateReuse<T extends FoodStandard>(food: T): T {
+  if (food.is_estimated) (food as any)._estimateReused = true;
+  return food;
+}
+
 // 字面匹配只做"召回"，不做"裁决"：精确/alias 可信任直用；前缀(假前缀)/trgm 属弱匹配，
 // 回灌 AI 把关；AI 否决或无候选 → 估算落库。详见 AI_PARSING_SPEC §5。
 export async function matchFood(canonical: string, raw: string = canonical, userId?: string): Promise<FoodStandard> {
   // 1. 精确匹配 → 可信
   const exact = await prisma.foodStandard.findFirst({ where: { name: canonical } });
-  if (exact) return exact;
+  if (exact) return tagEstimateReuse(exact);
 
   // 2. aliases 匹配 → 可信
   const byAlias = await prisma.foodStandard.findFirst({ where: { aliases: { has: canonical } } });
-  if (byAlias) return byAlias;
+  if (byAlias) return tagEstimateReuse(byAlias);
 
   // 弱匹配候选（前缀假命中 + trgm），交 AI 裁决
   const suspects: FoodStandard[] = [];
@@ -292,10 +300,13 @@ export async function matchFood(canonical: string, raw: string = canonical, user
   prefixResults.forEach(addSuspect);
 
   // 4. pg_trgm 模糊匹配 → 可疑候选
+  // T70：补 is_estimated=false 过滤，与 matchFoodCandidates 的 trgm 分支对齐——否则一条 AI 估算
+  // 条目字面相似就会被当"证据"召回去让 AI 裁决是否复用，把估算值的权威性抬到了跟成分表一样。
   const trgmResults = await prisma.$queryRaw<Array<FoodStandard & { _sim: number }>>`
     SELECT *, similarity(name, ${canonical}) AS _sim
     FROM "FoodStandard"
     WHERE similarity(name, ${canonical}) >= ${SIMILARITY_THRESHOLD}
+      AND is_estimated = false
     ORDER BY _sim DESC
     LIMIT ${TRGM_LIMIT}
   `;

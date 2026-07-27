@@ -338,7 +338,10 @@ export async function handleModify(
   if (change.food_desc) {
     // T40：属性修正（"无油"/"去皮"等）影响营养口径——构造具体变体名强制重估，不走弱匹配裁决
     // （否则 trgm 几乎必然召回原条目，复用旧营养值会让修正静默失效，见 matchFoodExactOrEstimate 注释）
-    food = await matchFoodExactOrEstimate(`${food.name}（${change.food_desc}）`, text, user_id);
+    // T70：food.name 若已带同样后缀（同一属性改第二次）不再叠加，否则产生"葱花饼（无油）（无油）"这种脏名。
+    const suffix = `（${change.food_desc}）`;
+    const targetName = food.name.endsWith(suffix) ? food.name : `${food.name}${suffix}`;
+    food = await matchFoodExactOrEstimate(targetName, text, user_id);
   }
   if (change.meal_type) {
     meal_type = change.meal_type as MealType;                  // 改餐次（"粽子是中午吃的"）：数值不动

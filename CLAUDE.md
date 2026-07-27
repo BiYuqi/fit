@@ -6,7 +6,7 @@
 
 ## 铁律（不可违反）
 
-1. **AI 绝不算账。** 热量/营养只能由后端用 `food_standard` 的每100g数值 × 克数算出。AI 只负责理解、估份量、估兜底营养。
+1. **AI 绝不算账。** 热量/营养只能由后端用 `food_standard` 的每100g数值 × 克数算出。AI 只负责理解、估份量、估兜底营养。（`food_standard` 里 `is_estimated=true` 的条目本身就是 AI 估的，权威性不等于成分表条目——这一点不削弱本条铁律，AI 依然不许心算，但用户报的真值不该被一个估算值压过去；分级见 FOOD_DB_SPEC.md §权威分级，T70）
 2. **数据库是唯一事实源。** `food_record` / `daily_summary` 是真相。Today/History 只读它们。
 3. **聊天记录是展示层，不是事实源。** `chat_message` 只用于回放显示，**Today/History 绝不读它**；删聊天不影响热量统计。
 4. **食物匹配不用 embedding。** 用 DeepSeek 归一 + pg_trgm 模糊匹配（见 AI_PARSING_SPEC）。语义记忆检索不属于此条管辖（见 MEMORY_SPEC）。

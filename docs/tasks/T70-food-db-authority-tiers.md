@@ -1,6 +1,6 @@
 # T70 — 食物库权威分级 + 脏条目清理（估值层 E）
 
-**状态**：⬜待办
+**状态**：✅已完成
 
 **目标**：AI 估算出的条目一旦落库，就与真实食物成分表**享有完全同等的权威**，且此后不再复核。修正这个不对等，并清掉已产生的脏条目。这是 B 轨里**范围确定、无需产品决策**的部分（需决策的回流机制在 T71）。
 
@@ -74,3 +74,29 @@ food = await matchFoodExactOrEstimate(`${food.name}（${change.food_desc}）`, t
 
 ## 提示词（可粘贴）
 > 按本文件执行 T70。这是 B 轨里**不需要产品决策**的部分，别顺手把"用户覆盖回流食物库"一起做了（那是 T71，口径待定）。三件事：修变体命名叠加、trgm 分支补 `is_estimated` 过滤、清 2 条存量脏条目（**清理前先查有没有 `food_record` 指向它们**）。文档侧把"估算条目 ≠ 成分表条目"这个分层写进 `FOOD_DB_SPEC.md`，铁律 1 本身不要改。完成后跑 `npm test` + 干净端口 `npm run eval` + `npm run audit`。遵守 CLAUDE.md 铁律 10/12，完成后把本文件状态改 ✅ 并同步 `docs/TASKS.md`。
+
+## 验收记录（2026-07-27）
+
+### 改动
+- `backend/src/services/intents/modify.ts`（约341行）：`change.food_desc` 拼接变体名前先判断 `food.name` 是否已带同样后缀（`endsWith(suffix)`），已带则复用原名，不再叠加。
+- `backend/src/services/matcher.ts`：`matchFood` 的 trgm 分支补 `is_estimated = false` 过滤，与 `matchFoodCandidates` 对齐。另加 `tagEstimateReuse` helper——精确/alias 命中一条 `is_estimated=true` 的条目时打一个不落库的 `_estimateReused` 标记（不改返回值本身，不改复用行为）。
+- `backend/src/services/intents/food-item.ts`：`inferMatchPath` 新增 `_estimateReused` 判断，命中"复用旧估算"时 `match_path` 记 `ai_estimate_reuse`，与"本次现估"（`ai_estimate`）区分开，写入 trace。
+- `backend/src/ai/answers.ts`：`answerDiscuss` 的 `fullRecord.food` 类型补 `is_estimated: boolean`（`routes/chat.ts` 的 `include: { food: true }` 本就带这个字段，只是类型和 detail 拼接没用上）；`detail` 拼"食物库：…每100g…kcal"那行按 `is_estimated` 分叉，估算值额外提示"这个值是 AI 估算的，不是成分表标准值——如实说是估算，不要说'食物库标准值'"，成分表值标"（成分表标准值）"。这是"命中估算条目的事实透传给 discuss"这一条的落地——不加这行的话，T69 里 PERSONA_BASE 那句"is_estimated 食物可以如实说这是估算值"其实没有数据支撑，模型无从判断。
+- `backend/scripts/t70-cleanup-dirty-food-variants.ts`：一次性清理脚本，幂等（无脏条目时直接退出，可安全重跑）。处理顺序：查脏条目 → 找对应正确单后缀条目 → 把 `food_record`/`learning_event`/`user_food_alias`（非脏名 key 的）的 `food_id` 改指向正确条目，脏名本身的 alias key（不会再被任何代码路径查到）直接删 → 删脏 `food_standard` 行。**未写成 prisma migration**：这是历史脏数据的一次性修复，不是 schema 变更，写成 migration 反而会让"迁移历史"里混进一次性数据订正，选了 scripts/。
+- `backend/eval/cases/food-desc-no-double-suffix.yaml`：新增回归用例，record 一条 → `改成无油版` → 再次强调同一属性 `还是无油版，你还没改对`，断言两次修正后 `food_name` 都精确等于 `葱花饼（无油）`（用 `food_name` 字段做精确比较，不是 `where.food_name` 的 contains 模糊匹配）。
+- `docs/FOOD_DB_SPEC.md`：新增"### 权威分级（T70）"一节（三层结构小节内）。
+- `CLAUDE.md`：铁律 1 后加括号说明适用前提（`is_estimated=true` 条目本身是 AI 估的，权威性不等于成分表条目；铁律本身文字未改）。
+
+### 存量脏条目清理
+清理前查引用：`葱花饼（无油）（无油）`（12 条 `food_record`、11 条 `user_food_alias`、26 条 `learning_event`）、`炖鸡胸肉（冬瓜多肉少）（冬瓜多肉少）`（1 条 `food_record`、2 条 `user_food_alias`、4 条 `learning_event`）——两者对应的正确单后缀条目（`葱花饼（无油）`、`炖鸡胸肉（冬瓜多肉少）`）均已存在于库中，不需要现估新建。跑脚本后：`food_record`/`learning_event`/`user_food_alias` 全部改指向正确条目（`user_food_alias` 里 1 条 key 本身就是脏后缀名的额外删除），脏 `food_standard` 行删除成功，无外键报错。重跑脚本确认幂等（"没有找到叠加后缀的脏条目，无需清理。"）。
+
+### 验收对照
+1. ✅ 同一属性连改两次不叠加：见上面 `food-desc-no-double-suffix.yaml`，跑了 3 次（全量套件里 1 次 + 单独 2 次）全部 `葱花饼（无油）` 精确匹配，未出现二次叠加。
+2. ✅ 存量 2 条脏条目已清理，清理前后各查一次确认无悬空引用（见上）。
+3. ✅ `npm run audit` 重跑，"食物库健康度"一节不再出现"属性后缀重复叠加"告警（该告警块整段消失，因为触发条件 `dupSuffix.length` 现在是 0）。
+4. 🟡 全量 `npm run eval`（干净端口 `:9309`）：新回归 3——`chunhuabing` 2 条（第3轮"油/无油"追问被判成 modify 非 chat/discuss；第7轮"晚饭再加80克鸡蛋葱花煎饼"被判成 chat 非 record/modify）、`meal-batch` 1 条（"今天晚饭吃了什么"meal_type 判错）。单独用 `--case chunhuabing` 重跑 2 次，2/2 全绿——两条失败都是 `parser.ts` 意图分类的 LLM 概率性波动，且 T70 完全没碰 `parser.ts`；`meal-batch` 这个具体失败模式（"以上发的都是早餐"后查"晚饭吃了什么"meal_type 判错）与已有 memory 记录（"eval抖动实锤:meal-batch基线也误红"）完全吻合的既有基线抖动，不重复占用 API 额度重跑。trgm 过滤加了 `is_estimated=false` 后，也没有观察到任何既有用例的匹配结果从"命中真实条目"改判成了"估算路径"（若有会在 calories/protein 断言上直接炸，全量套件里没有这类失败）。
+5. ✅ `npm test` 207/207。
+
+### 未做/明确排除
+- T71（用户覆盖回流食物库的具体算法/触发阈值）按任务边界未做，需产品决策。
+- `_adjudicated` 标记（`food-item.ts` 的 `inferMatchPath` 里 `ai_adjudicate` 分支）在读代码时发现从未被任何地方实际赋值（死分支，`adjudicated_by_ai` trace 字段恒为 `false`）——这是本任务之外的既有缺陷，不在本任务改动清单内，未处理，留给之后单独的任务处理。
