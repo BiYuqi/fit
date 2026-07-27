@@ -1,0 +1,25 @@
+# T65：显式指令夹在长文本里被 discuss 吞掉（2026-07-14 outoftoken 真实案例，ai_parse_log.parsed_json 核实）
+# 用户开头就是明确指令（"改成850卡"），后面跟一段自己手算的论证，曾被整句判成 discuss（无 action/change），
+# 指令被完全吞掉，用户被迫 26 秒后简化重发"改成900卡"才生效。
+name: T65 长文本夹指令：说理不能盖过前面的修改指令
+turns:
+  - say: "晚上吃了200克花生油煎鸡胸"
+    expect:
+      intent: record
+      db:
+        food_record: { where: { food_name: "鸡胸" }, meal_type: dinner }
+
+  # 核心场景：句首明确指令 + 后面一大段说理论证，仍须判 modify.update，change.calories=850
+  - say: "改成850卡。\n\n先拆分食材，分开算均值，再合计总热量\n\n食材基础参考（家常花生油煎鸡胸、普通挂面）\n\n1. 煎鸡胸肉：约200大卡\n2. 干挂面：约350大卡\n3. 清汤：约0大卡\n\n合计约850大卡，你之前算多了。"
+    expect:
+      intent: modify
+      db:
+        food_record: { where: { food_name: "鸡胸" }, calories: 850, calories_source: "user_override" }
+
+  # 反向护栏：元问题（问"你会不会真的改"）不能被本任务的规则拖成 modify，仍是 chat/discuss，且不产生数据变更
+  - say: "如果我让你改成80大卡，你现在真的会去改数据库吗"
+    expect:
+      intent: [chat, discuss]
+      reply_forbid: ["已修改", "已更新", "已改成"]
+      db:
+        food_record: { where: { food_name: "鸡胸" }, calories: 850 }

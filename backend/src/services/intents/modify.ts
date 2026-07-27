@@ -365,8 +365,25 @@ export async function handleModify(
   const baseNutrition = itemNutrition(food, weight_g);
   // T40：change.calories 是用户亲口给出的最终热量（用户真值），铁律 1 禁的是 AI 算账，不禁用户报数——
   // 直接采信，按比例回推宏量素；calories_source=user_override 防止后续同条记录被 food×grams 静默重算覆盖。
-  const nutrition = change.calories != null ? scaleNutritionToCalories(baseNutrition, change.calories) : baseNutrition;
+  let nutrition = change.calories != null ? scaleNutritionToCalories(baseNutrition, change.calories) : baseNutrition;
   const calories_source = change.calories != null ? "user_override" : "computed";
+
+  // T64：用户直接指定的单项宏量素克数（用户真值）——只改用户点名的那个字段，热量不动，
+  // calories_source 不受影响（用户纠正的是蛋白质/脂肪/碳水，不是热量，不该被标记成热量的 user_override）。
+  // 未点名的字段要保留"当前值"而非重算基准：食物/重量本轮没变时，rec.protein/fat/carbs 里
+  // 可能已经叠加过上一轮的用户修正，itemNutrition 重算会把它静默冲掉（用户这次没提就不该被动）。
+  if (change.protein != null || change.fat != null || change.carbs != null) {
+    const foodOrWeightChanged = !!change.food || !!change.food_desc || change.grams != null || !!change.portion_label;
+    const macroBase = foodOrWeightChanged
+      ? nutrition
+      : { protein_g: rec.protein, fat_g: rec.fat, carbs_g: rec.carbs };
+    nutrition = {
+      ...nutrition,
+      protein_g: change.protein ?? macroBase.protein_g,
+      fat_g: change.fat ?? macroBase.fat_g,
+      carbs_g: change.carbs ?? macroBase.carbs_g,
+    };
+  }
 
   const updated = await prisma.foodRecord.update({
     where: { id: rec.id },
@@ -400,6 +417,12 @@ export async function handleModify(
     subject = `${food.name} 改到${MEAL_ZH[meal_type]}`;
   } else if (change.calories != null) {
     subject = `${food.name} 热量改为 ${newCal}kcal`;
+  } else if (change.protein != null || change.fat != null || change.carbs != null) {
+    const macroParts: string[] = [];
+    if (change.protein != null) macroParts.push(`蛋白质 ${Math.round(prev_state.protein)}g → ${Math.round(nutrition.protein_g)}g`);
+    if (change.fat != null) macroParts.push(`脂肪 ${Math.round(prev_state.fat)}g → ${Math.round(nutrition.fat_g)}g`);
+    if (change.carbs != null) macroParts.push(`碳水 ${Math.round(prev_state.carbs)}g → ${Math.round(nutrition.carbs_g)}g`);
+    subject = `${food.name} ${macroParts.join("，")}`;
   } else {
     subject = food.name;
   }

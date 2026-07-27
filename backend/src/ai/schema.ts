@@ -98,6 +98,9 @@ export const ModifyChangeSchema = z.preprocess(
     calories: z.number().positive().optional(),        // T40：食物记录改热量，用户亲口给出的数字（用户真值），不由 AI 算
     food_desc: z.string().min(1).optional(),           // T40：食物属性修正描述（如"无油"），影响营养口径，触发重估
     date_offset: z.number().int().min(-3).max(0).optional(), // T62：把记录改到别的自然日（"是昨天的晚餐"），相对今天的天数偏移，负数=过去
+    protein: z.number().min(0).optional(),   // T64：用户直接指定的蛋白质克数（用户真值，不是 AI 估算）
+    fat: z.number().min(0).optional(),        // T64：用户直接指定的脂肪克数（用户真值）
+    carbs: z.number().min(0).optional(),      // T64：用户直接指定的碳水克数（用户真值）
   }),
 );
 export type ModifyChange = z.infer<typeof ModifyChangeSchema>;
@@ -188,7 +191,7 @@ const dateOffsetProp = {
 const changeProp = {
   type: "object",
   additionalProperties: false,
-  description: "仅 action=update 填。改份量填 portion_label+grams（grams 为该食物该档的估算净重）；改食物填 food（新标准名）；改餐次填 meal_type（如'粽子是中午吃的'→lunch，克数食物都不动、不要顺手填 grams）；改运动消耗填 calories_burned（用户用穿戴设备数据纠正）；用户直接指定食物记录最终热量填 calories（用户真值，如'记录成180kcal'）；营养口径的属性修正填 food_desc（如'无油'）；记录的日期错了（'是昨天的'/'不是今天的'）填 date_offset，不要误填成 meal_type",
+  description: "仅 action=update 填。改份量填 portion_label+grams（grams 为该食物该档的估算净重）；改食物填 food（新标准名）；改餐次填 meal_type（如'粽子是中午吃的'→lunch，克数食物都不动、不要顺手填 grams）；改运动消耗填 calories_burned（用户用穿戴设备数据纠正）；用户直接指定食物记录最终热量填 calories（用户真值，如'记录成180kcal'）；用户直接指定某项宏量素克数填 protein/fat/carbs（用户真值，如'蛋白质改成8克'），绝不要填成 grams（grams 是食物重量不是营养含量）；营养口径的属性修正填 food_desc（如'无油'）；记录的日期错了（'是昨天的'/'不是今天的'）填 date_offset，不要误填成 meal_type",
   properties: {
     portion_label: { type: "string", enum: ["small", "medium", "large", "custom"] },
     grams: { type: "number" },
@@ -196,6 +199,9 @@ const changeProp = {
     meal_type: { type: "string", enum: ["breakfast", "lunch", "dinner", "snack"] },
     calories_burned: { type: "number" },
     calories: { type: "number", description: "食物记录的最终热量(kcal)，用户亲口给出的数值（用户真值，不是AI估算），如'记录成180kcal'、'按150卡记'。填这个时通常不要同时填 grams/portion_label（除非用户也确实说了新克数）" },
+    protein: { type: "number", description: "用户直接指定的该条记录蛋白质克数（用户真值，不是AI估算），如'蛋白质改成8克'。这是营养含量不是食物重量，绝不要填进 grams" },
+    fat: { type: "number", description: "用户直接指定的该条记录脂肪克数（用户真值），如'脂肪应该是5克'。不要填进 grams" },
+    carbs: { type: "number", description: "用户直接指定的该条记录碳水克数（用户真值），如'碳水按30算'。不要填进 grams" },
     food_desc: { type: "string", description: "食物属性修正描述，影响营养口径的（如'无油'、'无糖'、'去皮'、'脱脂'）。只填修正词本身，不要重复食物名；纯口感/无关描述（'有点咸'、'挺好吃'）不要填这个，应整体判 chat" },
     date_offset: dateOffsetProp,
   },

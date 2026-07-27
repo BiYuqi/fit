@@ -1,0 +1,24 @@
+# T64：宏量素修改协议缺失，静默改错数据（2026-07-03 outoftoken 真实案例首次暴露）
+# "把蛋白质改成8克" 曾被解析成 change.grams=200——协议里没有蛋白质字段，模型把指令塞进它有的字段。
+# 本用例用干净指令句（长句"被记录成6克蛋白质。改成8克"归 T65 的显式指令优先级问题，这里不测）。
+name: T64 宏量素修改：改蛋白质不动重量和热量
+turns:
+  - say: "早上喝了200毫升纯牛奶"
+    expect:
+      intent: record
+      db:
+        food_record: { food_name: "纯牛奶", weight_g: 200, meal_type: breakfast }
+
+  # 核心场景：change.protein=8，weight_g/calories 必须原样不变，calories_source 仍是 computed
+  - say: "把蛋白质改成8克"
+    expect:
+      intent: modify
+      db:
+        food_record: { where: { food_name: "纯牛奶" }, protein: 8, weight_g: 200, calories_source: "computed" }
+
+  # 反面用例：脂肪/碳水同理，且互不干扰——只改用户点名的那个字段
+  - say: "碳水应该是10克"
+    expect:
+      intent: modify
+      db:
+        food_record: { where: { food_name: "纯牛奶" }, carbs: 10, protein: 8, weight_g: 200 }

@@ -166,7 +166,7 @@ callDeepSeekCtx(pack, messages, opts)
 承接 §2。`modify` **不由 AI 算账**——AI 只产出「改哪条 + 怎么改」，`target` 引用 §7 `recent_records.ref`；后端重新匹配 + 重算（calc）。**例外**：`change.calories`（用户亲口报的热量数字）是用户真值，直接采信落库，铁律 1 禁的是 AI 算账，不禁用户报数。
 
 `action` 三选一：
-- **update**：改已有记录的份量/食物/餐次/热量/属性。如「牛肉面换大份」「不对，是牛肉拉面」「粽子是中午吃的」（改餐次 `change.meal_type`，数值不动）「记录成180kcal」（`change.calories`，T40）「无油款」（`change.food_desc`，T40）
+- **update**：改已有记录的份量/食物/餐次/热量/宏量素/属性。如「牛肉面换大份」「不对，是牛肉拉面」「粽子是中午吃的」（改餐次 `change.meal_type`，数值不动）「记录成180kcal」（`change.calories`，T40）「把蛋白质改成8克」（`change.protein`，T64）「无油款」（`change.food_desc`，T40）
 - **delete**：删整条记录。如「早餐那个蛋删了」「把李子删了」（无量词限定，判整条清空）
 - **append**：在 `target` 所属**那一餐里新增**记录（继承 `meal_type`/时段），新项走正常匹配 + 份量流程。如「早餐再加个蛋」
 
@@ -179,6 +179,7 @@ callDeepSeekCtx(pack, messages, opts)
 {"intent":"modify","action":"update","target":"r1","change":{"portion_label":"large"}}
 {"intent":"modify","action":"update","target":"r1","change":{"meal_type":"lunch"}}
 {"intent":"modify","action":"update","target":"r1","change":{"calories":180}}
+{"intent":"modify","action":"update","target":"r1","change":{"protein":8}}
 {"intent":"modify","action":"update","target":"r1","change":{"food_desc":"无油"}}
 {"intent":"modify","action":"update","target":"r1","change":{"date_offset":-1}}
 {"intent":"modify","action":"append","target":"r1","items":[ /* 蛋,结构同 §3 items */ ]}
@@ -192,6 +193,7 @@ callDeepSeekCtx(pack, messages, opts)
 **食物记录改热量/属性修正**（T40，`change.calories` / `change.food_desc`）：
 - `change.calories`：用户直接给出食物记录的最终热量（"记录成180kcal"、"按150卡记"）。后端不重新匹配食物，直接把该值写入 `food_record.calories`，宏量素按新旧热量比例回推（不是重估），`calories_source` 置 `user_override`——同一条记录之后若被别的字段（食物/克数/属性）再次 `update`，会重新按 food×grams 计算并把 `calories_source` 落回 `computed`（该次改的不再是热量本身，旧覆盖值已经不适用）。
 - `change.food_desc`：属性修正描述（"无油"、"无糖"、"去皮"、"脱脂"）。后端拼出具体变体名「原食物名（描述）」，只信任精确同名/别名命中，否则强制重新估算（**不走** §5 的弱匹配 AI 裁决——那条链路面对"字面像但营养口径不同"的候选容易误判为同一种，导致修正静默失效），产出新估算食物条目并按新食物×原克数重算。修正后 `upsertFoodAlias(原食物名 → 新food_id)`（见 LEARNING_SPEC §7），下次同名食物直连命中修正版。
+- `change.protein` / `change.fat` / `change.carbs`（T64）：用户直接给出该条记录的单项宏量素克数（"把蛋白质改成8克"），是用户真值不是 AI 估算。后端**只覆盖用户点名的那个字段**，热量与其余宏量素不动，`calories_source` **保持不变**（用户纠正的是营养含量不是热量，不占用 `user_override` 语义）。若本轮同时改了食物/克数/属性，宏量素改为基于新食物重算后再叠加覆盖；若本轮只改了宏量素（食物/克数未变），未点名的宏量素字段沿用**当前记录值**而非重新按 food×grams 计算——这样连续多次分别纠正蛋白质、脂肪、碳水时互不冲掉彼此。
 - 两者的撤销信息都写进该餐 `meal_card` 的 `payload.last_changes`（T47 单槽→T53 按 record_id 数组：批量改每条各留独立撤销态、同 record_id 覆盖、撤销后只清该条），不新增卡片类型；`prev_state` 带上改前的精确 `calories/protein/fat/carbs/calories_source`，撤销直接还原这些值，不按 food×grams 重算（否则会丢失 `user_override` 的用户真值）。
 - 纯口感/无关描述（"有点咸"、"挺好吃"）不算修正，不触发 `change.food_desc`，整体判 chat。
 
@@ -218,6 +220,7 @@ callDeepSeekCtx(pack, messages, opts)
 - parser 输出：`{"intent":"discuss","target":"r1"}`，`target` 引用 L1 `ref`
 - 与 `query` 的区别：discuss 针对**某条具体记录**，query 是查今日**汇总数据**
 - 与 `chat` 的区别：discuss 明确指向某条已有记录（从上下文推断）；推断不出则走 chat
+- **与 `modify` 的边界（T65）**：判据是"有没有改动指令"，不是"语气像不像在提问"。消息里出现「改成/改为/改到/记成/记录成/算作/调成/调到」+ 紧跟具体数值，不论指令在句首还是句中、后面跟了多长的解释/论证文字，一律优先判 `modify.update`（走 §8）；`discuss` 仅用于**完全不含改动指令**的纯提问/质疑。2026-07-14 真机翻车：用户开头就发「改成850卡」，后面附一大段自己手算的食材拆解论证，曾被整句判成 `discuss`（无 `action`/`change`），指令被完全吞掉，26 秒后简化重发才生效。用户一边给指令一边讲理由，是在说明"为什么要改"，不是在征求意见。
 
 后端处理：
 1. 从 L1 `recent_records` 按 `target` 找到 `record_id`
