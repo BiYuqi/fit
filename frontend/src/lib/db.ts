@@ -59,7 +59,30 @@ export async function getDb(): Promise<SQLite.SQLiteDatabase> {
     const cutoff = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
     await _db.runAsync('DELETE FROM api_cache WHERE updated_at < ?', [cutoff]);
   } catch { /* best-effort */ }
+  // App 沙盒内的元信息——卸载 App 时会随沙盒一起被系统清空（不同于 Keychain）
+  await _db.execAsync(`
+    CREATE TABLE IF NOT EXISTS app_meta (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+  `);
   return _db;
+}
+
+/**
+ * 判断本次启动是否为"全新安装"（含卸载重装）。
+ * 用于登出 Keychain 里的 token：iOS/Android 删除 App 只清沙盒内文件，Keychain 不受影响，
+ * 会导致卸载重装后自动带着旧账号登录——这里借这张随沙盒清空的表反推"是不是真的全新装"。
+ * 只应在 auth-store 初始化时调用一次。
+ */
+export async function isFreshInstall(): Promise<boolean> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ value: string }>(
+    "SELECT value FROM app_meta WHERE key = 'installed'",
+  );
+  if (row) return false;
+  await db.runAsync("INSERT INTO app_meta (key, value) VALUES ('installed', '1')");
+  return true;
 }
 
 export async function getCachedMessages(date: string): Promise<ChatMessage[]> {

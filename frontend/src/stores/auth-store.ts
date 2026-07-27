@@ -3,7 +3,7 @@ import { Platform } from 'react-native';
 import { create } from 'zustand';
 
 import { apiFetch } from '@/lib/api';
-import { clearApiCache, clearCache } from '@/lib/db';
+import { clearApiCache, clearCache, isFreshInstall } from '@/lib/db';
 import { useChatStore } from '@/stores/chat-store';
 
 const TOKEN_KEY = 'auth_token';
@@ -37,6 +37,12 @@ export const useAuthStore = create<AuthState>((set) => ({
   isLoading: true,
 
   init: async () => {
+    // 卸载重装：Keychain 不随 App 沙盒清空，会带着旧 token 自动登录，这里探测到全新装就先清掉
+    if (Platform.OS !== 'web' && (await isFreshInstall())) {
+      await storage.delete(TOKEN_KEY);
+      set({ token: null, isLoading: false });
+      return;
+    }
     const token = await storage.get(TOKEN_KEY);
     set({ token, isLoading: false });
   },
