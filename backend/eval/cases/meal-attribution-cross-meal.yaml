@@ -1,0 +1,14 @@
+# T68：餐次归属重构——item 级 meal_type（一句跨两餐）
+# 背景（npm run audit 捞出，2026-07-11，此前无人投诉）：
+# meal_type 此前只能挂在 record 级，一句话报的两样食物只能共用一个餐次——
+# "昨晚晚餐一个200毫升牛奶，昨天中午的干豆角炖土豆250克" 里，干豆角炖土豆（用户明说中午）被错记成了晚餐。
+name: T68 餐次归属——一句跨两餐，item 级 meal_type 各自归对
+turns:
+  - say: "昨晚晚餐一个200毫升牛奶，昨天中午的干豆角炖土豆250克"
+    expect:
+      intent: record
+      db:
+        food_record:
+          - { where: { food_name: "牛奶", meal_type: dinner }, date_days_ago: 1 }
+          - { where: { food_name: "干豆角", meal_type: lunch }, date_days_ago: 1 }
+        food_record_count: 2

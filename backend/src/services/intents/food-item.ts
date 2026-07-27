@@ -2,7 +2,7 @@ import { matchFood, matchFoodCandidates } from "../matcher";
 import { itemNutrition, resolveNutrition } from "../calc";
 import { prisma } from "../../lib/prisma";
 import { getFoodAlias, getBiases, applyBias, biasEnabled } from "../learning";
-import { dateOnlyStr } from "../../lib/dates";
+import { dateOnlyStr, addOffsetDays } from "../../lib/dates";
 import type { FoodItem } from "../../ai/schema";
 import type { FoodStandard, MealType, PortionLabel, PendingRecord } from "@prisma/client";
 import type { ItemTrace } from "../trace";
@@ -101,8 +101,12 @@ export interface ItemResult {
 }
 
 export async function processFoodItem(item: FoodItem, ctx: ItemCtx): Promise<ItemResult> {
-  const { user_id, meal_type, source, dateObj, recordDate, scene, itrace } = ctx;
+  const { user_id, source, dateObj, scene, itrace } = ctx;
   const { canonical, chosen_label, portions, food_confidence, portion_confidence, raw, is_ambiguous, ai_candidates, count, count_unit, calories_override } = item;
+  // T68：item 级餐次/日期覆盖 ctx 里的 record 级默认值——仅当 AI 判定该食物与消息里其它食物不同餐/不同天时才会填
+  // （"昨晚晚餐一个牛奶，昨天中午的干豆角炖土豆"：干豆角炖土豆单独归 lunch，不跟着 record 级默认值落成 dinner）。
+  const meal_type = item.meal_type ?? ctx.meal_type;
+  const recordDate = item.date_offset != null ? addOffsetDays(ctx.dateObj, item.date_offset) : ctx.recordDate;
   const query = canonical || raw;
 
   // 初始化 ItemTrace state

@@ -1,0 +1,16 @@
+# T68：餐次归属重构——正则多信号时承认歧义、交还 AI 判断
+# 背景（npm run audit 捞出，2026-07-13）：原话"早晨的饼 晚上又吃了200克"，AI 判定 meal_type=dinner 是对的，
+# 却被 lib/dates.ts 的确定性正则"命中即返回"覆盖成 breakfast（"早晨"先于"晚上"被测到）。
+# 用户当场投诉"你记录错误，是晚上吃的啊"。
+# 下面用"馒头"替掉原话的"饼"（保留完全相同的"来源定语+真正进食时间"句式），只为绕开"饼"本身是通用泛称、
+# 会触发候选卡的无关噪音（is_ambiguous），不影响本用例要验的餐次消歧逻辑。
+name: T68 餐次归属——正则多信号时交还 AI（早晨的X 晚上又吃了）
+turns:
+  # "早晨"是定语修饰"馒头"（说的是馒头的来处），真正的进食动作"又吃了"对应"晚上"——应落 dinner，不是 breakfast，
+  # 也不能因为句子里出现两个时间词就拆成两条 item（把同一份馒头计入两次热量，见 SYSTEM_PROMPT/itemsProp 的护栏）
+  - say: "早晨的馒头 晚上又吃了200克"
+    expect:
+      intent: record
+      db:
+        food_record: { where: { food_name: "馒头", meal_type: dinner } }
+        food_record_count: 1

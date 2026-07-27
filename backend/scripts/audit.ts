@@ -161,7 +161,7 @@ async function main() {
       }
     }
 
-    // ⑥ 餐次词多信号歧义（协议限制：meal_type 是 record 级，一句跨两餐必错一个）
+    // ⑥ 餐次词多信号歧义（T68 起 item 级 meal_type 已能各自归属，这里仍列出来供人工复核解析是否真消歧对了，不代表一定错）
     if (hasMealAmbiguity(sig) && actionable) {
       seen.mealAmbiguity++;
       const kinds = [...new Set(sig.meals.map((m) => m.meal))].join("+");
@@ -194,7 +194,7 @@ async function main() {
     ["日期词    「昨天」", "date"],
     ["指令+数值 「改成850」", "instruction"],
     ["主料词    「鸡胸肉」", "ingredient"],
-    ["餐次多信号（协议缺陷）", "mealAmbiguity"],
+    ["餐次多信号（人工复核）", "mealAmbiguity"],
     ["宏量素修改（协议缺失）", "macro"],
   ];
   console.log(`${"信号类型".padEnd(24)}${"可判定".padStart(8)}${"可疑".padStart(8)}${"可疑率".padStart(10)}`);

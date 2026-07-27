@@ -4,6 +4,7 @@ import { refreshMealCard } from "../meal-card";
 import { processItems } from "./food-item";
 import { resolveDuration, resolveExerciseCalories } from "./exercise";
 import { guessMealType, extractMealTypeFromText, extractDateOffsetFromText, addOffsetDays, dateOnlyStr } from "../../lib/dates";
+import { extractExplicitSignals, hasMealAmbiguity } from "../explicit-signals";
 import type { MealType } from "@prisma/client";
 import type { ParseResult } from "../../ai/schema";
 import type { IntentCtx } from "./types";
@@ -37,13 +38,18 @@ export async function handleRecord(
   const dateOffset = extractDateOffsetFromText(text) ?? parsed.date_offset ?? 0;
   const recordDateObj = dateOffset !== 0 ? addOffsetDays(dateObj, dateOffset) : dateObj;
   const recordDateStr = dateOffset !== 0 ? dateOnlyStr(recordDateObj) : today;
-  // 餐次判定：文本时间词 > 续报继承 > 当前时间。
-  // 刻意不信 AI 的 parsed.meal_type：模型常无视"无时间词就省略餐次"的指令，
+  // 餐次判定（record 级默认值，item 级覆盖见下）：文本单信号时间词 > 多信号歧义时的 AI 判断 > 续报继承 > 当前时间。
+  // 刻意不信零信号场景下 AI 的 parsed.meal_type：模型常无视"无时间词就省略餐次"的指令，
   // 看到上下文卡里某餐已有几项，就把新食物也脑补进那餐（如 12 点多记血桃被塞进早餐）。
-  // 没有时间词、又不是续报时，唯一可信的餐次信号是时钟，别让模型的脑补压过它。
-  let mealResolved = extractMealTypeFromText(text) as MealType | undefined;
+  // 但多个时段词同现是"有信号但需消歧"（"早晨的饼 晚上又吃了"），这属于语言理解，正则做不了、
+  // extractMealTypeFromText 此时会返回 null 承认歧义（T68），只有这一种情形才采信 AI（真机案例：
+  // 2026-07-13 用户投诉"你记录错误，是晚上吃的啊"——AI 判对了却被正则第一个命中覆盖成错的）。
+  let mealResolved = extractMealTypeFromText(text) as MealType | null;
+  if (!mealResolved && hasMealAmbiguity(extractExplicitSignals(text))) {
+    mealResolved = parsed.meal_type ?? null;
+  }
   if (!mealResolved && CONTINUATION_RE.test(text.trim())) {
-    mealResolved = (await inheritRecentMealType(user_id)) ?? undefined;
+    mealResolved = (await inheritRecentMealType(user_id)) ?? null;
   }
   const meal_type = (mealResolved ?? guessMealType()) as MealType;
 
@@ -102,12 +108,21 @@ export async function handleRecord(
   // T46：本轮有食材入库 → 对该餐 upsert meal_card（一餐一卡，幂等）。
   // 放在其他消息之后创建/bump，保证卡片排在本轮回复末尾（卡片跟随）。
   // 明细/总计由 enrichMealCards 从 food_record 实时组装，不落库。
+  // T68：items 可能各自归到不同 (归属日, 餐次)（item 级 meal_type/date_offset），
+  // 不能只按 record 级默认值刷一张卡——按每条落库记录的实际 (date, meal_type) 去重后逐个刷新。
   let isFirstMealCard = false;
   if (records.length > 0) {
-    const refreshed = await refreshMealCard(messages, {
-      user_id, mealDate: recordDateStr, meal_type, chatDate: dateObj,
-    });
-    isFirstMealCard = refreshed?.isFirst ?? false;
+    const mealKeys = new Map<string, { mealDate: string; meal_type: MealType }>();
+    for (const r of records) {
+      const mealDate = dateOnlyStr(r.date);
+      mealKeys.set(`${mealDate}|${r.meal_type}`, { mealDate, meal_type: r.meal_type });
+    }
+    for (const { mealDate, meal_type: mt } of mealKeys.values()) {
+      const refreshed = await refreshMealCard(messages, {
+        user_id, mealDate, meal_type: mt, chatDate: dateObj,
+      });
+      if (refreshed?.isFirst) isFirstMealCard = true;
+    }
   }
 
   if (needsRecompute) await recompute(user_id, recordDateStr);

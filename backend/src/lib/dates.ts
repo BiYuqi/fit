@@ -1,4 +1,5 @@
 import type { MealType } from "@prisma/client";
+import { extractExplicitSignals, hasMealAmbiguity } from "../services/explicit-signals";
 
 // ─────────────────────────────────────────────────────────────
 // 时区：全项目唯一源。
@@ -80,11 +81,14 @@ export function guessMealType(): MealType {
   return "snack";
 }
 
-// 从原始文本中提取餐次，优先级高于 AI 结果和时间推断
+// 从原始文本中提取餐次，单一时段类别命中时优先级高于 AI 结果和时间推断（T68 前的既有行为，逐字节保留）。
+// 多个不同类别的时段词同现时（"早晨的饼 晚上又吃了"）不再武断取第一个命中——那是纯粹按词表顺序猜，
+// 曾经把 AI 已经判对的结果覆盖成错的（真实案例见 T68 任务背景）。此时返回 null 承认歧义，交给调用方
+// （intents/record.ts）决定是否采信 AI 的判断；无任何命中时同样返回 null（等价现状，交由续报继承/时钟兜底）。
+// 词表与"修饰食物来源的定语不算信号"（"早晨的饼"）的判断复用 explicit-signals.ts，不再另写一份。
 export function extractMealTypeFromText(text: string): MealType | null {
-  if (/早上|早晨|早饭|早餐|上午/.test(text)) return "breakfast";
-  if (/中午|午饭|午餐|中饭/.test(text)) return "lunch";
-  if (/晚上|晚饭|晚餐|傍晚/.test(text)) return "dinner";
-  if (/下午茶|下午|加餐|零食/.test(text)) return "snack";
-  return null;
+  const sig = extractExplicitSignals(text);
+  if (sig.meals.length === 0) return null;
+  if (hasMealAmbiguity(sig)) return null;
+  return sig.meals[0].meal;
 }

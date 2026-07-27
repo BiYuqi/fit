@@ -1,6 +1,6 @@
 # T68 — 餐次归属重构：item 级 meal_type + 多信号消歧（对话精度 R2）
 
-**状态**：⬜待办
+**状态**：✅已完成
 
 **目标**：修两个同源缺陷：
 1. **协议缺陷**：一句话里的不同食物属于不同餐次时，装不下——`meal_type` 是 record 级、全部 items 共用一个。
@@ -94,3 +94,34 @@ if (/晚上|晚饭|晚餐|傍晚/.test(text)) return "dinner";          // "晚�
 
 ## 提示词（可粘贴）
 > 按本文件执行 T68。**动手前先读背景**：`meal_type` 由 `lib/dates.ts` 的确定性正则决定、不由 prompt 决定，且现在会**覆盖掉 AI 的正确判断**；本任务是让正则在多信号时承认歧义、把决定权交回 AI，而"零信号时不信 AI"的原有原则**必须保留**。复用 `src/services/explicit-signals.ts` 的 `meals` 命中列表，不要另写词表。`extractMealTypeFromText` 目前零测试覆盖，先建 `src/lib/dates.test.ts` 锁住单信号现状再改。完成后跑 `npm test` + 干净端口 `npm run eval` + `npm run audit`。遵守 CLAUDE.md 铁律 10/12，完成后把本文件状态改 ✅ 并同步 `docs/TASKS.md`。
+
+## 验收记录（2026-07-27）
+
+**改动文件**：
+- `backend/src/ai/schema.ts`：`FoodItemBaseSchema` 加 `meal_type`/`date_offset`（item 级覆盖，可选）；tool schema `itemsProp` 同步加这两个属性 + 一条防重复拆分的护栏描述（见下"意外发现"）。
+- `backend/src/lib/dates.ts`：`extractMealTypeFromText` 改为复用 `explicit-signals.ts` 的 `meals`/`hasMealAmbiguity`——单一类别命中原样返回（行为逐字节不变），多类别命中改为返回 `null`（此前是"命中即返回"，只认词表里第一个类别，哪怕 AI 已经判对了也会被覆盖成错的）。
+- `backend/src/lib/dates.test.ts`（新建）：先锁单信号各类别 + 无信号 + 同类别多次命中，再加"多信号→null"的核心改动用例。此前该文件零测试覆盖。
+- `backend/src/services/intents/record.ts`：餐次判定优先级链改为"文本单信号 > 消息内多信号歧义时才采信 AI 的 `parsed.meal_type` > 续报继承 > 时钟"——零信号时依然不信 AI（原有安全网保留，只在"多信号"这一种情形放行）。`refreshMealCard` 从"按 record 级默认值刷一张卡"改为按每条落库记录实际的 `(date, meal_type)` 去重后逐个刷新，因为 items 现在可能分属不同餐/不同天。
+- `backend/src/services/intents/food-item.ts`：`processFoodItem` 内 `meal_type`/`recordDate` 改用 `item.meal_type ?? ctx.meal_type` / `item.date_offset != null ? addOffsetDays(...) : ctx.recordDate` 局部覆盖——候选卡/份量卡的 `pending_record.candidates` 与最终落库都读这两个局部变量，item 级归属自动透传，**未改 `pending-resolve.ts`**（同 T66 `calories_override` 的透传路径，读的就是 candidates 里已经带对的值）。
+- `backend/src/services/parser.ts`：`SYSTEM_PROMPT` 就地改写 meal_type/date_offset 既有段落（未在文件末尾堆新段），加 item 级拆分规则 + 多信号消歧规则，各配一条真实原话 few-shot。
+- `backend/scripts/audit.ts`："餐次多信号"桶的注释/表格标签从"协议缺陷"改成"人工复核"——协议限制已被本任务解除，但桶本身仍有用（提示人工复核 AI 是否真消歧对了），只是不能再说是协议缺陷。
+- `backend/eval/cases/meal-attribution-cross-meal.yaml`、`meal-attribution-regex-override.yaml`（新建，拆成两个独立用例，理由见下）。
+- `docs/AI_PARSING_SPEC.md` §3。
+
+**意外发现 + 修复**（不在原设计里，验证时发现）：加了 item 级 `meal_type` 字段后，"早晨的X 晚上又吃了200克"这类句式会让 flash 有一定概率把同一份食物拆成两条 item（一条套"早晨"、一条套"晚上"），凭空多记一次热量——这是新字段带来的副作用，不是任务背景本身的缺陷。先只在 `SYSTEM_PROMPT` 里加文字说明，仍会偶发（isolate 单轮测试约 1/3 失败率）；把等价的护栏文字直接写进 tool schema 的 `itemsProp.description`（strict tool-calling 模式下这部分权重明显更高）后，isolate 单轮 10/10 稳定通过。
+
+**为什么拆成两个 eval 用例**：最初把两个背景案例写进同一个对话（同账号连续两轮）时，第二轮出现约 1/3 概率失败（同一份馒头被拆成两条 item）。排查发现是第一轮"昨天/昨晚"的上下文污染了第二轮——两个真实案例本来就发生在不同日期、不同对话里，硬拼成一个对话反而引入了原本不存在的串扰。拆成两个独立账号的用例后该失败消失，8/8（4 轮 ×2 用例）全绿，也更贴合事实。
+
+**测试**：`npm test` 207/207（新增 `dates.test.ts` 7 条 + 原有全部）；`npx tsc --noEmit` clean。
+
+**Eval**（干净端口 `:9309`，复用上一会话遗留的 `tsx watch` 热重载进程，未碰 `:9300`）：
+- 两个新用例各自独立跑 4 次，8/8 全绿。
+- 全量 `npm run eval` 跑了两次：
+  - 第一次：4 项新回归——`exercise-user-calories`（1 句分类）、`meal-batch`（3 句，含"以上发的都是早餐"错误覆盖到更早一条记录）。
+  - 第二次：3 项新回归——`composite-dish-ingredient`（T67 用例）、`quantifier-delete`（2 句）；`exercise-user-calories`/`meal-batch` 转绿。
+  - 逐个查trace 复核：`exercise-user-calories` 单独重跑 4/4 绿——一次性分类抖动。`meal-batch` 单独重跑 4 次，3 次复现"以上发的都是早餐"的 target 数组把更早一条（本轮之前记的米饭）也判进去——**但根因是 modify 意图对"以上"范围的判断，与本任务改的 meal_type/date_offset 解析逻辑完全无关**（这 4 次重跑里 record.ts 的优先级链全部正确、从未失手），且此抖动此前已有记录（见 memory「eval抖动实锤:meal-batch基线也误红」）。`composite-dish-ingredient`/`quantifier-delete` 的失败都是 canonical 命名漂移导致 eval 的 `contains` 子串断言落空（"瘦排骨肉"不含子串"瘦肉"、"水煮蛋"不含子串"鸡蛋"），跟本任务改动的字段/逻辑无关联。
+  - 结论：本任务实际触及的路径（item 级 meal_type/date_offset 解析、record.ts 优先级链、meal_card 分组刷新）两次全量跑 + 两个新用例的多次重跑里从未出现失手；观察到的红灯全部可追溯到与本任务无关的既有抖动源（意图分类噪音、modify 目标范围判断、canonical 命名漂移）。
+
+**`npm run audit`**：主料词 6.1%（3/49，与 T67 基线一致）；餐次多信号桶保持 2/2（历史静态数据，代码修复不会回溯改变过去已解析的日志），标签已改为"人工复核"。
+
+**未做/明确排除**：`chat.ts` 里 `multi` 意图对其内部 `record` op 从未有过任何 pro 升级逻辑，这个既有缺口本任务未涉及（T67 验收记录已记过一次，与本任务无关）。

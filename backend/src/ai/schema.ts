@@ -41,6 +41,10 @@ const FoodItemBaseSchema = z.object({
   ai_candidates: z.array(z.string()).optional(),
   // T66：用户直接给出的该条目最终热量（"一个自制冰激淋80卡"），用户真值，后端直接采信不再按 food×grams 算。
   calories_override: z.number().positive().optional(),
+  // T68：item 级餐次/日期覆盖——仅当该食物与消息里其它食物餐次/日期不同时才填，否则留空继承 record 级默认值
+  // （如"昨晚晚餐一个牛奶，昨天中午的干豆角炖土豆"：牛奶继承 record 级 dinner，干豆角炖土豆单独填 lunch）。
+  meal_type: MealTypeSchema.optional(),
+  date_offset: z.number().int().min(-3).max(0).optional(),
 });
 export type FoodItem = z.infer<typeof FoodItemBaseSchema>;
 
@@ -217,6 +221,15 @@ const mealTypeProp = {
   enum: ["breakfast", "lunch", "dinner", "snack"],
   description: "仅 intent=record 且能判断时填写",
 };
+const itemMealTypeProp = {
+  type: "string",
+  enum: ["breakfast", "lunch", "dinner", "snack"],
+  description: "仅当该食物与本条消息里其它食物餐次不同时才填（如'昨晚晚餐一个牛奶，昨天中午的干豆角炖土豆'里干豆角炖土豆填lunch）。绝大多数消息所有食物同餐，留空继承外层 record 级 meal_type，不要逐项都填",
+};
+const itemDateOffsetProp = {
+  type: "number",
+  description: "仅当该食物与本条消息里其它食物日期不同时才填，取值同顶层 date_offset（0/不填=今天，-1=昨天，-2=前天，-3=大前天）。绝大多数消息所有食物同天，留空继承外层 record 级 date_offset，不要逐项都填",
+};
 const recordDateOffsetProp = {
   ...dateOffsetProp,
   description: "仅 intent=record 填。" + dateOffsetProp.description,
@@ -228,7 +241,7 @@ const sceneProp = {
 };
 const itemsProp = {
   type: "array",
-  description: "食物条目列表，intent=record 时必填",
+  description: "食物条目列表，intent=record 时必填。一条 item 对应一次实际的进食动作——原话若只描述了一次吃/喝（即使句子里因为交代食物来源/做法而出现了不止一个时间词，如'早晨的馒头 晚上又吃了200克'，只是说明馒头是早上做的、真正吃的动作只有一次），只能输出一条 item，不要按时间词个数拆成多条把同一份食物重复计入热量",
   items: {
     type: "object",
     required: [
@@ -270,6 +283,8 @@ const itemsProp = {
         items: { type: "string" },
       },
       calories_override: { type: "number", description: "用户直接给出的该条目最终热量(kcal)，如'80卡'。这是用户真值不是AI估算——后端直接采信，不再按食物库×克数计算。同时报了克数也照常填 portions/chosen_label（供展示与学习），但入库热量以此字段为准。" },
+      meal_type: itemMealTypeProp,
+      date_offset: itemDateOffsetProp,
     },
   },
 };
