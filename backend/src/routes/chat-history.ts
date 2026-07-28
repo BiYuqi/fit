@@ -187,6 +187,8 @@ export async function chatHistoryRoutes(app: FastifyInstance) {
           type: prevState.type,
           duration_min: prevState.duration_min,
           calories_burned: prevState.calories_burned,
+          user_reported: prevState.user_reported ?? false, // 存量快照没这字段 → 按 MET 估算处理
+
           source: prevState.source,
           raw_input: prevState.raw_input,
           date: toDateOnly(prevState.date),

@@ -29,6 +29,9 @@ const UndoBodySchema = z.object({
   }).or(z.object({
     calories_burned: z.number().positive(),
     kind: z.literal("exercise"),
+    // T73：运动改时长后的撤销要连时长一起还原，否则只回滚一半（老卡片没这两个字段，保持 optional）
+    duration_min: z.number().positive().optional(),
+    user_reported: z.boolean().optional(),
   })).optional(),
 });
 
@@ -108,10 +111,14 @@ export async function recordsRoutes(app: FastifyInstance) {
       const recDate = exRec.date.toISOString().slice(0, 10);
       const prev = bodyParsed.data.prev_state;
       if (prev && "kind" in prev && prev.kind === "exercise") {
-        // update 撤销 → 还原消耗热量
+        // update 撤销 → 还原快照里的全部字段（T73：时长和热量都可能被改过）
         await prisma.exerciseRecord.update({
           where: { id },
-          data: { calories_burned: prev.calories_burned },
+          data: {
+            calories_burned: prev.calories_burned,
+            ...(prev.duration_min != null ? { duration_min: prev.duration_min } : {}),
+            ...(prev.user_reported != null ? { user_reported: prev.user_reported } : {}),
+          },
         });
       } else {
         // 无 prev_state → 删记录（append 撤销）

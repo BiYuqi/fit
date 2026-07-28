@@ -34,7 +34,7 @@ export function calcExerciseCalories(type: string, duration_min: number, weight_
 }
 
 // T50：用户在 record 消息里自报消耗则直接采信（用户真值，不算账），否则回落 MET 估算。
-// exercise_record 无 calories_source 字段，也不需要——它从不被后台重算，用户值写入即安全。
+// user_reported 落库到 exercise_record（T73）：改时长时要靠它区分"重算 MET"还是"沿用用户真值"。
 export function resolveExerciseCalories(
   ex: { type: string; duration_min?: number; reps?: number; calories_burned?: number },
   duration_min: number,

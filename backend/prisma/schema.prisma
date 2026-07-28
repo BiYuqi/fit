@@ -149,6 +149,9 @@ model ExerciseRecord {
   type            String
   duration_min    Int?
   calories_burned Float
+  // T73：热量是用户自报的（"打球1小时烧了590卡"）还是 MET 估的。
+  // 改时长时据此决定要不要按新时长重算——用户真值不该被 MET 估算覆盖。
+  user_reported   Boolean  @default(false)
   source          String   @default("text")
   raw_input       String?
   date            DateTime @db.Date

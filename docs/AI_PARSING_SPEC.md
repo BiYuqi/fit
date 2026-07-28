@@ -175,7 +175,7 @@ callDeepSeekCtx(pack, messages, opts)
 承接 §2。`modify` **不由 AI 算账**——AI 只产出「改哪条 + 怎么改」，`target` 引用 §7 `recent_records.ref`；后端重新匹配 + 重算（calc）。**例外**：`change.calories`（用户亲口报的热量数字）是用户真值，直接采信落库，铁律 1 禁的是 AI 算账，不禁用户报数。
 
 `action` 三选一：
-- **update**：改已有记录的份量/食物/餐次/热量/宏量素/属性。如「牛肉面换大份」「不对，是牛肉拉面」「粽子是中午吃的」（改餐次 `change.meal_type`，数值不动）「记录成180kcal」（`change.calories`，T40）「把蛋白质改成8克」（`change.protein`，T64）「无油款」（`change.food_desc`，T40）
+- **update**：改已有记录的份量/食物/餐次/热量/宏量素/属性，或运动记录的时长/消耗。如「牛肉面换大份」「不对，是牛肉拉面」「粽子是中午吃的」（改餐次 `change.meal_type`，数值不动）「记录成180kcal」（`change.calories`，T40）「把蛋白质改成8克」（`change.protein`，T64）「无油款」（`change.food_desc`，T40）
 - **delete**：删整条记录。如「早餐那个蛋删了」「把李子删了」（无量词限定，判整条清空）
 - **append**：在 `target` 所属**那一餐里新增**记录（继承 `meal_type`/时段），新项走正常匹配 + 份量流程。如「早餐再加个蛋」
 
@@ -191,6 +191,7 @@ callDeepSeekCtx(pack, messages, opts)
 {"intent":"modify","action":"update","target":"r1","change":{"protein":8}}
 {"intent":"modify","action":"update","target":"r1","change":{"food_desc":"无油"}}
 {"intent":"modify","action":"update","target":"r1","change":{"date_offset":-1}}
+{"intent":"modify","action":"update","target":"e1","change":{"duration_min":15}}
 {"intent":"modify","action":"append","target":"r1","items":[ /* 蛋,结构同 §3 items */ ]}
 {"intent":"modify","action":"delete","target":"r1"}
 {"intent":"modify","action":"update","target":["r3","r4","r5"],"change":{"meal_type":"breakfast"}}
@@ -205,6 +206,10 @@ callDeepSeekCtx(pack, messages, opts)
 - `change.protein` / `change.fat` / `change.carbs`（T64）：用户直接给出该条记录的单项宏量素克数（"把蛋白质改成8克"），是用户真值不是 AI 估算。后端**只覆盖用户点名的那个字段**，热量与其余宏量素不动，`calories_source` **保持不变**（用户纠正的是营养含量不是热量，不占用 `user_override` 语义）。若本轮同时改了食物/克数/属性，宏量素改为基于新食物重算后再叠加覆盖；若本轮只改了宏量素（食物/克数未变），未点名的宏量素字段沿用**当前记录值**而非重新按 food×grams 计算——这样连续多次分别纠正蛋白质、脂肪、碳水时互不冲掉彼此。
 - 两者的撤销信息都写进该餐 `meal_card` 的 `payload.last_changes`（T47 单槽→T53 按 record_id 数组：批量改每条各留独立撤销态、同 record_id 覆盖、撤销后只清该条），不新增卡片类型；`prev_state` 带上改前的精确 `calories/protein/fat/carbs/calories_source`，撤销直接还原这些值，不按 food×grams 重算（否则会丢失 `user_override` 的用户真值）。
 - 纯口感/无关描述（"有点咸"、"挺好吃"）不算修正，不触发 `change.food_desc`，整体判 chat。
+
+**运动记录改时长/改消耗**（T73，`change.duration_min` / `change.calories_burned`）：运动有两个可改维度，用户说哪个填哪个，只说时长时**只填 `duration_min`**——热量由后端按 MET 重算（铁律 1：AI 不心算）。后端取值口径：给了 `calories_burned` → 直接采信（用户真值，置 `user_reported=true`）；只给 `duration_min` 且原记录 `user_reported=true` → **热量不动**（用户自报的 590 千卡不该被 MET 估算覆盖，回执要说明"消耗仍按你报的 590"）；否则按 `calcExerciseCalories(type, 新时长, user.weight_kg)` 重算。**两个字段必须一起写库**——2026-07-27 真机事故：只 `update({calories_burned})` 不动时长，库里留下"30分钟烧了97.5千卡"的自相矛盾行，卡片同样矛盾。两个维度都没给才追问，追问文案要同时提两种说法。体重用 `user.weight_kg`（同 record 侧），不读 `weight_log` 最新值——改时长不该顺带改变热量基准。`prev_state` 带 `duration_min`/`user_reported` 快照，否则撤销只回滚一半。
+
+**频率性习惯陈述不建记录**（T73）："我每天都有30分钟的羽毛球"、"我一般早上喝杯咖啡" 说的是长期习惯（属于用户画像，由记忆系统提成 `habit`，见 MEMORY_SPEC），不是"今天做了/吃了"这一次的事实 → 判 `chat`，**不建 `exercise_record`/`food_record`**。判据：有频率词（每天/天天/每周/一般/通常/总是/都会/习惯）且没有指向某一次或某一天的线索；带了当次线索（"今天也打了30分钟"、"刚打完"、"昨天打了1小时"）就正常 `record`。这是 2026-07-27 死循环的**根因**：一句习惯陈述被建成了当天记录，用户随后说"今天羽毛球是15分钟"（本该是一条当天 `record`）就被理解成改那条记录，而 modify 协议当时没有时长字段，于是反复追问热量。
 
 **改日期**（T62，`change.date_offset`）：记录归属日错了（"是昨天的晚餐，不是今天的"、"这个记错天了"）→ `change.date_offset` 填相对今天的天数偏移，规则同 §3。**"日期词"（昨天/今天）与"餐次词"（早中晚）是两件独立的事**：用户只说错了天、没说错餐次时，`change` 里只填 `date_offset`，绝不能顺手也填 `meal_type`——这是 2026-07-11 真机事故的直接教训：四次"是昨天的晚餐"全被误判成 `change.meal_type` 且新旧值相同（记录本来就是 dinner），静默无回复，用户以为系统坏了。只有用户同时明确说错了具体哪一餐（"这是昨天中午吃的，不是晚上"）才两个都填。后端改日期是双日 `recompute`（新旧两天的 `daily_summary` 都变）+ 双卡刷新（旧日期餐卡少一项、新日期餐卡多一项），回执文案必须带出日期变化（"已把 X 改到 7月10日"），不能像改餐次改回同值那样哑火。`prev_state` 带 `date` 快照，撤销时一并还原并双日 recompute。
 

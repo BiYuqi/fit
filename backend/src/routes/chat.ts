@@ -127,6 +127,34 @@ export async function chatRoutes(app: FastifyInstance) {
       }
     }
 
+    // T73 确定性纠偏：判了 modify，但 target 引用的 ref 在【今日已记录】里一个都不存在 →
+    // 这条 modify 无论如何都执行不了（handleModify 只会回一句"没找到要修改的那条记录"，用户说的话就白说了）。
+    // 典型场景：用户先说"我每天都有30分钟的羽毛球"（习惯陈述，不入库），再说"今天羽毛球是15分钟"——
+    // 后一句是当天的新记录，但句式像纠正，模型约一半概率误判 modify。提示词治不住（实测 1/2），
+    // 用"ref 不存在"这个可证伪的事实触发一次重解析，比继续堆提示词可靠。
+    if (parsed.intent === "modify") {
+      const refs = Array.isArray(parsed.target) ? parsed.target : [parsed.target];
+      const anyExists = refs.some((ref) => pack.recent_records.some((r) => r.ref === ref));
+      if (!anyExists) {
+        try {
+          const pr = await parseUserInput(
+            text, pack, "deepseek-v4-pro", user_id,
+            "【重要纠正】上一次解析把这句判成了 modify，但它引用的记录在【今日已记录】里并不存在，"
+            + "该判断已被证伪。请在 record 和 chat 之间重新二选一，绝不要再输出 modify：\n"
+            + "- 句中出现具体的食物或运动 + 数量/时长（如「今天羽毛球是15分钟」「今天只跑了20分钟」「早上吃了两个蛋」），"
+            + "就是用户在陈述自己吃了/做了什么 → **intent=record**，照常填 items / exercise；\n"
+            + "- 只有句子里完全没有可记录的进食或运动内容（纯提问、纯闲聊）才输出 chat。",
+          );
+          parsed = pr.result;
+          parseUsage = pr.usage;
+          parseMessages = pr.messages as object;
+          modelUsed = "deepseek-v4-pro";
+        } catch {
+          /* 重解析失败：保留原结果，handleModify 会给出"没找到要修改的那条记录"的兜底回复 */
+        }
+      }
+    }
+
     // 写解析日志
     const parseLog = await prisma.aiParseLog.create({
       data: {

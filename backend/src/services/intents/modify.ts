@@ -5,6 +5,7 @@ import { recompute, buildContextCard } from "../summary";
 import { recordModifyCorrection } from "../trace";
 import { recordLearningEvent, resetFoodAliasStreak, upsertFoodAlias } from "../learning";
 import { processItems } from "./food-item";
+import { calcExerciseCalories } from "./exercise";
 import { refreshMealCard } from "../meal-card";
 import { executeDelete } from "../delete-record";
 import { guessMealType, toDateOnly, extractDateOffsetFromText, addOffsetDays, dateOnlyStr } from "../../lib/dates";
@@ -252,7 +253,7 @@ export async function handleModify(
 
   // update → 改份量 / 改食物 / 改运动消耗，高置信直改 + 重算 + 撤销
 
-  // ── 运动记录更新 ──
+  // ── 运动记录更新（T73：时长 / 消耗两个维度，用户说哪个改哪个）──
   if (target.kind === "exercise") {
     const exRec = await prisma.exerciseRecord.findFirst({ where: { id: target.record_id, user_id } });
     if (!exRec) {
@@ -261,34 +262,76 @@ export async function handleModify(
       });
       messages.push(aiMsg);
       const card = await buildContextCard(user_id);
+      tctx.partial("modify", { tokenUsage: parseUsage, promptMessages: parseMessages }); // trace 结束：记录已不存在
       return { intent: "modify", reply: aiMsg.content, summary_card: card, messages };
     }
 
     const change = parsed.change ?? {};
-    if (!change.calories_burned) {
+    // 两个维度都没给才追问（改前只认 calories_burned，用户说"是15分钟"时无处安放，连问两遍走进死循环）
+    if (change.duration_min == null && change.calories_burned == null) {
       const aiMsg = await prisma.chatMessage.create({
-        data: { user_id, date: dateObj, role: "assistant", kind: "text", content: '请告诉我新的消耗热量是多少？比如「改成 400 千卡」。', },
+        data: { user_id, date: dateObj, role: "assistant", kind: "text", content: "要改时长还是消耗？比如「改成 15 分钟」或「改成 400 千卡」。" },
       });
       messages.push(aiMsg);
       const card = await buildContextCard(user_id);
+      // 追问是正常的澄清轮次不是失败：意图识别成功、只是信息不全 → ok 而非 fail/partial
+      tctx.ok("modify", { tokenUsage: parseUsage, promptMessages: parseMessages });
       return { intent: "modify", reply: aiMsg.content, summary_card: card, messages };
     }
 
     const prev_calories = exRec.calories_burned;
+    const prev_duration = exRec.duration_min;
+    const prev_user_reported = exRec.user_reported;
+    const newDuration = change.duration_min ?? prev_duration;
+
+    // 热量取值三条路：用户直接报数 > 用户自报值沿用（不被 MET 覆盖）> 按新时长 MET 重算。
+    // 体重用 user.weight_kg（同 record.ts），不读 weight_log 最新值——改时长不该顺带改变热量基准。
+    let newCalories = prev_calories;
+    let newUserReported = prev_user_reported;
+    let caloriesRecalced = false;
+    if (change.calories_burned != null) {
+      newCalories = Math.round(change.calories_burned);
+      newUserReported = true; // 用户真值（同 T50 record 侧口径）
+    } else if (!prev_user_reported && newDuration != null) {
+      const user = await prisma.user.findUniqueOrThrow({ where: { id: user_id } });
+      newCalories = calcExerciseCalories(exRec.type, newDuration, Number(user.weight_kg) || 70);
+      caloriesRecalced = true;
+    }
+
     const updated = await prisma.exerciseRecord.update({
       where: { id: exRec.id },
-      data: { calories_burned: change.calories_burned },
+      data: { duration_min: newDuration, calories_burned: newCalories, user_reported: newUserReported },
     });
     await recompute(user_id, today);
     const card = await buildContextCard(user_id);
-    const content = `已更新：${exRec.type} 消耗 ${Math.round(change.calories_burned)} kcal（原估算 ${Math.round(prev_calories)} kcal）`;
+
+    // 回执按实际改了什么说，别谎称重算：热量沿用用户自报值时要说明白
+    const durStr = (d: number | null) => (d != null ? `${d}分钟` : "");
+    const parts: string[] = [];
+    if (newDuration !== prev_duration) parts.push(`${durStr(prev_duration)} → ${durStr(newDuration)}`);
+    if (Math.round(newCalories) !== Math.round(prev_calories)) {
+      parts.push(`消耗${caloriesRecalced ? "约 " : " "}${Math.round(newCalories)} kcal（原 ${Math.round(prev_calories)} kcal）`);
+    } else if (newUserReported && change.duration_min != null) {
+      parts.push(`消耗仍按你报的 ${Math.round(newCalories)} kcal`);
+    }
+    // 模型偶尔回传与原值相同的数字（"改成30分钟"但本来就是30分钟）——此时别说"已更新"再跟个空尾巴
+    const content = parts.length > 0
+      ? `已更新：${exRec.type} ${parts.join(" · ")}`
+      : `${exRec.type} 本来就是 ${durStr(newDuration)} · ${Math.round(newCalories)} kcal，没有变化`;
     const aiMsg = await prisma.chatMessage.create({
       data: {
         user_id, date: dateObj, role: "assistant", kind: "exercise_card", content,
         payload: {
-          exercise_id: updated.id, type: exRec.type, duration_min: exRec.duration_min,
-          calories_burned: change.calories_burned,
-          undo: { record_id: updated.id, prev_state: { calories_burned: prev_calories, kind: "exercise" as const } },
+          exercise_id: updated.id, type: exRec.type, duration_min: newDuration,
+          calories_burned: newCalories, user_reported: newUserReported,
+          undo: {
+            record_id: updated.id,
+            // 快照要含全部被改字段，否则撤销只回滚一半（改前只存 calories_burned，时长回不去）
+            prev_state: {
+              kind: "exercise" as const, calories_burned: prev_calories,
+              duration_min: prev_duration ?? undefined, user_reported: prev_user_reported,
+            },
+          },
         } as object,
         record_id: updated.id as string,
       },
@@ -306,6 +349,7 @@ export async function handleModify(
     });
     messages.push(aiMsg);
     const card = await buildContextCard(user_id);
+    tctx.partial("modify", { tokenUsage: parseUsage, promptMessages: parseMessages }); // trace 结束：记录已不存在
     return { intent: "modify", reply: aiMsg.content, summary_card: card, messages };
   }
 

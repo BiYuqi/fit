@@ -1,0 +1,66 @@
+# T73：运动记录的时长维度（2026-07-27 真机翻车，用户连骂三句）。
+#
+# 锁两件事：
+# 1. 频率性习惯陈述（"我每天都有30分钟的羽毛球"）**不入库**——它是画像不是当天事实，
+#    建了记录就等于替用户凭空记一笔他今天未必做过的账。带日期词的（"今天…15分钟"）才入库。
+# 2. 改运动时长一轮改完：modify 协议有 duration_min，后端按 MET 用新时长重算热量，
+#    时长和热量两个字段一起写（改前只 update calories_burned，留下"30分钟烧97.5卡"的自相矛盾行）。
+#    用户自报过热量的记录改时长时**不重算**——用户真值不该被 MET 估算覆盖。
+name: T73 运动时长：习惯陈述不入库 + 改时长一轮改完
+turns:
+  # 频率词 + 无当次线索 → chat，不建记录
+  - say: "我每天都有30分钟的羽毛球"
+    expect:
+      intent: chat
+      db:
+        exercise_record_count: 0
+
+  # 带日期词"今天" → 这是当天事实，入库；MET(羽毛球)=5、70kg、15min → ≈88
+  - say: "今天羽毛球是15分钟"
+    expect:
+      intent: record
+      db:
+        exercise_record_count: 1
+        exercise_record:
+          where: { type: "羽毛球" }
+          duration_min: 15
+          calories_burned: { gt: 60, lt: 120 }
+
+  # 改时长：一轮直接改掉，不追问热量；时长与热量必须同时更新到一致
+  # MET(跑步)=8、70kg、40min → ≈373；20min → ≈187
+  - say: "我跑步了40分钟"
+    expect:
+      intent: record
+      db:
+        exercise_record:
+          where: { type: "跑步" }
+          duration_min: 40
+          calories_burned: { gt: 300, lt: 450 }
+  - say: "跑步改成20分钟"
+    expect:
+      intent: modify
+      db:
+        exercise_record:
+          where: { type: "跑步" }
+          duration_min: 20
+          calories_burned: { gt: 130, lt: 250 }
+
+  # 用户自报热量的记录（T50 路径）改时长：热量沿用自报值 600，只有时长变。
+  # 刻意换成游泳而不是羽毛球——今日已有一条羽毛球记录，同名两条会让 target 指向不确定，
+  # 那是 modify 消歧的题（modify-disambig.yaml），不该在这里制造抖动。
+  - say: "游泳50分钟，消耗600卡"
+    expect:
+      intent: record
+      db:
+        exercise_record:
+          where: { type: "游泳" }
+          duration_min: 50
+          calories_burned: 600
+  - say: "游泳其实只游了30分钟"
+    expect:
+      intent: modify
+      db:
+        exercise_record:
+          where: { type: "游泳" }
+          duration_min: 30
+          calories_burned: 600

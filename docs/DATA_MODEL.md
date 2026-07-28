@@ -82,6 +82,7 @@
 | type | text | 运动类型 |
 | duration_min | int? | |
 | calories_burned | float | 额外消耗 |
+| user_reported | bool | 热量是用户自报（真值）还是 MET 估算，默认 false。改时长时 true 则沿用原热量、false 才按新时长重算（T73） |
 | source | text | text / voice |
 | raw_input | text? | |
 | date | date | |

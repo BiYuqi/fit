@@ -78,6 +78,7 @@ export async function handleRecord(
         type: ex.type,
         duration_min,
         calories_burned,
+        user_reported, // T73：modify 改时长时据此决定重算 vs 沿用（用户真值不被 MET 覆盖）
         source,
         raw_input: text,
         date: recordDateObj,

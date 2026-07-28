@@ -42,6 +42,9 @@ export type UndoPrevState = {
 } | {
   calories_burned: number;
   kind: 'exercise';
+  // T73：改运动时长后的撤销要连时长一起还原；老卡片没这两个字段
+  duration_min?: number;
+  user_reported?: boolean;
 };
 
 export type RecordUndo = {
@@ -151,6 +154,7 @@ export type ExerciseCardPayload = {
   type: string;
   duration_min: number;
   calories_burned: number;
+  user_reported?: boolean; // 热量是用户自报（真值）还是 MET 估的
   undo?: RecordUndo;
 };
 

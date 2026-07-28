@@ -35,6 +35,7 @@ export type DeleteExerciseSnapshot = {
   type: string;
   duration_min: number | null;
   calories_burned: number;
+  user_reported: boolean; // T73：重建时要还原，否则用户自报的热量重建后会被当成 MET 估算值
   source: string;
   raw_input: string | null;
   date: string;
@@ -84,6 +85,7 @@ export async function executeDelete(params: {
       type: exRec.type,
       duration_min: exRec.duration_min,
       calories_burned: exRec.calories_burned,
+      user_reported: exRec.user_reported,
       source: exRec.source,
       raw_input: exRec.raw_input,
       date: recDate,

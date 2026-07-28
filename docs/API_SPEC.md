@@ -81,6 +81,7 @@ resp: `{ record?, summary_card, messages }`。落库确认时（T46）messages =
 ### POST /api/records/:id/undo
 撤销 modify 的 update/append（见 AI_PARSING_SPEC §8），由 `meal_card.payload.last_change` 驱动。
 req: `{ prev_state? }`——带 `prev_state{food_id,portion_label,weight_g,meal_type?,calories?,protein?,fat?,carbs?,calories_source?}` → 还原（update 撤销）；不带 → 删该记录（append 撤销）。
+运动记录的 `prev_state` 形状是 `{kind:"exercise", calories_burned, duration_min?, user_reported?}`（T73：改时长后撤销要连时长和自报标记一起还原，只回滚热量会留下矛盾行；两个新字段 optional，兼容 T73 之前发出的老卡片）。
 `calories/protein/fat/carbs/calories_source`（T40）若齐全，直接还原这些精确值，不按 food×grams 重算——`change.calories`（用户真值覆盖）产生的记录，重算值会不同于落库值，必须精确还原。
 行为：还原/删记录后重算 daily_summary；若该记录 `alias_canonical` 非空，联动清零对应用户食物直连的 streak（见 LEARNING_SPEC §7）。
 resp: `{ ok, summary_card, messages }`（T47 新增 messages）——受影响餐次刷新后的 meal_card（改餐次撤销为双卡；只刷已存在的卡，`last_change` 已清除；运动撤销 `messages: []`），前端按 id upsert + created_at 重排。
