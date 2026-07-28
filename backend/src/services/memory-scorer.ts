@@ -22,7 +22,7 @@ const LAMBDA: Record<MemoryType, number> = {
   constraint: 0,       // 不衰减（过敏不会自愈）
   preference: 0.001,   // ~3 年衰减到 ~0.3
   habit: 0.002,        // ~1.5 年衰减到 ~0.33
-  context_state: 0.005,// ~6 个月衰减到 ~0.4
+  context_state: 0.015,// ~2 周到 WEAK、~3 周到 ARCHIVED（T75 从季级重标到周级）
   goal: 0.02,          // ~1 月衰减到 ~0.55
 };
 
@@ -65,7 +65,9 @@ export function repetitionBoost(n: number): number {
 
 // ── 时间衰减（MEMORY_SPEC §5.2）──
 // decay = exp(-λ(type) × days_since_last_access)
-// Δt 基准：last_accessed_at（上次被注入或更新的时间），非 created_at
+// Δt 基准：last_accessed_at = 上次**被用户提及或更新**的时间，非 created_at。
+// 系统检索注入**不**刷新它（T75）——否则被反复注入的陈旧记忆 decay 永远重置回 1.0，
+// 越是影响对话的越不会消失。见 MEMORY_SPEC §5.2。
 export function decay(type: MemoryType, daysSinceLastAccess: number): number {
   if (daysSinceLastAccess < 0) daysSinceLastAccess = 0;
   return Math.exp(-LAMBDA[type] * daysSinceLastAccess);
@@ -78,7 +80,7 @@ export interface ScoreParams {
   importance_class: ImportanceClass;
   repetition_count: number;
   days_since_last_access: number;
-  /** 仅 type=goal 且 expires_at 已过时设置 true */
+  /** expires_at 已过。任何类型都适用（T75，原先硬编码只认 goal） */
   expired?: boolean;
 }
 
@@ -90,8 +92,10 @@ export function computeScore(params: ScoreParams): number {
 
   let score = params.llm_confidence * tw * imp * rep * dk;
 
-  // goal 过期后额外 × 0.2 惩罚（MEMORY_SPEC §5.4 场景7）
-  if (params.expired && params.type === "goal") {
+  // 过期后额外 × 0.2 惩罚（MEMORY_SPEC §5.4 场景7）。
+  // 检索层已经直接把过期记忆挡在外面（loadActiveMemories），这里的惩罚负责让
+  // 凌晨的 recalcAndPrune 把 state 落库对齐——两者是同一件事的即时面和持久面。
+  if (params.expired) {
     score *= 0.2;
   }
 

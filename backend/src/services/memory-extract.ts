@@ -86,7 +86,8 @@ const MemoryCandidateSchema = z.object({
   llm_confidence: z.number().min(0).max(1),
   importance_class: z.enum(["medical", "strong", "normal", "casual"]),
   source: z.string(),
-  expires_at: z.string().nullable().optional(),
+  /** 相对天数（T75 口径 5）。模型不知道今天几号，绝对日期一律由 store 层换算 */
+  expires_in_days: z.number().int().positive().nullable().optional(),
 });
 
 /** 作废通道（T74）：指向一条已有记忆，不携带 content——形状和"创建"根本不同，
@@ -131,6 +132,26 @@ const INVALIDATION_SECTION = `
 - "我每天都有30分钟的羽毛球" → invalidations:[{"type":"context_state","entity":"no_aerobic_exercise","reason":"我每天都有30分钟的羽毛球","llm_confidence":0.92}]，**同时** candidates:[{"type":"habit","entity":"daily_badminton_30min","content":"每天30分钟羽毛球","llm_confidence":0.90,"importance_class":"normal","source":"我每天都有30分钟的羽毛球"}]`;
 
 /**
+ * 时效说明（T75）——**同步和异步两份 prompt 共用这一段文本**，理由同 INVALIDATION_SECTION。
+ *
+ * 刻意只要相对天数：两条提取路径的 prompt 都没有"今天是几号"，让模型填 ISO 日期
+ * 它只会照抄例子里的字面量，产出一个已经过去的日期——叠加检索层的过期过滤，
+ * 新记的 context_state 会一出生就过期、永不注入、且零报错。
+ */
+const TTL_SECTION = `
+## 时效（expires_in_days）
+context_state 和 goal 有保质期，尽量估一个 expires_in_days（**天数，正整数**）。
+constraint / preference / habit 语义就是长期，一律不填。
+
+**只给天数，绝不要给日期**——你不知道今天几号。
+
+按话里的时间线索估：
+- "最近3天…"、"这两天…" → 7
+- "这周…" → 到本周末还剩几天，拿不准给 7
+- "这个月…"、"备赛期" → 30
+- "最近…"、"最近压力大"（没有具体跨度）→ 不填，系统按类型兜底`;
+
+/**
  * 约束提取 prompt：极轻量（~80 token），只提取 constraint 类型。
  * 不包含其他四类的定义——预筛选已过滤了大部分无关消息。
  */
@@ -163,9 +184,10 @@ const QUICK_EXTRACT_PROMPT = `你是记忆提取器。用户正在告诉你关�
 - llm_confidence: 0.90+明确陈述, 0.80-0.89可能有修辞, 0.70-0.79不够明确, <0.70不输出
 - importance_class: 任何诊断/过敏都是medical, 明确强偏好是strong, 普通是normal, 随口是casual
 - entity 用 snake_case 英文，优先用受控词表，没有的新建
+${TTL_SECTION}
 ${INVALIDATION_SECTION}
 
-返回 JSON：{"candidates":[{"type":"...","entity":"...","content":"...","llm_confidence":0.9,"importance_class":"medical","source":"..."}],"invalidations":[]}
+返回 JSON：{"candidates":[{"type":"...","entity":"...","content":"...","llm_confidence":0.9,"importance_class":"medical","source":"...","expires_in_days":7}],"invalidations":[]}
 没有要记也没有要作废的返回 {"candidates":[],"invalidations":[]}`;
 
 /**
@@ -194,16 +216,16 @@ const FULL_EXTRACT_PROMPT = `你是记忆提取器。用户在告诉你关于 ta
 - "我每天都要喝咖啡" → {type:"habit", entity:"coffee", content:"每天喝咖啡"}
 - "我晚上睡得晚" → {type:"habit", entity:"late_sleeper", content:"晚睡"}
 
-### context_state（临时状态——被动身处的环境，λ=0.005）
+### context_state（临时状态——被动身处的环境，λ=0.015 + expires_in_days）
 - "最近出差，吃饭不规律" → {type:"context_state", entity:"business_trip", content:"出差中，饮食不规律"}
 - "最近工作压力大" → {type:"context_state", entity:"stress_period", content:"压力期，夜间食欲增加"}
-- "最近胃炎，只能吃清淡的" → {type:"context_state", entity:"illness_recovery", content:"胃炎恢复期，需清淡饮食"}
+- "最近三天排便不畅" → {type:"context_state", entity:"recent_constipation", content:"最近3天排便不畅", expires_in_days:7}
 区分 context_state vs goal：被动描述环境→context_state，主动设定方向→goal
 
-### goal（短期目标——有时间边界，λ=0.02 + expires_at）
-- "最近在备赛" → {type:"goal", entity:"competition_prep", content:"备赛期"}
-- "这周控碳水" → {type:"goal", entity:"low_carb", content:"本周控制碳水摄入", expires_at:"2026-07-14"}
-- "这个月戒糖" → {type:"goal", entity:"no_sugar", content:"本月戒糖", expires_at:"2026-07-31"}
+### goal（短期目标——有时间边界，λ=0.02 + expires_in_days）
+- "最近在备赛" → {type:"goal", entity:"competition_prep", content:"备赛期", expires_in_days:30}
+- "这周控碳水" → {type:"goal", entity:"low_carb", content:"本周控制碳水摄入", expires_in_days:7}
+- "这个月戒糖" → {type:"goal", entity:"no_sugar", content:"本月戒糖", expires_in_days:30}
 区分 habit vs goal：有时间限定("这周"/"这个月")→goal，"一般"/"通常"/"总是"→habit。拿不准选habit
 
 ## 受控 Entity 词表（优先匹配，没有的才新建 snake_case）
@@ -220,7 +242,7 @@ cilantro(香菜), spicy(辣), peanut(花生), seafood(海鲜), dairy(乳制品),
 3. 不推断、不猜测、不脑补用户没说的话
 4. entity 优先用上方受控词表，没有的才新建 snake_case 英文
 5. importance_class: medical(安全/医疗), strong(重要偏好/强习惯), normal(普通), casual(随口)
-6. expires_at 仅 type=goal 且用户给了时间限定时填写 ISO date，否则 null
+6. expires_in_days 见下方【时效】段——只填天数，不填日期
 
 ## 绝不提取
 - 单次食物评价("这个面太油了")
@@ -231,6 +253,7 @@ cilantro(香菜), spicy(辣), peanut(花生), seafood(海鲜), dairy(乳制品),
 - 聊天寒暄("谢谢"、"哈哈")
 - 引用他人("我朋友说碳水不好")
 - 饮食记录本身("中午吃了一碗面")
+${TTL_SECTION}
 ${INVALIDATION_SECTION}
 
 返回 JSON：{"candidates":[{...}],"invalidations":[{...}]}`;
@@ -333,7 +356,7 @@ export async function quickExtract(
             llm_confidence: c.llm_confidence,
             importance_class: c.importance_class,
             source_text: c.source,
-            expires_at: c.expires_at ? new Date(c.expires_at) : null,
+            expires_in_days: c.expires_in_days ?? null,
           }),
         );
       } catch (err) {
@@ -461,7 +484,7 @@ export async function fullExtract(userId: string): Promise<void> {
           llm_confidence: c.llm_confidence,
           importance_class: c.importance_class,
           source_text: c.source,
-          expires_at: c.expires_at ? new Date(c.expires_at) : null,
+          expires_in_days: c.expires_in_days ?? null,
         });
       } catch (err) {
         console.warn("fullExtract: upsert failed for", c.entity, err);

@@ -70,8 +70,14 @@ describe("decay", () => {
   test("habit λ=0.002, 2 months", () => {
     approx(decay("habit", 60), 0.887);
   });
-  test("context_state λ=0.005, 30 days", () => {
-    approx(decay("context_state", 30), 0.861);
+  test("context_state λ=0.015, 30 days", () => {
+    approx(decay("context_state", 30), 0.638);
+  });
+  // T75 的核心标定：首次 context_state（score 0.5544）必须在 ~14 天掉出 ACTIVE
+  test("context_state 首次 14 天后跌破 ACTIVE_DOWN", () => {
+    const base = 0.90 * 0.88 * 1.0 * 0.70; // conf × type_weight × importance × rep_boost(1)
+    assert.ok(base * decay("context_state", 13) > 0.45, "13 天时还该在线上");
+    assert.ok(base * decay("context_state", 15) < 0.45, "15 天时该跌破 ACTIVE_DOWN");
   });
   test("goal λ=0.02, 180 days", () => {
     approx(decay("goal", 180), 0.027);
@@ -115,8 +121,6 @@ describe("MEMORY_SPEC §5.4 场景演算", () => {
 
   // 场景 2：爱吃辣首次（preference + normal → score 0.54）
   //   score 0.54 < ACTIVE_UP[preference]=0.55（§8.1 滞回），初始 WEAK 维持 WEAK
-  //   与 §5.4 场景文字的 "ACTIVE ✓" 有差异——§5.4 场景使用 §3 简化阈值（0.50），
-  //   但 §8.1 滞回晋升阈值 0.55 更保守，防止单次提及就永久激活。
   test("场景2: 爱吃辣首次 → WEAK (score=0.54, < ACTIVE_UP 0.55)", () => {
     const score = computeScore({
       llm_confidence: 0.85,
@@ -292,17 +296,17 @@ describe("computeScore 边界", () => {
     );
   });
 
-  test("expired 仅对 goal 类型生效", () => {
-    // preference + expired=true → no penalty
-    const scorePref = computeScore({
-      llm_confidence: 0.85,
-      type: "preference",
-      importance_class: "normal",
+  // T75：过期惩罚放开到全类型（原先硬编码只认 goal，等于给 context_state 设过期时间没用）
+  test("expired 对 context_state 同样生效", () => {
+    const params = {
+      llm_confidence: 0.90,
+      type: "context_state" as const,
+      importance_class: "normal" as const,
       repetition_count: 1,
       days_since_last_access: 0,
-      expired: true,
-    });
-    approx(scorePref, 0.54); // same as non-expired
+    };
+    approx(computeScore(params), 0.5544);
+    approx(computeScore({ ...params, expired: true }), 0.5544 * 0.2);
   });
 
   test("极度衰减导致 score → 0", () => {

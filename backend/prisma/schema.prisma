@@ -353,7 +353,7 @@ model UserMemory {
   repetition_count  Int       @default(1) // 累计提及次数（24h 去重）
   state             String    @default("WEAK") // ACTIVE | WEAK | ARCHIVED
   source_type       String    @default("explicit_user") // explicit_user | implicit_behavior | system_inferred
-  expires_at        DateTime? // 仅 type=goal 时可选：目标截止时间，过期后 decay × 0.2
+  expires_at        DateTime? // 过期时刻（context_state/goal）：过期后不进检索 + score × 0.2（T75）
   valid_from        DateTime  @default(now()) // 记忆开始有效的时间
   valid_to          DateTime? // 被矛盾记忆取代的时间（冲突处理时填写）
   embedding         Unsupported("vector(1024)")? // DeepSeek embedding（1024 维），preference/habit 语义检索用
@@ -361,7 +361,7 @@ model UserMemory {
   source_text       String?   // 追溯：原文片段
   created_at        DateTime  @default(now())
   updated_at        DateTime  @updatedAt
-  last_accessed_at  DateTime  @default(now()) // 上次被注入或更新的时间；decay 的 Δt 基准
+  last_accessed_at  DateTime  @default(now()) // 上次被**用户提及或更新**的时间；decay 的 Δt 基准。系统注入不刷新它（T75），否则陈旧记忆永生
 
   user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
 

@@ -48,10 +48,10 @@ LLM 擅长语义理解（"香菜"和"芫荽"是同一件事），但不擅长一
 
 | | type=constraint | type=preference | type=habit | type=goal | type=context_state |
 |---|---|---|---|---|---|
-| λ (decay rate) | 0（不衰减） | 极小（数年） | 小（年级） | 大（月级） | 中（季级） |
+| λ (decay rate) | 0（不衰减） | 极小（数年） | 小（年级） | 大（月级） | 大（周级） |
 | 注入格式 | "🚫 务必避开" | "偏好：…" | "习惯：…" | "目标：…" | "当前状态：…" |
 | 评分阈值 | 低分也注入（安全优先） | 中高分才注入 | 中高分才注入 | 高分才注入 | 中分才注入 |
-| 过期机制 | 无 | 纯衰减 | 纯衰减 | 衰减 + expires_at | 纯衰减（λ 居中） |
+| 过期机制 | 无 | 纯衰减 | 纯衰减 | 衰减 + expires_at | 衰减 + expires_at |
 
 ### 2.3 乘法融合（任一因子归零则归零）
 
@@ -68,15 +68,19 @@ score = clamp(llm_confidence × type_weight(type) × repetition_boost(n) × deca
 
 类型决定 λ、注入优先级、注入格式。五类形成从"永久"到"临时"的衰减光谱。
 
-| 类型 | 含义 | 示例 | λ（衰减） | ACTIVE 阈值 | 注入格式 |
-|---|---|---|---|---|---|
-| **constraint** | 硬约束：安全/健康相关 | 过敏、疾病限制、宗教饮食 | 0 | ≥ **0.45** | "🚫 务必避开：…" |
-| **preference** | 偏好：口味/食物喜好 | 不吃香菜、爱吃辣、口淡 | 0.001 | ≥ 0.50 | "偏好：…" |
-| **habit** | 长期习惯：稳定行为模式 | 不吃早饭、每天喝咖啡、晚睡 | 0.002 | ≥ 0.55 | "习惯：…" |
-| **context_state** | 临时状态：影响饮食但不是目标 | 出差中、压力大、节假日、生病恢复 | 0.005 | ≥ 0.50 | "当前状态：…" |
-| **goal** | 短期目标：有时间边界 | 备赛期、本周控碳水、这个月戒糖 | 0.02 | ≥ 0.60 | "目标：…" |
+| 类型 | 含义 | 示例 | λ（衰减） | 注入格式 |
+|---|---|---|---|---|
+| **constraint** | 硬约束：安全/健康相关 | 过敏、疾病限制、宗教饮食 | 0 | "🚫 务必避开：…" |
+| **preference** | 偏好：口味/食物喜好 | 不吃香菜、爱吃辣、口淡 | 0.001 | "偏好：…" |
+| **habit** | 长期习惯：稳定行为模式 | 不吃早饭、每天喝咖啡、晚睡 | 0.002 | "习惯：…" |
+| **context_state** | 临时状态：影响饮食但不是目标 | 出差中、压力大、节假日、生病恢复 | 0.015 | "当前状态：…" |
+| **goal** | 短期目标：有时间边界 | 备赛期、本周控碳水、这个月戒糖 | 0.02 | "目标：…" |
 
-λ 的含义：`decay = exp(-λ × days_since_last_access)`。λ=0 不衰减，λ=0.001 约 3 年衰减到 ~0.3，λ=0.002 约 1.5 年衰减到 ~0.33，λ=0.005 约 6 个月衰减到 ~0.4，λ=0.02 约 1 月衰减到 ~0.55。
+> **ACTIVE 阈值的唯一定义处是 §8.1**（双阈值滞回）。本表刻意不列——历史上这里有过一张单阈值表，和 §8.1 打架，代码实现的是 §8.1。
+
+λ 的含义：`decay = exp(-λ × days_since_last_access)`。λ=0 不衰减，λ=0.001 约 3 年衰减到 ~0.3，λ=0.002 约 1.5 年衰减到 ~0.33，λ=0.015 约 2 周掉出 ACTIVE、约 3 周到 ARCHIVED，λ=0.02 约 1 月衰减到 ~0.55。
+
+> **context_state 的 λ 为什么是 0.015 而不是 0.005（T75 重标）**：原值按"出差中"、"备赛恢复期"这类周到月尺度的环境标定，但用户真正说出口的是「最近**3天**排便不畅」——日尺度。真机上一条 07-12 写入的临时状态到 07-27 仍是 ACTIVE 并被注入，按 0.005 要 **42 天**才掉出 ACTIVE。规范假设的时间尺度和实际语料差了一个数量级。
 
 ### context_state 与 goal 的区别
 
@@ -88,8 +92,8 @@ score = clamp(llm_confidence × type_weight(type) × repetition_boost(n) × deca
 | 用户意图 | 被动（被环境推着走） | 主动（我要改变） |
 | 示例 | 出差、压力期、节假日、生病 | 备赛、控碳水、戒糖 |
 | 影响范围 | 推荐策略、热量容忍度、作息假设 | 热量目标、食物选择硬约束 |
-| 衰减 | 中等（λ=0.005，约半年自然消退） | 快速（λ=0.02 + expires_at） |
-| ACTIVE 阈值 | 0.50（与 preference 同级） | 0.60（高门槛） |
+| 衰减 | 较快（λ=0.015，约 2 周自然消退） | 快速（λ=0.02 + expires_at） |
+| ACTIVE 阈值 | 见 §8.1 | 见 §8.1（门槛最高） |
 
 context_state 解决的是：为什么这个月 AI 推荐不一样？因为用户状态变了，不是目标变了。
 
@@ -99,7 +103,7 @@ context_state 解决的是：为什么这个月 AI 推荐不一样？因为用�
 - B 类（喜欢/讨厌/口味）→ preference，共同点是口味偏好，衰减极慢
 - C 类（习惯/生活状态/短期目标）→ 拆为三种：
   - **habit**：稳定行为模式（年级衰减），"我一般…"、"我通常…"
-  - **context_state**：被动身处的临时环境（季级衰减），"最近压力大…"、"出差中…"
+  - **context_state**：被动身处的临时环境（周级衰减 + expires_at），"最近压力大…"、"出差中…"
   - **goal**：主动设定的有时间边界的目标（月级衰减 + expires_at），"这周控碳水…"
 - D 类（不提取）→ 保留，放进 §4 的提取规则
 
@@ -225,11 +229,11 @@ const FULL_TRIGGERS = [
 
 ### goal（短期目标——有时间边界，过期后不再有效）
 - 生活状态: "最近在备赛" → {type: "goal", entity: "competition_prep", content: "备赛期"}
-- 短期目标: "这周控碳水" → {type: "goal", entity: "low_carb", content: "本周控制碳水摄入", expires_at: "2026-07-14"}
-- 明确时限: "这个月戒糖" → {type: "goal", entity: "no_sugar", content: "本月戒糖", expires_at: "2026-07-31"}
+- 短期目标: "这周控碳水" → {type: "goal", entity: "low_carb", content: "本周控制碳水摄入", expires_in_days: 7}
+- 明确时限: "这个月戒糖" → {type: "goal", entity: "no_sugar", content: "本月戒糖", expires_in_days: 30}
 
 **区分 habit 还是 goal 的关键判断**：
-- 用户给了时间限定（"这周"、"这个月"、"到月底"、"最近"）→ goal，并提取 expires_at
+- 用户给了时间限定（"这周"、"这个月"、"到月底"、"最近"）→ goal，并提取 expires_in_days
 - 用户描述的是"一直如此"的稳定模式（"一般"、"通常"、"总是"、"每天"）→ habit
 - 拿不准时选 habit——宁可让短期目标多活几天，也别让长期习惯被快速衰减误杀
 
@@ -306,15 +310,18 @@ const FULL_TRIGGERS = [
       "content": "不喜欢吃香菜",
       "llm_confidence": 0.92,
       "importance_class": "normal",
-      "action": "create | update",
       "source": "我不吃香菜，凉菜里别放",
-      "expires_at": null
+      "expires_in_days": null
     }
   ]
 }
 ```
 
-`expires_at` 仅 type=goal 时可选——用户给了时间限定（"这周"、"到月底"）时填写 ISO date，否则 null。
+LLM 输出的是 **`expires_in_days`（相对天数，正整数或 null）**，`context_state` 和 `goal` 都填，其余三类不填。绝对时刻由后端 `upsertMemory` 换算成 `expires_at` 落库。
+
+> **为什么不让 LLM 直接给绝对日期（T75）**：两条提取路径的 prompt 都不含"今天是几号"（提取是独立 LLM 调用，不走 chat 的上下文压缩）。让模型填 ISO 日期，它只会照抄 few-shot 里的字面量，产出一个**已经过去**的日期——叠加 §7.1 检索层的过期过滤，新记的记忆会一出生就过期、永不注入、且零报错。相对天数把日历算术从模型手里拿走了，同时 prompt 里不再需要拼当天日期。
+
+未给 `expires_in_days` 时后端按类型兜底：`context_state` **14 天**（与 λ=0.015 掉出 ACTIVE 的时间对齐，两条机制不打架）；`goal` **不兜底**（首次 goal 的分数上限 `0.9 × 0.80 × rep_boost(1)` = 0.504 < `ACTIVE_UP.goal` 0.65，本就进不了 ACTIVE，兜底是给死代码加死代码）；其余三类语义即长期，不引入 TTL。
 
 注意：LLM **不输出** score、不判断存不存、不决定最终状态。只负责"提取事实"。
 
@@ -382,15 +389,17 @@ decay(t) = exp(-λ(type) × Δt)
 λ(constraint)     = 0        → 不衰减（过敏不会自愈）
 λ(preference)     = 0.001    → 1 年后 ~0.70，3 年后 ~0.33
 λ(habit)          = 0.002    → 1 年后 ~0.48，1.5 年后 ~0.33
-λ(context_state)  = 0.005    → 6 个月后 ~0.40，1 年后 ~0.16
+λ(context_state)  = 0.015    → 14 天后 ~0.81（score 跌破 ACTIVE_DOWN），30 天后 ~0.64
 λ(goal)           = 0.02     → 1 个月后 ~0.55，2 个月后 ~0.30
 ```
 
-Δt = 当前时间 - `last_accessed_at`（上次被注入或更新的时间，不是 created_at）。每次用户再次提及或系统检索注入，last_accessed_at 刷新，decay 拉回 1.0。
+Δt = 当前时间 - `last_accessed_at`（**上次被用户提及或更新**的时间，不是 created_at）。每次用户再次提及，last_accessed_at 刷新，decay 拉回 1.0。
+
+> **系统检索注入不刷新 `last_accessed_at`（T75，反直觉但刻意）**：一旦注入就刷新，任何被注入过的记忆 decay 会永远重置回 1.0，陈旧记忆将**永生**，而且越是被反复注入的（也就是最影响对话的那些）越不会消失。别"补全"这条——`updateAccessTime()` 曾作为零调用死代码存在，已在 T75 删除。
 
 ### 5.3 决策规则
 
-不同类型有各自的 ACTIVE 阈值（见 §3 表）。统一规则：
+不同类型有各自的 ACTIVE 阈值（唯一定义处见 §8.1 双阈值滞回表）。统一规则：
 
 ```
 score ≥ ACTIVE_THRESHOLD[type]  → state = ACTIVE   → 检索时注入上下文
@@ -398,11 +407,13 @@ score ≥ ACTIVE_THRESHOLD[type]  → state = ACTIVE   → 检索时注入上下
 score < 0.40                     → state = ARCHIVED → 不注入，不参与检索
 ```
 
-constraint 的 ACTIVE 阈值 0.45 低于 preference 的 0.50——安全性通过参数实现，不通过旁路。同一套评分引擎、同一套决策逻辑，不同类型的参数配置不同。这消除了"特殊规则绕过评分引擎"的问题——所有类型的决策走同一套评分引擎、同一套逻辑，只是参数配置不同。
+constraint 的晋升阈值（0.48）低于 preference（0.55）——安全性通过参数实现，不通过旁路。同一套评分引擎、同一套决策逻辑，不同类型的参数配置不同。这消除了"特殊规则绕过评分引擎"的问题——所有类型的决策走同一套评分引擎、同一套逻辑，只是参数配置不同。
 
 ARCHIVED 的 0.40 底线对所有类型相同——低于此线意味着 LLM 本身就不太确定（llm_confidence < 0.70）且没有被重复强化过，无论什么类型都不该注入。
 
 ### 5.4 示例演算
+
+> 阈值一律用 §8.1 的双阈值滞回（`ACTIVE_UP` 晋升 / `ACTIVE_DOWN` 降级），下面每个场景都是**从 WEAK 起步判晋升**，所以比的是 `ACTIVE_UP`。
 
 **场景 1：用户第一次说"我对花生过敏"**
 
@@ -414,7 +425,7 @@ repetition_boost(1) = 0.70
 decay(0) = 1.0
 
 score = 0.95 × 1.0 × 1.3 × 0.70 × 1.0 = 0.86
-→ constraint ACTIVE 阈值 = 0.45 → ACTIVE ✓（importance 1.3 补偿了首次折扣）
+→ ACTIVE_UP(constraint) = 0.48 → ACTIVE ✓（importance 1.3 补偿了首次折扣）
 → 对比 importance=1.0：0.95 × 1.0 × 0.70 = 0.67，提升 28%
 ```
 
@@ -428,7 +439,7 @@ repetition_boost(1) = 0.70
 decay(0) = 1.0
 
 score = 0.85 × 0.90 × 1.0 × 0.70 × 1.0 = 0.54
-→ preference ACTIVE 阈值 = 0.50 → ACTIVE ✓（明确偏好首次即过线）
+→ ACTIVE_UP(preference) = 0.55 → **WEAK**（差 0.01，再提一次就 ACTIVE）
 ```
 
 **场景 3：用户第三次说"不吃香菜"，跨度 2 个月**
@@ -441,7 +452,7 @@ repetition_boost(3) = 0.97
 decay(60天) = exp(-0.001 × 60) = 0.94
 
 score = 0.90 × 0.90 × 1.0 × 0.97 × 0.94 = 0.74
-→ preference ACTIVE 阈值 = 0.50 → ACTIVE ✓（稳固）
+→ ACTIVE_UP(preference) = 0.55 → ACTIVE ✓（稳固）
 ```
 
 **场景 4：用户第一次说"最近出差饮食不规律"**
@@ -454,8 +465,9 @@ repetition_boost(1) = 0.70
 decay(0) = 1.0
 
 score = 0.85 × 0.88 × 1.0 × 0.70 × 1.0 = 0.52
-→ context_state ACTIVE 阈值 = 0.50 → ACTIVE ✓（首次即生效，但贴近边界）
-→ 30 天后不重复：decay(30) = exp(-0.005 × 30) = 0.86，score = 0.45 → WEAK
+→ ACTIVE_UP(context_state) = 0.55 → **WEAK**（首次不够，再提一次才进）
+→ 若 llm_confidence = 0.90：score = 0.554 → 刚过 0.55 → ACTIVE
+→ 14 天后不重复：decay(14) = exp(-0.015 × 14) = 0.81，score = 0.449 → 跌破 ACTIVE_DOWN 0.45 → WEAK
 ```
 
 **场景 5：用户第一次说"我早上一般不吃早饭"，2 个月没再提**
@@ -468,7 +480,7 @@ repetition_boost(1) = 0.70
 decay(60天) = exp(-0.002 × 60) = 0.887
 
 score = 0.85 × 0.85 × 1.0 × 0.70 × 0.887 = 0.449
-→ habit ACTIVE 阈值 = 0.55 → WEAK（差一点，再提一次就 ACTIVE）
+→ ACTIVE_UP(habit) = 0.58 → WEAK（差一点，再提一次就 ACTIVE）
 ```
 
 **场景 6：用户半年前说"最近在备赛"，之后再没提过**
@@ -481,10 +493,12 @@ repetition_boost(1) = 0.70
 decay(180天) = exp(-0.02 × 180) = 0.027
 
 score = 0.80 × 0.80 × 1.0 × 0.70 × 0.027 = 0.012
-→ goal ACTIVE 阈值 = 0.60 → 远低于 → ARCHIVED（自动沉底）
+→ 远低于 ARCHIVED 底线 0.40 → ARCHIVED（自动沉底）
 ```
 
 **场景 7：用户说"这周控碳水"，2 周后（已过期）**
+
+> 过期记忆**首先**被 §7.1 的检索 SQL 直接挡在外面，根本不进上下文；下面的 × 0.2 是让凌晨的 `recalcAndPrune` 把 `state` 落库对齐。两者是同一件事的即时面和持久面（T75）。
 
 ```
 llm_confidence = 0.80
@@ -508,7 +522,7 @@ repetition_boost(1) = 0.70
 decay(0) = 1.0
 
 score = 0.85 × 0.90 × 1.1 × 0.70 × 1.0 = 0.589
-→ preference ACTIVE 阈值 = 0.50 → ACTIVE ✓（importance 补偿首次折扣）
+→ ACTIVE_UP(preference) = 0.55 → ACTIVE ✓（importance 补偿首次折扣）
 → 对比 importance=1.0：score = 0.54，提升 9%
 ```
 
@@ -592,7 +606,7 @@ CREATE TABLE user_memory (
   source_type VARCHAR NOT NULL DEFAULT 'explicit_user',  -- explicit_user | implicit_behavior | system_inferred
   -- v1 只写入 explicit_user；implicit_behavior 和 system_inferred 预留给行为推断（§11）
 
-  expires_at TIMESTAMPTZ,           -- 仅 type=goal 时可选：目标截止时间，过期后 decay × 0.2
+  expires_at TIMESTAMPTZ,           -- context_state/goal 的过期时刻：过期后不进检索 + score × 0.2（T75）
   valid_from TIMESTAMPTZ NOT NULL DEFAULT now(),  -- 此记忆开始有效的时间
   valid_to TIMESTAMPTZ,             -- 此记忆被新矛盾记忆取代的时间（冲突处理时填写）
 

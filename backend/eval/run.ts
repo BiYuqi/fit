@@ -26,6 +26,8 @@ interface EvalCase {
     memory?: Array<{
       type: string; entity: string; content: string;
       state?: string; llm_confidence?: number; importance_class?: string;
+      // T75：负数 = 已过期（用于验证过期记忆不注入，以及 medical 豁免）
+      expires_in_days?: number;
     }>;
   };
   turns: Turn[];
@@ -55,9 +57,14 @@ interface Expect {
     weight_log?: { weight_kg?: number }; // 最近一个体重历史点（record_weight 写入）
     user?: { weight_kg?: number }; // 档案字段断言：record_weight 绝不能改初始体重
     // T74：语义记忆断言。state 省略时只断言"这条存在"；absent=true 断言这条根本没建
+    // entity 省略时按 type 匹配"任意一条满足"——提取器给 entity 起名极不稳定
+    // （真机上同一件事会散成 recent_business_trip / business_trip / upcoming_business_trip），
+    // 断言具体名字等于赌模型的措辞。要断言某条具体记忆时才写 entity。
     memory?: Array<{
-      entity: string; type?: string; state?: string;
+      entity?: string; type?: string; state?: string;
       valid_to?: boolean; absent?: boolean;
+      // T75：true = expires_at 非空且在未来（模型给了日期而不是天数时会退化成过去，这条抓得住）
+      expires_future?: boolean;
     }>;
   };
 }
@@ -135,10 +142,13 @@ async function runSetup(userId: string, setup: EvalCase["setup"]) {
     await prisma.$executeRawUnsafe(
       `INSERT INTO "UserMemory"
        (id,user_id,type,entity,content,llm_confidence,importance_class,repetition_count,state,
-        source_type,valid_from,last_accessed_at,updated_at)
-       VALUES (gen_random_uuid(),$1,$2,$3,$4,$5,$6,1,$7,'explicit_user',now(),now(),now())`,
+        source_type,expires_at,valid_from,last_accessed_at,updated_at)
+       VALUES (gen_random_uuid(),$1,$2,$3,$4,$5,$6,1,$7,'explicit_user',$8,now(),now(),now())`,
       userId, m.type, m.entity, m.content,
       m.llm_confidence ?? 0.9, m.importance_class ?? "normal", m.state ?? "ACTIVE",
+      m.expires_in_days == null
+        ? null
+        : new Date(Date.now() + m.expires_in_days * 86400_000),
     );
   }
 
@@ -317,25 +327,38 @@ async function assertTurn(userId: string, turn: Turn, resp: { intent?: string; r
     }
   }
   for (const m of db?.memory ?? []) {
+    const label = m.entity ?? `type=${m.type}`;
     const rows = await prisma.$queryRawUnsafe<any[]>(
-      `SELECT type, entity, state, valid_to FROM "UserMemory" WHERE user_id=$1 AND entity=$2` +
+      `SELECT type, entity, state, valid_to, expires_at FROM "UserMemory" WHERE user_id=$1` +
+        (m.entity ? ` AND entity=$2` : "") +
         (m.type ? ` AND type='${m.type}'` : ""),
-      userId, m.entity,
+      ...(m.entity ? [userId, m.entity] : [userId]),
     );
-    const row = rows[0];
+    const matches = (r: any) =>
+      (m.state === undefined || r.state === m.state) &&
+      (m.valid_to === undefined || (r.valid_to != null) === m.valid_to) &&
+      (m.expires_future === undefined ||
+        (r.expires_at != null && new Date(r.expires_at) > new Date()) === m.expires_future);
+
     if (m.absent) {
-      if (row) failures.push({ what: `memory(${m.entity})`, expected: "不该建", actual: `${row.type}/${row.state}` });
+      if (rows.length) failures.push({ what: `memory(${label})`, expected: "不该建", actual: `${rows[0].type}/${rows[0].state}` });
       continue;
     }
-    if (!row) {
-      failures.push({ what: `memory(${m.entity})`, expected: m.state ?? "(存在)", actual: "无此记忆" });
+    if (!rows.length) {
+      failures.push({ what: `memory(${label})`, expected: m.state ?? "(存在)", actual: "无此记忆" });
       continue;
     }
-    if (m.state !== undefined && row.state !== m.state) {
-      failures.push({ what: `memory(${m.entity}).state`, expected: m.state, actual: row.state });
-    }
-    if (m.valid_to !== undefined && (row.valid_to != null) !== m.valid_to) {
-      failures.push({ what: `memory(${m.entity}).valid_to`, expected: m.valid_to ? "非空" : "空", actual: row.valid_to ?? "null" });
+    if (!rows.some(matches)) {
+      const want = [
+        m.state && `state=${m.state}`,
+        m.valid_to !== undefined && `valid_to=${m.valid_to ? "非空" : "空"}`,
+        m.expires_future !== undefined && `expires_at=${m.expires_future ? "未来" : "空或已过期"}`,
+      ].filter(Boolean).join(" ");
+      failures.push({
+        what: `memory(${label})`,
+        expected: want || "(存在)",
+        actual: rows.map((r) => `${r.entity}:${r.state}/exp=${r.expires_at ?? "null"}`).join(", "),
+      });
     }
   }
   if (db?.user !== undefined) {

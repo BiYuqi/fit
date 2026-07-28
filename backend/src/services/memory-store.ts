@@ -25,7 +25,8 @@ export interface MemoryCandidate {
   source_type?: string;
   source_message_id?: string;
   source_text?: string;
-  expires_at?: Date | null;
+  /** 相对天数，绝对日期由 store 层换算（T75 口径 5）。null/省略 → 走类型默认 TTL */
+  expires_in_days?: number | null;
 }
 
 export interface ActiveMemory {
@@ -92,10 +93,14 @@ function vecLiteral(embedding: number[]): string {
 
 function attachScore(row: Record<string, unknown>, now: Date): ActiveMemory {
   const type = row.type as MemoryType;
+  // 过期判定豁免 medical：与检索 SQL 里 constraint 段不加过期过滤是**同一条底线**（T74 口径 3）。
+  // 只堵检索那一侧不够——过期惩罚 × 0.2 会让 score 崩到 0.17，decideStateWithFloor 虽然
+  // 拦住了 ARCHIVED，但落到 WEAK 时检索 SQL 的 state = 'ACTIVE' 已经把它过滤掉了。
+  // 「医疗类不会自动消失」要守的是"不会自动停止注入"，而 WEAK 就已经不注入了。
   const expired =
-    type === "goal" &&
     row.expires_at != null &&
-    new Date(row.expires_at as string) <= now;
+    new Date(row.expires_at as string) <= now &&
+    row.importance_class !== "medical";
   const score = computeScore({
     llm_confidence: row.llm_confidence as number,
     type,
@@ -148,11 +153,18 @@ export async function loadActiveMemories(
     ORDER BY created_at DESC
   `;
 
-  // 2. context_state + goal：全部 ACTIVE，应用层算 score，取 top-3
+  // 2. context_state + goal：全部 ACTIVE 且未过期，应用层算 score，取 top-3
+  //
+  // 过期过滤只加在这一段（T75）。constraint 段**故意不加**：T74 立的规矩是医疗类
+  // 记忆绝不自动消失、只有用户能在记忆中心手动删，而这个条件会绕过它——只要有任何
+  // 来源给一条 medical constraint 写了 expires_at，一条过敏记忆就会被静默不注入，
+  // 而 state 还是 ACTIVE、记忆中心照常显示"生效中"。preference/habit 不引入 TTL，
+  // 加了是恒真条件。
   const cgRows = await prisma.$queryRaw<Record<string, unknown>[]>`
     SELECT * FROM "UserMemory"
     WHERE user_id = ${userId}      AND state = 'ACTIVE'
       AND type IN ('context_state', 'goal')
+      AND (expires_at IS NULL OR expires_at > now())
   `;
 
   // 3. preference + habit：embedding 语义召回 top-5，退化到 score 排序
@@ -200,6 +212,38 @@ export async function loadActiveMemories(
 
 // ── CRUD ──
 
+/** 未给 TTL 时的兜底过期天数（T75 口径 2）。
+ *
+ *  只有 context_state 兜底，且 14 天与 λ=0.015 掉到 ACTIVE_DOWN 的时间（~13.9 天）对齐，
+ *  两条机制不打架。goal **不**兜底：首次 goal 的分数上限是
+ *  0.9 × 0.80 × rep_boost(1)=0.70 = 0.504 < ACTIVE_UP.goal(0.65)，本就进不了 ACTIVE，
+ *  给一个永远不被检索的类型填过期时间是给死代码加死代码。 */
+const DEFAULT_TTL_DAYS: Partial<Record<MemoryType, number>> = {
+  context_state: 14,
+};
+
+/**
+ * 相对天数 → 绝对过期时刻（T75 口径 5）。
+ *
+ * 提取侧只输出 `expires_in_days`，绝对日期一律在这里算：两条提取路径的 prompt 都没有
+ * "今天是几号"，让模型填 ISO 日期它只会照抄 few-shot 里的字面量，产出一个已经过去的
+ * 日期——叠加检索层的过期过滤，新记的记忆会一出生就过期且零报错。
+ *
+ * 落在当天**本地时** 23:59:59，而不是 UTC 午夜——后者在 UTC+8 下会提前 16 小时失效。
+ */
+function resolveExpiry(
+  type: MemoryType,
+  days: number | null | undefined,
+  now: Date,
+): Date | null {
+  const d = days ?? DEFAULT_TTL_DAYS[type] ?? null;
+  if (d == null || d <= 0) return null;
+  const at = new Date(now);
+  at.setDate(at.getDate() + d);
+  at.setHours(23, 59, 59, 999);
+  return at;
+}
+
 /**
  * Upsert 一条记忆。同 (user_id, type, entity) 则覆盖 content、累加 repetition_count
  * 并刷新 last_accessed_at；新 entity 则新建。
@@ -245,6 +289,8 @@ export async function upsertMemory(
     baseState,
   );
 
+  const expiresAt = resolveExpiry(candidate.type, candidate.expires_in_days, now);
+
   // 生成 embedding（偏好/习惯需要语义检索）
   // TODO: DeepSeek 无 embedding 端点（/v1/embeddings 404），暂跳过。
   // 后续可接 OpenAI text-embedding-3-small 或本地模型。
@@ -271,7 +317,7 @@ export async function upsertMemory(
       ${candidate.source_type ?? "explicit_user"},
       ${candidate.source_message_id ? `${candidate.source_message_id}` : null},
       ${candidate.source_text ?? null},
-      ${candidate.expires_at ? candidate.expires_at.toISOString() : null}::timestamptz,
+      ${expiresAt ? expiresAt.toISOString() : null}::timestamptz,
       ${now.toISOString()}::timestamptz,
       ${embParam}::vector,
       ${now.toISOString()}::timestamptz,
@@ -287,6 +333,7 @@ export async function upsertMemory(
       valid_to = NULL,
       source_message_id = COALESCE(EXCLUDED.source_message_id, "UserMemory".source_message_id),
       source_text = COALESCE(EXCLUDED.source_text, "UserMemory".source_text),
+      -- 用户重新提起一条临时状态 → TTL 顺延（"还在出差"），符合直觉
       expires_at = EXCLUDED.expires_at,
       embedding = COALESCE(${embParam}::vector, "UserMemory".embedding),
       updated_at = ${now.toISOString()}::timestamptz,
@@ -295,14 +342,6 @@ export async function upsertMemory(
   `;
 
   return attachScore(rows[0], now);
-}
-
-/** 刷新 last_accessed_at（每次注入或用户再提及时调用） */
-export async function updateAccessTime(memoryId: string): Promise<void> {
-  await prisma.$executeRaw`
-    UPDATE "UserMemory"
-    SET last_accessed_at = ${new Date().toISOString()}::timestamptz
-    WHERE id = ${memoryId}  `;
 }
 
 /** 作废阈值：低于此置信度只降权，不作废（T74 口径 2） */

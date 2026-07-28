@@ -1,0 +1,57 @@
+# T75：记忆时效（TTL 真正生效 + medical 豁免）。
+#
+# 背景：expires_at 字段 T54 就建了，但 attachScore/computeScore 硬编码只认 type=goal、
+# 检索 SQL 完全不看它——三重失效凑齐，一条自称"最近3天"的临时状态实测活了 42 天。
+# 锁三件事：
+# 1. 新记的临时状态带上 TTL，且**必须是未来时间**
+#    （提取 prompt 从不喂"今天是几号"。若哪天有人把 expires_in_days 改回让模型填绝对日期，
+#     它只会照抄 few-shot 里的字面量 → 新记的记忆一出生就过期、永不注入、且零报错。
+#     expires_future 就是这个失败模式的探针，别删。）
+# 2. 已过期的 context_state 不再进检索——AI 不该再提它
+# 3. medical 记忆挂着过期时间也照常注入（T74 口径 3 的底线；过期惩罚 × 0.2 会让 score 崩到
+#    0.17，decideStateWithFloor 只拦到 WEAK，而 WEAK 就已经不注入了——底线要守的是
+#    "不会自动停止注入"，不是"不会 ARCHIVED"）
+#
+# 新建那条**不写 entity**——真机实测提取器不复用【已有记忆】里的名字，同一件事会散成
+# business_trip / recent_business_trip / irregular_meals（entity 命名不稳定是另一个独立问题，
+# 不在 T75 范围）。这里断言的是"有一条 context_state 带着未来的 TTL"，不赌措辞。
+name: T75 记忆时效：TTL 写入 + 过期不注入 + medical 豁免
+setup:
+  memory:
+    - type: context_state
+      entity: business_trip
+      content: 出差中，三餐不规律
+      state: ACTIVE
+      expires_in_days: -1   # 昨天就过期了
+    - type: context_state
+      entity: stress_period
+      content: 压力期，夜间食欲增加
+      state: ACTIVE
+      expires_in_days: -1   # 同上，用来验证"过期的不再注入"
+    - type: constraint
+      entity: peanut
+      content: 花生过敏
+      importance_class: medical
+      llm_confidence: 0.95
+      state: ACTIVE
+      expires_in_days: -1   # 医疗类：挂了过期时间也不许失效
+turns:
+  # 新记的临时状态必须带上未来的 TTL
+  - say: "我最近又出差了，三餐不规律"
+    expect:
+      intent: chat
+      db:
+        memory:
+          - type: context_state
+            state: ACTIVE
+            expires_future: true
+
+  # 过期的压力期不该再被提；过敏必须还在（medical 豁免过期）
+  - say: "晚饭吃点什么好"
+    expect:
+      reply_forbid:
+        - "压力"
+      db:
+        memory:
+          - entity: peanut
+            state: ACTIVE
