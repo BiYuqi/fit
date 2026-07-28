@@ -1,0 +1,60 @@
+# T74：记忆失效通道（2026-07-27 真机，账号 outoftoken，一晚上三次"AI 说错用户的事实"）。
+#
+# 07-12 写进去的「最近3天排便不畅」到 07-27 还在 ACTIVE，用户当面否认两次，
+# 系统一个字段都没动——记忆只进不出。锁三件事：
+# 1. 纯否认能作废：不产生任何新事实的否认句也要能撤掉旧记忆（§5.5 只处理"新旧两条矛盾"，覆盖不到）
+# 2. 一句话可以既作废又创建：「我每天都有30分钟的羽毛球」同时否认"没做有氧"和建立"每天羽毛球"习惯
+# 3. 医疗类是硬底线：用户说"我不过敏了"也只降权不作废，ARCHIVED 只能由用户在记忆中心手动做
+#
+# 注意第 1、3 句一个陈述类关键词都不命中——它们是靠 DENIAL_KEYWORDS 才进得了 quickExtract 的，
+# 这条用例同时守着那张词表（删了它整个作废通道会静默失灵，且不会有任何报错）。
+name: T74 记忆失效：纯否认能作废 + 一句两件事 + 医疗类只降权
+setup:
+  memory:
+    - type: context_state
+      entity: recent_constipation
+      content: 最近3天排便不畅
+      state: ACTIVE
+    - type: context_state
+      entity: no_aerobic_exercise
+      content: 最近3天未进行有氧运动，仅进行了力量训练
+      state: ACTIVE
+    - type: constraint
+      entity: peanut
+      content: 花生过敏
+      importance_class: medical
+      llm_confidence: 0.95
+      state: ACTIVE
+turns:
+  # 纯否认：撤掉旧记忆，不产生新记忆
+  - say: "我排便正常了，你是不是记错了"
+    expect:
+      db:
+        memory:
+          - entity: recent_constipation
+            state: ARCHIVED
+            valid_to: true
+
+  # 一句话两件事：作废 no_aerobic_exercise + 新建 daily_badminton_30min habit
+  # 同时它是习惯陈述，不该建运动记录（T73 的那一层）
+  - say: "我每天都有30分钟的羽毛球"
+    expect:
+      intent: chat
+      db:
+        exercise_record_count: 0
+        memory:
+          - entity: no_aerobic_exercise
+            state: ARCHIVED
+            valid_to: true
+          - entity: daily_badminton_30min
+
+  # 医疗类硬底线：只降权，state 绝不能是 ARCHIVED，valid_to 必须还是空
+  - say: "我不过敏了，花生现在能吃"
+    expect:
+      db:
+        memory:
+          - entity: peanut
+            valid_to: false
+      reply_forbid:
+        # 不许承诺自己去删——医疗记忆只有用户能删（T73 的"不编造流程"同源）
+        - "帮你删|我来删|已经删|马上删|这就删"

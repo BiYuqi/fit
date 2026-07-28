@@ -9,8 +9,10 @@ import { callDeepSeek } from "../ai/client";
 import { prisma } from "../lib/prisma";
 import {
   upsertMemory,
+  invalidateMemory,
   loadActiveMemories,
   type ActiveMemory,
+  type MemoryGroups,
 } from "./memory-store";
 
 // ── 关键词预筛选词表（MEMORY_SPEC §4.2）──
@@ -41,9 +43,23 @@ export const CONSTRAINT_KEYWORDS = [
   "记住", "别忘了", "记下", "以后都", "下次都", "生重", "熟重", "熟的",
 ];
 
+/** 否认/结束信号词（T74）：作废通道的预筛选。
+ *
+ *  上面那张表全是"用户在**陈述**一个事实"的信号，而否认长成另一个样子——
+ *  「我排便正常了，你是不是记错了」一个词都不命中，quickExtract 根本不会被调起，
+ *  作废通道就永远等不到输入。这是 T74 真机验收第 1 条挂掉的直接原因。 */
+export const DENIAL_KEYWORDS = [
+  // 指出记忆错了
+  "记错", "搞错", "错了", "不对", "没有说", "我没说", "谁说",
+  // 状态已结束
+  "正常了", "好了", "痊愈", "康复", "不再", "已经不", "现在不", "早就",
+  "回来了", "结束了", "过去了", "停了", "戒掉了",
+];
+
 /** 异步 full 提取触发词：比约束词表宽，宁可松不可紧 */
 const FULL_TRIGGERS = [
   ...CONSTRAINT_KEYWORDS,
+  ...DENIAL_KEYWORDS,
   // 偏好/口味
   "不吃", "讨厌", "喜欢", "爱吃", "习惯", "一般", "通常", "总是",
   // 阶段性状态/目标
@@ -55,22 +71,64 @@ const FULL_TRIGGERS = [
 
 // ── LLM 输出 Zod Schema ──
 
+const MEMORY_TYPES = [
+  "constraint",
+  "preference",
+  "habit",
+  "context_state",
+  "goal",
+] as const;
+
 const MemoryCandidateSchema = z.object({
-  type: z.enum(["constraint", "preference", "habit", "context_state", "goal"]),
+  type: z.enum(MEMORY_TYPES),
   entity: z.string().min(1),
   content: z.string().min(1),
   llm_confidence: z.number().min(0).max(1),
   importance_class: z.enum(["medical", "strong", "normal", "casual"]),
-  action: z.enum(["create", "update"]).default("create"),
   source: z.string(),
   expires_at: z.string().nullable().optional(),
 });
 
+/** 作废通道（T74）：指向一条已有记忆，不携带 content——形状和"创建"根本不同，
+ *  塞进 candidates 会让两组字段互相 optional，模型更容易填错。 */
+const InvalidationSchema = z.object({
+  type: z.enum(MEMORY_TYPES),
+  entity: z.string().min(1),
+  reason: z.string(),
+  llm_confidence: z.number().min(0).max(1),
+});
+
+type Invalidation = z.infer<typeof InvalidationSchema>;
+
 const ExtractResultSchema = z.object({
   candidates: z.array(MemoryCandidateSchema).default([]),
+  invalidations: z.array(InvalidationSchema).default([]),
 });
 
 // ── LLM Prompts ──
+
+/**
+ * 作废通道说明（T74）——**同步和异步两份 prompt 共用这一段文本**。
+ * 拆成常量是刻意的：QUICK/FULL 是两份独立 prompt，历史上改一份忘另一份出过
+ * "异步能作废、同步不能"的不一致（见 t59 的教训）。作废规则只有这一处定义。
+ */
+const INVALIDATION_SECTION = `
+## 作废已有记忆
+用户可能在否认下方【已有记忆】里的某一条，或宣告某个状态已经结束。这时把它放进 invalidations。
+
+触发信号：
+- 直接否认："我排便正常了"、"你是不是记错了"、"早就好了"、"我没有不吃香菜"
+- 状态结束："出差回来了"、"备赛结束了"、"感冒好了"
+
+硬规则：
+1. entity **必须逐字来自下方【已有记忆】列表**，列表里没有的一律不输出——宁可漏一条，不许现编。
+2. 医疗类记忆（过敏/诊断/疾病）用户否认时也照常放进 invalidations——系统只会降权不会删除，不用你替它把关。
+3. 同一句话可以**既作废又创建**——两个数组都填，不要二选一。
+4. llm_confidence 按否认的明确程度给：明确否认 0.90+，含糊 0.70-0.85。
+
+例子（【已有记忆】里有 [context_state] recent_constipation 和 [context_state] no_aerobic_exercise 时）：
+- "我排便正常了，你是不是记错了" → invalidations:[{"type":"context_state","entity":"recent_constipation","reason":"我排便正常了","llm_confidence":0.95}]，candidates:[]
+- "我每天都有30分钟的羽毛球" → invalidations:[{"type":"context_state","entity":"no_aerobic_exercise","reason":"我每天都有30分钟的羽毛球","llm_confidence":0.92}]，**同时** candidates:[{"type":"habit","entity":"daily_badminton_30min","content":"每天30分钟羽毛球","llm_confidence":0.90,"importance_class":"normal","source":"我每天都有30分钟的羽毛球"}]`;
 
 /**
  * 约束提取 prompt：极轻量（~80 token），只提取 constraint 类型。
@@ -105,10 +163,10 @@ const QUICK_EXTRACT_PROMPT = `你是记忆提取器。用户正在告诉你关�
 - llm_confidence: 0.90+明确陈述, 0.80-0.89可能有修辞, 0.70-0.79不够明确, <0.70不输出
 - importance_class: 任何诊断/过敏都是medical, 明确强偏好是strong, 普通是normal, 随口是casual
 - entity 用 snake_case 英文，优先用受控词表，没有的新建
-- action: "create"（首次）或 "update"（修正已有）
+${INVALIDATION_SECTION}
 
-返回 JSON：{"candidates":[{"type":"...","entity":"...","content":"...","llm_confidence":0.9,"importance_class":"medical","action":"create","source":"..."}]}
-没有要记的返回 {"candidates":[]}`;
+返回 JSON：{"candidates":[{"type":"...","entity":"...","content":"...","llm_confidence":0.9,"importance_class":"medical","source":"..."}],"invalidations":[]}
+没有要记也没有要作废的返回 {"candidates":[],"invalidations":[]}`;
 
 /**
  * 完整提取 prompt：覆盖全部五种类型，含受控 entity 词表。
@@ -161,9 +219,8 @@ cilantro(香菜), spicy(辣), peanut(花生), seafood(海鲜), dairy(乳制品),
 2. 句子主语是"我"（人）→ 可能提取；主语是"这个/那个"（食物/事情）→ 不提取
 3. 不推断、不猜测、不脑补用户没说的话
 4. entity 优先用上方受控词表，没有的才新建 snake_case 英文
-5. action: 如同 entity+type 出现在已有记忆中→"update"，否则→"create"
-6. importance_class: medical(安全/医疗), strong(重要偏好/强习惯), normal(普通), casual(随口)
-7. expires_at 仅 type=goal 且用户给了时间限定时填写 ISO date，否则 null
+5. importance_class: medical(安全/医疗), strong(重要偏好/强习惯), normal(普通), casual(随口)
+6. expires_at 仅 type=goal 且用户给了时间限定时填写 ISO date，否则 null
 
 ## 绝不提取
 - 单次食物评价("这个面太油了")
@@ -174,10 +231,23 @@ cilantro(香菜), spicy(辣), peanut(花生), seafood(海鲜), dairy(乳制品),
 - 聊天寒暄("谢谢"、"哈哈")
 - 引用他人("我朋友说碳水不好")
 - 饮食记录本身("中午吃了一碗面")
+${INVALIDATION_SECTION}
 
-返回 JSON：{"candidates":[{...}]}`;
+返回 JSON：{"candidates":[{...}],"invalidations":[{...}]}`;
 
 // ── Helpers ──
+
+/** 渲染【已有记忆】段落——去重用，也是作废通道的候选来源（entity 只能从这里挑） */
+function renderExistingSection(memories: MemoryGroups): string {
+  const summaries = [
+    ...memories.constraints.map((m) => `[constraint] ${m.entity}: ${m.content}`),
+    ...memories.contextGoals.map((m) => `[${m.type}] ${m.entity}: ${m.content}`),
+    ...memories.prefsHabits.map((m) => `[${m.type}] ${m.entity}: ${m.content}`),
+  ].slice(0, 10);
+
+  if (summaries.length === 0) return "";
+  return `\n## 已有记忆（去重 + 作废的唯一候选来源，最多10条）\n${summaries.join("\n")}`;
+}
 
 /** 从 LLM 文本回复中提取 JSON */
 function extractJson(text: string): object | null {
@@ -192,65 +262,126 @@ function extractJson(text: string): object | null {
 
 // ── Quick Extraction（同步，T55/T56）──
 
+export interface QuickExtractResult {
+  /** 本轮写入/更新的记忆（chat.ts 本轮立即可用） */
+  memories: ActiveMemory[];
+  /** 用户否认了但因为是医疗类而**只降权没作废**的记忆 content——供回复引导用户手动删 */
+  medicalDenials: string[];
+}
+
+const EMPTY_QUICK: QuickExtractResult = { memories: [], medicalDenials: [] };
+
 /**
- * 关键词命中 → 调 DeepSeek flash 提取所有五类用户特征 → 写入 user_memory。
- * 返回写入的 memory 列表（供 chat.ts 本轮立即使用）。
+ * 关键词命中 → 调 DeepSeek flash 提取所有五类用户特征 + 作废信号 → 写入 user_memory。
  *
  * 不再只提 constraint——用户说的任何关于自己的事实都值得记住。
- * 关键词未命中直接返回 []，零 LLM 调用。
- * LLM 调用失败静默返回 []，不影响主流程。
+ * 作废走同步路径（T74 口径 4）：用户说"你记错了"之后下一句就可能重问同一个问题，
+ * 异步 fullExtract 在响应返回后才跑，会导致同一轮对话里 AI 再说一遍错话。
+ *
+ * 关键词未命中直接返回空，零 LLM 调用。LLM 调用失败静默返回空，不影响主流程。
  */
 export async function quickExtract(
   text: string,
   userId: string,
-): Promise<ActiveMemory[]> {
+): Promise<QuickExtractResult> {
   // 第一层：关键词预筛选（< 0.1ms）
-  const hit = CONSTRAINT_KEYWORDS.some((kw) => text.includes(kw));
-  if (!hit) return [];
+  if (!hasMemorySignal(text)) return EMPTY_QUICK;
 
   try {
+    // 作废必须知道有哪些记忆可作废——同步路径也要喂已有记忆（多一次 DB 查询，可接受）
+    const activeMemories = await loadActiveMemories(userId);
+
     const res = await callDeepSeek(
       [
-        { role: "system", content: QUICK_EXTRACT_PROMPT },
+        {
+          role: "system",
+          content: QUICK_EXTRACT_PROMPT + renderExistingSection(activeMemories),
+        },
         { role: "user", content: text },
       ],
       { model: "deepseek-v4-flash" },
     );
 
     const raw = res.choices[0]?.message?.content;
-    if (!raw) return [];
+    if (!raw) return EMPTY_QUICK;
 
     const json = extractJson(raw);
-    if (!json) return [];
+    if (!json) return EMPTY_QUICK;
 
     const parsed = ExtractResultSchema.safeParse(json);
     if (!parsed.success) {
       console.warn("quickExtract: zod validation failed", parsed.error.flatten());
-      return [];
+      return EMPTY_QUICK;
     }
 
-    const results: ActiveMemory[] = [];
+    // 先作废后创建：同一句话里"作废旧的 + 新建同 entity 的"顺序反了会被自己刚建的行挡住
+    const medicalDenials = await applyInvalidations(
+      userId,
+      parsed.data.invalidations,
+      activeMemories,
+      "quickExtract",
+    );
+
+    const memories: ActiveMemory[] = [];
     for (const c of parsed.data.candidates) {
       try {
-        const mem = await upsertMemory(userId, {
-          type: c.type,
-          entity: c.entity,
-          content: c.content,
-          llm_confidence: c.llm_confidence,
-          importance_class: c.importance_class,
-          source_text: c.source,
-          expires_at: c.expires_at ? new Date(c.expires_at) : null,
-        });
-        results.push(mem);
+        memories.push(
+          await upsertMemory(userId, {
+            type: c.type,
+            entity: c.entity,
+            content: c.content,
+            llm_confidence: c.llm_confidence,
+            importance_class: c.importance_class,
+            source_text: c.source,
+            expires_at: c.expires_at ? new Date(c.expires_at) : null,
+          }),
+        );
       } catch (err) {
         console.warn("quickExtract: upsert failed for", c.entity, err);
       }
     }
-    return results;
+    return { memories, medicalDenials };
   } catch (err) {
     console.warn("quickExtract: LLM call failed", err);
-    return [];
+    return EMPTY_QUICK;
   }
+}
+
+/**
+ * 执行 invalidations，返回"因医疗类而只降权没作废"的记忆 content 列表。
+ * 单条失败静默吞掉——记忆是增强不是主流程。
+ */
+async function applyInvalidations(
+  userId: string,
+  invalidations: Invalidation[],
+  known: MemoryGroups,
+  logPrefix: string,
+): Promise<string[]> {
+  if (invalidations.length === 0) return [];
+
+  const all = [...known.constraints, ...known.contextGoals, ...known.prefsHabits];
+  const medicalDenials: string[] = [];
+
+  for (const inv of invalidations) {
+    const target = all.find((m) => m.type === inv.type && m.entity === inv.entity);
+    // 模型现编了一个不在列表里的 entity → 直接忽略，不去库里碰运气
+    if (!target) {
+      console.warn(`${logPrefix}: invalidation entity not in fed list, ignored`, inv.entity);
+      continue;
+    }
+    try {
+      const result = await invalidateMemory(userId, inv.type, inv.entity, {
+        reason: inv.reason,
+        llmConfidence: inv.llm_confidence,
+      });
+      if (result === "demoted" && target.importance_class === "medical") {
+        medicalDenials.push(target.content);
+      }
+    } catch (err) {
+      console.warn(`${logPrefix}: invalidate failed for`, inv.entity, err);
+    }
+  }
+  return medicalDenials;
 }
 
 // ── Full Extraction（异步，MEMORY_SPEC §4.1 异步路径）──
@@ -279,25 +410,11 @@ export async function fullExtract(userId: string): Promise<void> {
     const hit = FULL_TRIGGERS.some((kw) => combined.includes(kw));
     if (!hit) return;
 
-    // 3. 取已有 ACTIVE 记忆摘要（去重用，最多 10 条）
+    // 3. 取已有 ACTIVE 记忆摘要（去重 + 作废候选，最多 10 条）
     const activeMemories = await loadActiveMemories(userId);
-    const memorySummaries = [
-      ...activeMemories.constraints.map(
-        (m) => `[constraint] ${m.entity}: ${m.content}`,
-      ),
-      ...activeMemories.contextGoals.map(
-        (m) => `[${m.type}] ${m.entity}: ${m.content}`,
-      ),
-      ...activeMemories.prefsHabits.map(
-        (m) => `[${m.type}] ${m.entity}: ${m.content}`,
-      ),
-    ].slice(0, 10);
 
     // 4. 组装 prompt：已有记忆摘要 + 最近用户消息
-    const existingSection =
-      memorySummaries.length > 0
-        ? `\n## 已有记忆（用于去重，最多10条）\n${memorySummaries.join("\n")}`
-        : "";
+    const existingSection = renderExistingSection(activeMemories);
 
     const userMessages = recentMessages
       .reverse()
@@ -324,9 +441,17 @@ export async function fullExtract(userId: string): Promise<void> {
       return;
     }
 
+    // 5. 先作废后创建（同 quickExtract：顺序反了会被自己刚建的行挡住）
+    await applyInvalidations(
+      userId,
+      parsed.data.invalidations,
+      activeMemories,
+      "fullExtract",
+    );
+
     if (!parsed.data.candidates.length) return;
 
-    // 5. 逐个写入（Scoring Engine 在 upsertMemory 内部调用）
+    // 6. 逐个写入（Scoring Engine 在 upsertMemory 内部调用）
     for (const c of parsed.data.candidates) {
       try {
         await upsertMemory(userId, {
@@ -348,7 +473,11 @@ export async function fullExtract(userId: string): Promise<void> {
   }
 }
 
-/** 检查文本是否命中约束关键词（供 chat.ts 快速判断） */
-export function hasConstraintKeyword(text: string): boolean {
-  return CONSTRAINT_KEYWORDS.some((kw) => text.includes(kw));
+/** 文本是否含记忆信号——陈述（CONSTRAINT_KEYWORDS）或否认（DENIAL_KEYWORDS）。
+ *  quickExtract 与 chat.ts 的同一道闸门，只有这一处定义。 */
+export function hasMemorySignal(text: string): boolean {
+  return (
+    CONSTRAINT_KEYWORDS.some((kw) => text.includes(kw)) ||
+    DENIAL_KEYWORDS.some((kw) => text.includes(kw))
+  );
 }

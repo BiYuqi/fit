@@ -1,6 +1,6 @@
 # T74 — 记忆失效通道：只进不出，用户否认了也撤不掉（记忆时效 M2）
 
-**状态**：⬜待办　　**优先级：本轨最高**（今晚三次"AI 说错用户的事实"是同一个根因）
+**状态**：✅完成（2026-07-28）　　**优先级：本轨最高**（今晚三次"AI 说错用户的事实"是同一个根因）
 
 **目标**：语义记忆系统当前是**纯 append**——没有任何代码路径能让一条记忆因为"用户否认了"或"状态早就过去了"而失效。`MEMORY_SPEC §5.5 冲突处理`把算法写完整了，T54/T55/T56 三个任务**从来没实现过它**；表里 `valid_to` 字段留着（T54 地基建的洞），**至今零写入**。本任务把 §5.5 落地，并补上规范没覆盖的"纯否认"场景。
 
@@ -164,6 +164,68 @@ export async function invalidateMemory(
 8. 迁移脚本在真实库上跑通，现有同 entity 多行的被正确合并（**先 `pg_dump` 备份**）
 9. `npm run eval` 不退化（记忆注入会改变 chat 上下文，必须回归）
 10. `MEMORY_SPEC.md` §5.5 加实现注记、§11 已知盲区更新（"记忆只进不出"从盲区里划掉）
+
+## 落地记录（2026-07-28）
+
+### 任务文件漏掉的两层
+
+**1. 预筛选拦在了作废通道前面（验收第 1 条直接挂）**
+
+`CONSTRAINT_KEYWORDS` 整张表描述的都是"用户在**陈述**一个事实"（过敏/诊断/口味/习惯/状态），而否认长成另一个样子。第一次跑验收：
+
+```
+❌ 1 作废 recent_constipation — state=ACTIVE valid_to=null
+```
+
+原因不是作废逻辑不对，是「我排便正常了，你是不是记错了」**一个关键词都不命中**——`chat.ts` 那道 `CONSTRAINT_KEYWORDS.some(...)` 闸门直接把这句挡在门外，`quickExtract` 压根没被调起。作废通道再完备，输入端是断的。
+
+补了并列的 `DENIAL_KEYWORDS`（记错/搞错/正常了/早就/痊愈/结束了/回来了/…），两张表合成唯一闸门 `hasMemorySignal()`。`hasConstraintKeyword()` 按铁律 12 直接改名不留别名，`chat.ts` 里那份重复的关键词判断也一并收进这个函数（原来 chat.ts 和 quickExtract 各判一次）。
+
+**2. 口径 3 的"只降权"守不住（验收第 4 条第二次跑才暴露）**
+
+第一次跑绿、第二次跑红：
+
+```
+❌ 4 medical 只降权不作废 — state=ARCHIVED conf=0.2375
+```
+
+同一句否认会被处理**两次**——同步 `quickExtract` 一次，异步 `fullExtract` 读最近 5 条用户消息时又一次。置信度每次折半：0.95 → 0.475 → 0.2375，score = 0.2375 × 1.0 × 1.3 × 0.70 = 0.216，`decideState` 判 ARCHIVED。**"医疗类绝不自动作废"这条硬底线，实际是靠"这个函数只会被调一次"守着的，而它会被调两次。**
+
+而且就算只调一次，凌晨 3 点的 `recalcAndPrune` cron 会拿折半后的置信度重算，照样把它推进 ARCHIVED——底线在三个不同的写 state 路径上各漏一次。
+
+修法是把底线收进一个函数而不是散在调用点：`decideStateWithFloor(type, importance_class, score, current)`，medical 的判定结果为 ARCHIVED 时兜回 WEAK。三处写 state 的自动路径（`upsertMemory` / `invalidateMemory` / `recalcAndPrune`）全部改走它，`memory-store.ts` 不再直接 import `decideState`。另加 `MEDICAL_CONFIDENCE_FLOOR = 0.30` 防止置信度被反复否认磨到 0。
+
+> 顺带修掉一个连带 bug：`invalidateMemory` 的降权分支原本会让"医疗记忆被否认"这件事**依赖调用次数**产生不同结果，属于典型的"能跑但不对"。现在跑三遍验收结果稳定。
+
+### 与任务文件不一致的地方
+
+- **§C 的数据迁移写的是"其余 state='ARCHIVED' + valid_to=now()"，做不到**。唯一约束不区分 state，留着任何一行重复都建不出新索引，只能物理删除。实际影响为零：全库扫下来只有一组重复，是 `_system` 那两行（`setMemoryPaused` 的暂停标记，无用户价值）。顺带说明：这两行的存在本身就是 bug——`isMemoryPaused` 用 `LIMIT 1` 无排序读，暂停状态是不确定的，收窄冲突键后自然修好。
+- **§A.4 的 `candidate.action` 选了"删掉"**：冲突键收成 entity 级之后，create/update 由 `ON CONFLICT` 自己决定，模型报的 `action` 没有任何读取方。schema 和两份 prompt 里都已移除（铁律 12：不留永远没人读的字段）。
+- **§E 说 prompt 里"medical 不要输出到 invalidations"——反了，已改成让模型照常输出**。第一版按任务文件写，结果验收第 4 条根本走不到降权分支：模型老老实实不报医疗否认，`invalidateMemory` 收不到输入，记忆一动不动（`state=ACTIVE conf=0.95`），而 AI 自己在回复里编了个"你直接说'帮我把花生过敏删掉'我就处理"的不存在流程。把把关放回代码（prompt 只负责报信号，代码负责拒绝作废），降权和【记忆提示】才真正跑起来。
+
+### 口径 3 的"引导用户去记忆中心"怎么接的
+
+`quickExtract` 返回 `{ memories, medicalDenials }`，`chat.ts` 把 `medicalDenials` 写进 `pack.memory_notice`，`ctx.ts` 渲染成【记忆提示】注入。真机回复：
+
+> 过敏这事得医生说了算，自己感觉"不过敏了"不能当安全依据——万一再吃出事就麻烦了 😅　如果医生确实确认你不再对花生过敏，可以去「我的 - 记忆中心」手动删掉那条花生过敏记录。
+
+### 验收结果
+
+1–7 全绿，连跑 3 次稳定（一次性验收脚本：注册临时账号 → 种上 outoftoken 那三条记忆 → 打真实 HTTP → 直查库；跑完已删，持久回归覆盖见下）。第 3 条的断言在第一次跑后收紧过：原写法禁"排便"二字，但作废生效后 AI 说的是"排便正常不代表不胀气"——**附和用户刚说的纠正是正确行为**，失败模式应该是"继续拿旧记忆当事实说"（排便不畅/便秘）。改成禁这些说法，并直接查 `loadActiveMemories` 确认注入源里已经没有这条。
+
+第 8 条（迁移在真实库跑通）：已 `pg_dump` 备份 `UserMemory` 后执行，91 → 90 行，删掉的是重复的 `_system` 行。第 10 条见 `MEMORY_SPEC §5.5 实现注记` + §6 + §11。
+
+第 9 条（`npm run eval` 不退化）：27 个用例里 25 个全绿，`modify-disambig` 挂了 2 轮——单独复跑 3 次是 2 过 1 挂，属于既有抖动（失败形态正是 `modify-disambig-recent` 那个"模型高置信选早的那条"，T74 没碰 modify 任何代码）。**这不是本任务修好的，是本任务没弄坏的**，抖动本身仍是未了债。
+
+第 F 条（脏数据 + 回归用例）：`outoftoken` 的 `diarrhea` / `recent_constipation` / `no_aerobic_exercise` 三条已走 `invalidateMemory` 真实代码路径作废（`state=ARCHIVED` + `valid_to` 已填 + 原话进 `source_text`），没有往用户的聊天记录里灌测试消息。回归用例 `eval/cases/memory-invalidation.yaml` 覆盖三件事：纯否认能作废、一句话既作废又创建、医疗类只降权且不许 AI 承诺代删。为此给 eval 框架加了 `setup.memory`（种已有记忆）和 `db.memory` 断言（state / valid_to / absent）。连跑 2 次全绿。
+
+> 这条用例还顺带守着 `DENIAL_KEYWORDS`：里面第 1、3 句一个陈述类关键词都不命中，词表被删掉的话整个作废通道会**静默失灵且不报任何错**。
+
+### 遗留（不在本任务修）
+
+- **`symptom_incomplete_defecation`「排便不尽感」仍是 ACTIVE**。用户说的「我排便正常了」在语义上也否认了它，但它是 `constraint/medical`，按口径 3 只能降权不能自动删。真实对话里会被降权 + 提示用户去记忆中心，这里没替用户动他的医疗记录。
+- **`daily_badminton_30min` 还是 WEAK**（score 0.536 < ACTIVE_UP 0.58），仍进不了注入。这正是 T75 的标定问题，本任务按约定不碰阈值。
+- **`repetition_count` 被同步+异步双路径重复累加**：说一次"不吃香菜"可能记成 rep=2。这是 T54 起就有的行为（`fullExtract` 每轮重读最近 5 条消息），`MEMORY_SPEC §6` 写的"24h 内同 entity 多次提及只计一次"从未实现。本任务只是让它更早显形（state 写入时就按真实 rep 算，不再等凌晨 cron 补），**没有引入新的膨胀**。T75 标定前需要先决定这个 24h 去重做不做。
 
 ## 提示词
 

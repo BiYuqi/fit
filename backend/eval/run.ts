@@ -22,6 +22,11 @@ interface EvalCase {
     food_record?: Array<{ days_ago: number; food: string; grams: number; meal_type?: string }>;
     // 体重趋势查询：种历史体重实测点（days_ago 相对今天，1=昨天）
     weight_log?: Array<{ days_ago: number; kg: number }>;
+    // T74：种已有语义记忆（作废通道必须有东西可作废）
+    memory?: Array<{
+      type: string; entity: string; content: string;
+      state?: string; llm_confidence?: number; importance_class?: string;
+    }>;
   };
   turns: Turn[];
 }
@@ -49,6 +54,11 @@ interface Expect {
     weight_chart?: { points?: number; kgs?: number[] }; // 最近一张 weight_chart 卡的折线点断言
     weight_log?: { weight_kg?: number }; // 最近一个体重历史点（record_weight 写入）
     user?: { weight_kg?: number }; // 档案字段断言：record_weight 绝不能改初始体重
+    // T74：语义记忆断言。state 省略时只断言"这条存在"；absent=true 断言这条根本没建
+    memory?: Array<{
+      entity: string; type?: string; state?: string;
+      valid_to?: boolean; absent?: boolean;
+    }>;
   };
 }
 
@@ -119,6 +129,18 @@ async function runSetup(userId: string, setup: EvalCase["setup"]) {
     touchedDates.add(dateStr);
   }
   for (const d of touchedDates) await recompute(userId, d);
+
+  // 种已有语义记忆（T74 作废通道：得先有 ACTIVE 记忆才谈得上作废）
+  for (const m of setup?.memory ?? []) {
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO "UserMemory"
+       (id,user_id,type,entity,content,llm_confidence,importance_class,repetition_count,state,
+        source_type,valid_from,last_accessed_at,updated_at)
+       VALUES (gen_random_uuid(),$1,$2,$3,$4,$5,$6,1,$7,'explicit_user',now(),now(),now())`,
+      userId, m.type, m.entity, m.content,
+      m.llm_confidence ?? 0.9, m.importance_class ?? "normal", m.state ?? "ACTIVE",
+    );
+  }
 
   // 种历史体重实测点（同 record_weight 的落库口径：每日一行，覆盖式）
   for (const w of setup?.weight_log ?? []) {
@@ -292,6 +314,28 @@ async function assertTurn(userId: string, turn: Turn, resp: { intent?: string; r
     if (!wl) failures.push({ what: "weight_log", expected: db.weight_log.weight_kg ?? "(存在)", actual: "无" });
     else if (db.weight_log.weight_kg !== undefined && Number(wl.weight_kg) !== db.weight_log.weight_kg) {
       failures.push({ what: "weight_log.weight_kg", expected: db.weight_log.weight_kg, actual: Number(wl.weight_kg) });
+    }
+  }
+  for (const m of db?.memory ?? []) {
+    const rows = await prisma.$queryRawUnsafe<any[]>(
+      `SELECT type, entity, state, valid_to FROM "UserMemory" WHERE user_id=$1 AND entity=$2` +
+        (m.type ? ` AND type='${m.type}'` : ""),
+      userId, m.entity,
+    );
+    const row = rows[0];
+    if (m.absent) {
+      if (row) failures.push({ what: `memory(${m.entity})`, expected: "不该建", actual: `${row.type}/${row.state}` });
+      continue;
+    }
+    if (!row) {
+      failures.push({ what: `memory(${m.entity})`, expected: m.state ?? "(存在)", actual: "无此记忆" });
+      continue;
+    }
+    if (m.state !== undefined && row.state !== m.state) {
+      failures.push({ what: `memory(${m.entity}).state`, expected: m.state, actual: row.state });
+    }
+    if (m.valid_to !== undefined && (row.valid_to != null) !== m.valid_to) {
+      failures.push({ what: `memory(${m.entity}).valid_to`, expected: m.valid_to ? "非空" : "空", actual: row.valid_to ?? "null" });
     }
   }
   if (db?.user !== undefined) {

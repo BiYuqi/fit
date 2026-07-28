@@ -541,6 +541,35 @@ opposite → 冲突：
 
 注意：语义比较是 scoring engine 在写入前专门调的一次极轻量判断（单条 ~100 token），不是 extraction 时顺手做的。extraction 只负责提取事实，不负责比较。
 
+#### 实现注记（T74，2026-07-28）——实际走的不是上面的 Step 1/2
+
+上面的 Step 1/2 保留为设计记录，**代码没有按它实现**，且不打算实现。实际落地的是两件事：
+
+**1. entity 级 upsert 取代"语义比较"**。冲突键从 `(user_id, type, entity, content)` 收窄到 `(user_id, type, entity)`（migration `20260728010000_t74_memory_entity_unique`）。同 entity 的新措辞直接 `DO UPDATE` 覆盖 `content`、累加 `repetition_count`——「最近3天排便不畅」和「排便已恢复正常」不再是两行互相打架。Step 1 那次 LLM 语义比较因此变成纯增量成本（往调用链里加不是往外减，与 T63 否掉 Router+Specialist 同理），不做。
+
+**2. 显式 `invalidations` 通道取代"opposite 分派"**。§5.5 只处理"新旧两条矛盾"，覆盖不了**纯否认**——「我排便正常了，你是不是记错了」否定一条旧记忆但不产生任何值得存的新事实，走 §5.5 会退化成"提取不出候选 → 什么都不做"。所以提取输出新增与 `candidates` 并列的 `invalidations` 数组，形状是"指向哪条已有记忆"而非"存什么内容"：
+
+```ts
+{ type, entity, reason, llm_confidence }   // entity 必须来自喂给模型的【已有记忆】列表
+```
+
+处理规则（`invalidateMemory()`，`memory-store.ts`）：
+
+| 情况 | 结果 |
+|---|---|
+| `importance_class = 'medical'` | **只降权**（`llm_confidence` 折半，地板 0.30），返回 `demoted` |
+| `llm_confidence < 0.80` | 同上，返回 `demoted` |
+| 其余 | `valid_to = now()` + `state = 'ARCHIVED'`，`source_text` 追加原话，返回 `invalidated` |
+| entity 不在喂进去的列表里 | `not_found`，静默忽略（防模型幻觉抹掉真记忆） |
+
+`valid_to` 至此才有第一个写入方——T54 建的这个字段在 T74 之前零写入。ARCHIVED 后 90 天由 `deleteExpiredMemories` 周 cron 自然清理，期间用户在记忆中心仍能看到。
+
+**医疗地板是硬底线**：`decideStateWithFloor()` 保证 `medical` 记忆**任何自动路径**（作废降权、每日 recalc cron、写入时定状态）都只能降到 `WEAK`，`ARCHIVED` 只有用户在记忆中心手动做。LLM 分不清"我不过敏了"和"我这次吃了没过敏"，误删一条花生过敏和误删一条"最近出差"差着几个数量级。发生降权时，本轮回复会带一条【记忆提示】引导用户去记忆中心手动删。
+
+**作废走同步路径**（`quickExtract`）：用户说"你记错了"之后下一句就可能重问同一个问题，异步 `fullExtract` 在响应返回后才跑，会导致同一轮对话里 AI 再说一遍错话。代价是 `quickExtract` 也要 `loadActiveMemories` 一次（作废必须知道有哪些记忆可作废）。
+
+**预筛选也得改**：`CONSTRAINT_KEYWORDS` 整张表描述的都是"用户在**陈述**一个事实"，否认长成另一个样子——「我排便正常了，你是不是记错了」一个词都不命中，`quickExtract` 根本不会被调起。因此新增并列的 `DENIAL_KEYWORDS`（记错/正常了/早就/结束了/…），两张表合成一道闸门 `hasMemorySignal()`。
+
 ## 6. 存储模型
 
 ```sql
@@ -576,9 +605,10 @@ CREATE TABLE user_memory (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   last_accessed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 
-  UNIQUE (user_id, type, entity, content)
-  -- 同用户、同类型、同实体、但内容实质性不同（如"不吃香菜"preference + "在尝试接受香菜"goal）可以共存
-  -- 去重逻辑由应用层的 scoring engine 在写入前处理：同 (user_id, type, entity) 且语义相近 → update；语义相反 → 冲突处理（§5.5）
+  UNIQUE (user_id, type, entity)
+  -- T74 起收窄（原为含 content 的四元组）：同 entity 只留一行，新措辞覆盖旧措辞。
+  -- 含 content 的旧键会让「最近3天排便不畅」和「排便已恢复正常」变成两条独立的行——
+  -- repetition_count 不累加、旧措辞永远留在库里和新的打架。实现注记见 §5.5。
   -- 冲突 replace 时：旧记忆设 valid_to = now()，新记忆设 valid_from = now()——保留用户变化轨迹
 );
 
@@ -594,7 +624,7 @@ CREATE INDEX idx_user_memory_embedding ON user_memory
 ```
 
 设计要点：
-- 不用 `key` 字段，改用 `(user_id, type, entity, content)` 联合唯一约束——允许同 entity 不同内容共存（如"不吃香菜"preference + "在尝试接受香菜"goal），去重由应用层 scoring engine 处理
+- 不用 `key` 字段，改用 `(user_id, type, entity)` 联合唯一约束——同 type 同 entity 只留一行，新措辞覆盖旧措辞（T74 收窄，理由见 §5.5 实现注记）。跨 type 仍可共存（如"不吃香菜"preference + "在尝试接受香菜"goal）
 - 不用 `ttl_days`，衰减由 scoring engine 的 decay 函数统一管理
 - 不用 `structured` jsonb（当前数据规模不需要结构化子字段）
 - `state` 取值 ACTIVE / WEAK / ARCHIVED，带双阈值滞回防止震荡
@@ -602,7 +632,7 @@ CREATE INDEX idx_user_memory_embedding ON user_memory
 - `score` **不落库**——检索时在应用层实时计算（纯数学，极快）。只在跨阈值边界时写 `state`，避免每次检索触发全量 UPDATE 写放大
 - `importance_class` LLM 只做语义分类（medical/strong/normal/casual），系统做确定性数值映射（1.3/1.1/1.0/0.85）——避免 LLM 连续值方差破坏评分引擎确定性
 - `source_type` 预埋——v1 只有 explicit_user，后续行为推断走 implicit_behavior/system_inferred
-- `valid_from` / `valid_to` 保留用户变化轨迹——冲突时不删旧记忆，标注有效时间区间
+- `valid_from` / `valid_to` 保留用户变化轨迹——冲突时不删旧记忆，标注有效时间区间。`valid_to` 的唯一写入方是 T74 的作废通道（`invalidateMemory`）
 - **审计追溯**：`source_message_id` + `source_text` + `llm_confidence` + `importance_class` + `created_at` 五字段构成完整审计链，线上出现"为什么 AI 觉得我不吃早餐"时可直接定位到原始消息和提取参数，无需翻聊天记录
 - `embedding` 使用 DeepSeek embedding 模型（1024 维），与 LLM 提取同供应商，降低延迟和成本
 
@@ -818,7 +848,7 @@ ACTIVE_UP 阶梯：constraint(0.48) < preference(0.55) = context_state(0.55) < h
 
 - **intervention_memory（干预记忆）**：AI 教练最核心的能力缺口。记录"什么方法对这个用户有效/无效"——早餐增加蛋白后执行率提高、晚上碳水太多导致宵夜、运动日需要额外加餐。这不再是"用户是谁"，而是"怎么带这个人瘦"。需要独立的记忆类型、评分体系和检索策略。详见下文。
 - **行为推断**：从食物记录推断偏好（用户从不点辣 → 可能不吃辣）。需要 source_type=implicit_behavior，置信度远低于 explicit_user。
-- **行为反馈闭环**：检测记忆与食物记录的矛盾（"不吃香菜"但记录了香菜 → 提示用户确认或自动降权）。当前记忆和 food_record 不互读。
+- **行为反馈闭环**：检测记忆与食物记录的矛盾（"不吃香菜"但记录了香菜 → 提示用户确认或自动降权）。当前记忆和 food_record 不互读。注意区分：**用户在对话里明说的否认**（"我排便正常了"）T74 已经能作废了，这里说的是**从行为数据里自己发现**矛盾，仍未做。
 - **clustering / taxonomy**：entity 的层级归类（香菜→蔬菜→植物）。当前数据规模不需要。
 - **记忆图谱**：实体间关系（"香菜"和"凉拌菜"的关联）。过重。
 - **用户人格建模**：从偏好集合推断饮食人格（"清淡型"/"重口型"）。有趣但过早。

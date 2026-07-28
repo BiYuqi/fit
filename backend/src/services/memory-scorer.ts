@@ -128,6 +128,26 @@ export function decideState(
   return "WEAK";
 }
 
+/**
+ * 带医疗地板的状态判定（T74 口径 3）。
+ *
+ * `importance_class = 'medical'`（过敏/诊断）的记忆，**任何自动机制都只能降到 WEAK**——
+ * 作废/降权、每日 recalc cron 都不许把它判成 ARCHIVED。误删一条"花生过敏"和误删一条
+ * "最近出差"差着几个数量级，ARCHIVED 只能由用户在记忆中心手动做。
+ *
+ * 所有会写 state 的自动路径都必须走这个函数，不要直接用 decideState。
+ */
+export function decideStateWithFloor(
+  type: MemoryType,
+  importanceClass: ImportanceClass,
+  score: number,
+  currentState: MemoryState,
+): MemoryState {
+  const next = decideState(type, score, currentState);
+  if (importanceClass === "medical" && next === "ARCHIVED") return "WEAK";
+  return next;
+}
+
 // ── 工具函数 ──
 export function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));

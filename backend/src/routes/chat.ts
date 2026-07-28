@@ -14,7 +14,7 @@ import { handleRecord } from "../services/intents/record";
 import { handleResolvePending } from "../services/intents/resolve-pending";
 import { handleRecordWeight } from "../services/intents/record-weight";
 import type { IntentCtx } from "../services/intents/types";
-import { quickExtract, fullExtract, CONSTRAINT_KEYWORDS } from "../services/memory-extract";
+import { quickExtract, fullExtract, hasMemorySignal } from "../services/memory-extract";
 import { isMemoryPaused } from "../services/memory-store";
 
 // ---------- 请求 schema ----------
@@ -54,9 +54,10 @@ export async function chatRoutes(app: FastifyInstance) {
     // 必须 await：constraint 写入后才 buildMemoryPack，否则本轮注入不到刚提取的约束
     // 暂停记忆提取时跳过（T56 pause toggle）
     const memoryPaused = await isMemoryPaused(user_id).catch(() => false);
-    if (!memoryPaused && CONSTRAINT_KEYWORDS.some((kw) => text.includes(kw))) {
+    let medicalDenials: string[] = [];
+    if (!memoryPaused && hasMemorySignal(text)) {
       try {
-        await quickExtract(text, user_id);
+        medicalDenials = (await quickExtract(text, user_id)).medicalDenials;
       } catch (err) {
         console.warn("chat: quickExtract failed", err);
       }
@@ -66,6 +67,11 @@ export async function chatRoutes(app: FastifyInstance) {
     // 此刻本条消息尚未写 ai_parse_log / food_record，记忆包反映的是「本条之前」状态，正合语义
     // 注意：buildMemoryPack 内部调用 loadActiveMemories，会读到上面刚写入的 constraint
     const pack = await buildMemoryPack(user_id);
+
+    // 用户否认了一条医疗类记忆：系统只降权不自动删（T74 口径 3），让 AI 在回复里说清楚
+    if (medicalDenials.length > 0) {
+      pack.memory_notice = `用户刚刚否认了这条医疗类记忆：「${medicalDenials.join("」「")}」。医疗/过敏类记忆不会自动删除（误删代价太大），请在回复里顺带告诉用户可以去「我的-记忆中心」手动删掉它。`;
+    }
 
     // ── 语义记忆：异步 full 提取（MEMORY_SPEC §4.1，T55）──
     // 响应返回后跑，不阻塞主流程；失败静默；暂停时跳过

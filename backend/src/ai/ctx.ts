@@ -117,6 +117,7 @@ export function compressContext(pack: MemoryPack): string {
     const memSection = renderMemorySection(pack.active_memories);
     if (memSection) lines.push(memSection);
   }
+  if (pack.memory_notice) lines.push(`【记忆提示】${pack.memory_notice}`);
 
   // L2 画像 + 今日进度
   const prof: string[] = [];

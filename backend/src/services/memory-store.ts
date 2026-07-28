@@ -6,7 +6,7 @@ import { prisma } from "../lib/prisma";
 import { getClient } from "../ai/client";
 import {
   computeScore,
-  decideState,
+  decideStateWithFloor,
   daysBetween,
   clamp,
   type MemoryType,
@@ -201,8 +201,11 @@ export async function loadActiveMemories(
 // ── CRUD ──
 
 /**
- * Upsert 一条记忆。同 (user_id, type, entity, content) 则更新 repetition_count
- * 并刷新 last_accessed_at；内容不同则新建。
+ * Upsert 一条记忆。同 (user_id, type, entity) 则覆盖 content、累加 repetition_count
+ * 并刷新 last_accessed_at；新 entity 则新建。
+ *
+ * state 用**本次写入后的真实 repetition_count** 重算——第 n 次提及就按 rep_boost(n) 算，
+ * 不再硬编码 1（否则强化只能等凌晨 cron 补，T74 修）。
  *
  * 返回带实时 score 的记忆对象。
  */
@@ -212,15 +215,35 @@ export async function upsertMemory(
 ): Promise<ActiveMemory> {
   const now = new Date();
 
-  // 计算初始 score 和 state
+  // 先读已有行，拿到真实 repetition_count 和当前 state 作为 decideState 的基线
+  const existing = await prisma.$queryRaw<
+    { repetition_count: number; state: string }[]
+  >`
+    SELECT repetition_count, state FROM "UserMemory"
+    WHERE user_id = ${userId}
+      AND type = ${candidate.type}
+      AND entity = ${candidate.entity}
+    LIMIT 1
+  `;
+  const prev = existing[0];
+  const nextRep = prev ? prev.repetition_count + 1 : 1;
+  // 被作废/降级过的记忆重新被提及 → 以 WEAK 为基线重新判定，允许复活
+  const baseState: MemoryState =
+    prev && prev.state !== "ARCHIVED" ? (prev.state as MemoryState) : "WEAK";
+
   const initScore = computeScore({
     llm_confidence: candidate.llm_confidence,
     type: candidate.type,
     importance_class: candidate.importance_class,
-    repetition_count: 1,
+    repetition_count: nextRep,
     days_since_last_access: 0,
   });
-  const initState = decideState(candidate.type, initScore, "WEAK");
+  const initState = decideStateWithFloor(
+    candidate.type,
+    candidate.importance_class,
+    initScore,
+    baseState,
+  );
 
   // 生成 embedding（偏好/习惯需要语义检索）
   // TODO: DeepSeek 无 embedding 端点（/v1/embeddings 404），暂跳过。
@@ -254,16 +277,14 @@ export async function upsertMemory(
       ${now.toISOString()}::timestamptz,
       ${now.toISOString()}::timestamptz
     )
-    ON CONFLICT (user_id, type, entity, content)
+    ON CONFLICT (user_id, type, entity)
     DO UPDATE SET
       llm_confidence = EXCLUDED.llm_confidence,
       importance_class = EXCLUDED.importance_class,
-      repetition_count = "UserMemory".repetition_count + 1,
-      state = CASE
-        WHEN "UserMemory".state = 'ARCHIVED' THEN 'WEAK'
-        ELSE ${initState}
-      END,
+      repetition_count = ${nextRep},
+      state = ${initState},
       content = EXCLUDED.content,
+      valid_to = NULL,
       source_message_id = COALESCE(EXCLUDED.source_message_id, "UserMemory".source_message_id),
       source_text = COALESCE(EXCLUDED.source_text, "UserMemory".source_text),
       expires_at = EXCLUDED.expires_at,
@@ -282,6 +303,96 @@ export async function updateAccessTime(memoryId: string): Promise<void> {
     UPDATE "UserMemory"
     SET last_accessed_at = ${new Date().toISOString()}::timestamptz
     WHERE id = ${memoryId}  `;
+}
+
+/** 作废阈值：低于此置信度只降权，不作废（T74 口径 2） */
+const INVALIDATE_CONFIDENCE_MIN = 0.8;
+
+/** 医疗类记忆降权的置信度地板（T74 口径 3）。
+ *
+ *  同一句否认会被处理两次——同步 quickExtract 一次，异步 fullExtract 读最近 5 条
+ *  用户消息时又一次。置信度每次折半，0.95 两轮后就是 0.2375，score 掉到 0.40 以下，
+ *  decideState 直接判 ARCHIVED——"医疗类绝不自动作废"这条底线就靠调用次数守着了，守不住。
+ *  所以底线写死在这里：医疗类降权有地板，且状态永不落到 ARCHIVED。 */
+const MEDICAL_CONFIDENCE_FLOOR = 0.3;
+
+export type InvalidateResult = "invalidated" | "demoted" | "not_found";
+
+/**
+ * 用户否认了一条记忆 → 作废通道（T74，MEMORY_SPEC §5.5 实现注记）。
+ *
+ * - `importance_class = 'medical'`（过敏/诊断）→ **只降权不作废**。LLM 分不清
+ *   "我不过敏了" 和 "我这次吃了没过敏"，误删一条花生过敏的代价太大，
+ *   由用户自己去记忆中心手动删。
+ * - 置信度不足 → 同样只降权（§5.5 的 else 分支：score 减半）。
+ * - 否则 → `valid_to = now()` + `state = 'ARCHIVED'`，保留"用户在这个时间点变了"
+ *   的轨迹，90 天后由 deleteExpiredMemories 自然清理，期间用户仍能在记忆中心看到。
+ */
+export async function invalidateMemory(
+  userId: string,
+  type: MemoryType,
+  entity: string,
+  opts: { reason: string; llmConfidence: number },
+): Promise<InvalidateResult> {
+  const now = new Date();
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT * FROM "UserMemory"
+    WHERE user_id = ${userId}
+      AND type = ${type}
+      AND entity = ${entity}
+      AND state IN ('ACTIVE', 'WEAK')
+  `;
+  if (rows.length === 0) return "not_found";
+
+  const isMedical = rows.some((r) => r.importance_class === "medical");
+  const demoteOnly = isMedical || opts.llmConfidence < INVALIDATE_CONFIDENCE_MIN;
+
+  if (demoteOnly) {
+    for (const row of rows) {
+      const rowMedical = row.importance_class === "medical";
+      const halved = clamp(
+        (row.llm_confidence as number) / 2,
+        rowMedical ? MEDICAL_CONFIDENCE_FLOOR : 0,
+        1,
+      );
+      const score = computeScore({
+        llm_confidence: halved,
+        type,
+        importance_class: (row.importance_class ?? "normal") as ImportanceClass,
+        repetition_count: (row.repetition_count as number) ?? 1,
+        days_since_last_access: daysBetween(
+          now,
+          new Date(row.last_accessed_at as string),
+        ),
+      });
+      const nextState = decideStateWithFloor(
+        type,
+        (row.importance_class ?? "normal") as ImportanceClass,
+        score,
+        row.state as MemoryState,
+      );
+      await prisma.$executeRaw`
+        UPDATE "UserMemory"
+        SET llm_confidence = ${halved},
+            state = ${nextState},
+            updated_at = ${now.toISOString()}::timestamptz
+        WHERE id = ${row.id as string}
+      `;
+    }
+    return "demoted";
+  }
+
+  for (const row of rows) {
+    await prisma.$executeRaw`
+      UPDATE "UserMemory"
+      SET state = 'ARCHIVED',
+          valid_to = ${now.toISOString()}::timestamptz,
+          source_text = ${`${row.source_text ?? ""}\n[作废] ${opts.reason}`.trim()},
+          updated_at = ${now.toISOString()}::timestamptz
+      WHERE id = ${row.id as string}
+    `;
+  }
+  return "invalidated";
 }
 
 /** 软删除：设 state = ARCHIVED */
@@ -360,7 +471,7 @@ export async function setMemoryPaused(
       ${new Date().toISOString()}::timestamptz,
       ${new Date().toISOString()}::timestamptz
     )
-    ON CONFLICT (user_id, type, entity, content)
+    ON CONFLICT (user_id, type, entity)
     DO UPDATE SET
       content = EXCLUDED.content,
       updated_at = ${new Date().toISOString()}::timestamptz,
@@ -407,8 +518,9 @@ export async function recalcAndPrune(userId: string): Promise<{
 
   for (const row of rows) {
     const withScore = attachScore(row, now);
-    const newState = decideState(
+    const newState = decideStateWithFloor(
       withScore.type,
+      withScore.importance_class,
       withScore.score,
       row.state as MemoryState,
     );

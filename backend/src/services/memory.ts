@@ -131,6 +131,7 @@ export interface MemoryPack {
   portion_habits: PortionHabit[]; // 学到的份量倾向（LEARNING_SPEC §6，T31），只影响 chosen_label
   pending: PendingSummary | null; // 最新未过期的待确认卡（T38），null=当前无待确认
   active_memories?: MemoryGroups;  // 语义记忆注入（MEMORY_SPEC §7，T55）
+  memory_notice?: string;          // 本轮记忆处理需要告知用户的事（T74：医疗记忆否认后只降权）
 }
 
 async function buildPendingSummary(user_id: string): Promise<PendingSummary | null> {

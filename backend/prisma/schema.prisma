@@ -365,7 +365,7 @@ model UserMemory {
 
   user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
-  @@unique([user_id, type, entity, content])
+  @@unique([user_id, type, entity]) // 同 entity 只留一行：新措辞覆盖旧措辞（T74，MEMORY_SPEC §5.5 实现注记）
   @@index([user_id, state])
   @@index([user_id, last_accessed_at])
 }

@@ -5,6 +5,7 @@ import { test, describe } from "node:test";
 import {
   computeScore,
   decideState,
+  decideStateWithFloor,
   importanceMap,
   repetitionBoost,
   decay,
@@ -324,5 +325,31 @@ describe("computeScore 边界", () => {
       days_since_last_access: 0,
     });
     assert.equal(score, 1.0);
+  });
+});
+
+describe("T74: 医疗地板——自动机制不许把 medical 判成 ARCHIVED", () => {
+  test("medical + score 低于 ARCHIVED 线 → 兜到 WEAK", () => {
+    // 0.2375（被否认折半两次的置信度）× 1.0 × 1.3 × 0.70 = 0.216，远低于 0.40
+    const score = computeScore({
+      llm_confidence: 0.2375,
+      type: "constraint",
+      importance_class: "medical",
+      repetition_count: 1,
+      days_since_last_access: 0,
+    });
+    assert.equal(decideState("constraint", score, "ACTIVE"), "ARCHIVED");
+    assert.equal(decideStateWithFloor("constraint", "medical", score, "ACTIVE"), "WEAK");
+  });
+
+  test("非 medical 不受地板保护，照常 ARCHIVED", () => {
+    assert.equal(decideStateWithFloor("context_state", "normal", 0.2, "ACTIVE"), "ARCHIVED");
+    assert.equal(decideStateWithFloor("constraint", "strong", 0.2, "ACTIVE"), "ARCHIVED");
+  });
+
+  test("地板只堵 ARCHIVED，不干预 ACTIVE/WEAK 的正常判定", () => {
+    assert.equal(decideStateWithFloor("constraint", "medical", 0.9, "WEAK"), "ACTIVE");
+    assert.equal(decideStateWithFloor("constraint", "medical", 0.42, "ACTIVE"), "ACTIVE");
+    assert.equal(decideStateWithFloor("constraint", "medical", 0.42, "WEAK"), "WEAK");
   });
 });
