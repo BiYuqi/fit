@@ -220,6 +220,9 @@ expect(screen.getByText(/150g/)).toBeOnTheScreen();
 | `setupFiles` 里 import jest-native | `expect is not defined` | `expect` 在 setup 阶段还不存在 | 在每个测试文件里 import |
 | `jest.mock` 工厂引用外部变量 | `The module factory of jest.mock() is not allowed to reference out-of-scope variables` | 工厂被提升到 import 之前 | 变量名加 `mock` 前缀 |
 | 测试里 `await import()` | `dynamic import callback was invoked without --experimental-vm-modules` | jest-expo 跑 CJS | `jest.isolateModules` + `require` |
+| 组件用了 Reanimated / 手势 | `Native part of Worklets doesn't seem to be initialized` | `*.native.ts` 入口拿不到原生模块 | `jest.config.js` 已配 `resolver: 'react-native-worklets/jest/resolver'` + gesture-handler 的 `jestSetup.js`，别删 |
+| 组件用了 `useSafeAreaInsets` | `No safe area value available` | 测试树里没有 Provider | 用 `<SafeAreaProvider initialMetrics={...}>` 包一层（见 `memory-modal.test.tsx`） |
+| 列表按时间排序 | 断言的行序和实际不符，`getAllByX()[0]` 点错行 | fixture 用 `new Date()` 造时间戳，几条挤在同一毫秒 | fixture 写死不同的 `created_at`；点击目标用 `getByLabelText` 而不是下标 |
 
 ## 与 CI 的关系
 
