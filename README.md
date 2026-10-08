@@ -2,6 +2,8 @@
 
 聊天驱动的减脂记录 App。AI 理解，后端按食物营养库算热量，DB 是唯一真相，UI 极简。
 
+![screenshot](./screenshots//01.PNG)
+
 ## 快速启动（一键）
 
 ```bash
